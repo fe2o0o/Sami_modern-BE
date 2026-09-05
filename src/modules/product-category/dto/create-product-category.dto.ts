@@ -8,10 +8,11 @@ import {
 } from 'class-validator';
 
 export class CreateProductCategoryDto {
-  @ApiProperty({ example: 'CAT-100' })
-  @IsString({ message: 'كود التصنيف مطلوب' })
+  @ApiPropertyOptional({ example: 'CAT-100', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود التصنيف غير صحيح' })
   @MaxLength(50, { message: 'الكود يجب ألا يتجاوز 50 حرفاً' })
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'غرف نوم' })
   @IsString({ message: 'اسم التصنيف مطلوب' })

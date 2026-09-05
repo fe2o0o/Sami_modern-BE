@@ -18,6 +18,7 @@ import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { CommissionReportQueryDto } from './dto/commission-report-query.dto';
 import { StatusQueryDto } from '../../common/dto/status-query.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 @ApiTags('Employees')
 @ApiBearerAuth('access-token')
@@ -29,12 +30,14 @@ export class EmployeeController {
   ) {}
 
   @Get('commissions-report')
+  @RequirePermissions('accounting_reports.view')
   @ApiOperation({ summary: 'تقرير عمولات الموظفين من الفواتير المرحّلة' })
   commissionsReport(@Query() query: CommissionReportQueryDto) {
     return this.commissionReport.generate(query);
   }
 
   @Post()
+  @RequirePermissions('employees.create')
   @ResponseMessage('تم حفظ الموظف بنجاح')
   @ApiOperation({ summary: 'إضافة موظف' })
   create(@Body() dto: CreateEmployeeDto) {
@@ -42,18 +45,21 @@ export class EmployeeController {
   }
 
   @Get()
+  @RequirePermissions('employees.view')
   @ApiOperation({ summary: 'عرض الموظفين مع الترقيم' })
   findAll(@Query() query: StatusQueryDto) {
     return this.employeeService.findAll(query);
   }
 
   @Get(':id')
+  @RequirePermissions('employees.view')
   @ApiOperation({ summary: 'عرض موظف' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.employeeService.findOne(id);
   }
 
   @Put(':id')
+  @RequirePermissions('employees.edit')
   @ResponseMessage('تم حفظ الموظف بنجاح')
   @ApiOperation({ summary: 'تعديل موظف' })
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateEmployeeDto) {
@@ -61,6 +67,7 @@ export class EmployeeController {
   }
 
   @Delete(':id')
+  @RequirePermissions('employees.delete')
   @ResponseMessage('تم حذف الموظف بنجاح')
   @ApiOperation({ summary: 'حذف موظف' })
   remove(@Param('id', ParseUUIDPipe) id: string) {
@@ -68,6 +75,7 @@ export class EmployeeController {
   }
 
   @Patch(':id/restore')
+  @RequirePermissions('employees.edit')
   @ResponseMessage('تم استعادة الموظف بنجاح')
   @ApiOperation({ summary: 'استعادة موظف محذوف' })
   restore(@Param('id', ParseUUIDPipe) id: string) {

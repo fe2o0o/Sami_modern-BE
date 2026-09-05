@@ -2,6 +2,7 @@ import { Column, Entity, Index, OneToMany } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
 import {
+  SalesDeliveryStatus,
   SalesInvoiceStatus,
   SalesPaymentType,
 } from '../enums/sales-invoice.enum';
@@ -74,6 +75,10 @@ export class SalesInvoice extends BaseEntity {
   @Index()
   @Column({ type: 'enum', enum: SalesInvoiceStatus, default: SalesInvoiceStatus.DRAFT })
   status!: SalesInvoiceStatus;
+
+  /** Delivery progress once posted (goods are reserved, then shipped via delivery notes). */
+  @Column({ type: 'enum', enum: SalesDeliveryStatus, default: SalesDeliveryStatus.PENDING })
+  deliveryStatus!: SalesDeliveryStatus;
 
   @Column({ type: 'text', nullable: true })
   notes!: string | null;

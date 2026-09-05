@@ -64,7 +64,11 @@ export class VoucherService {
   // =========================================================
   // CREATE / UPDATE / DELETE (DRAFT only)
   // =========================================================
-  async create(dto: CreateVoucherDto, actorId?: string): Promise<Voucher> {
+  async create(
+    dto: CreateVoucherDto,
+    actorId?: string,
+    branchScope: string | null = null,
+  ): Promise<Voucher> {
     const partyName = await this.assertParty(dto.type, dto.partyId);
     await this.assertMethod(dto.paymentMethod, dto.treasuryId ?? null, dto.bankAccountId ?? null);
     await this.assertPeriod(dto.fiscalYearId, dto.accountingPeriodId);
@@ -81,7 +85,8 @@ export class VoucherService {
       amount: dto.amount,
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
-      branchId: dto.branchId ?? null,
+      // A branch-restricted user's documents are forced onto their own branch.
+      branchId: branchScope ?? dto.branchId ?? null,
       reference: dto.reference ?? null,
       notes: dto.notes ?? null,
       status: VoucherStatus.DRAFT,
@@ -90,8 +95,13 @@ export class VoucherService {
     return this.voucherRepository.save(voucher);
   }
 
-  async update(id: string, dto: UpdateVoucherDto, actorId?: string): Promise<Voucher> {
-    const voucher = await this.getEditableDraft(id);
+  async update(
+    id: string,
+    dto: UpdateVoucherDto,
+    actorId?: string,
+    branchScope: string | null = null,
+  ): Promise<Voucher> {
+    const voucher = await this.getEditableDraft(id, branchScope);
 
     if (dto.partyId) voucher.partyName = await this.assertParty(voucher.type, dto.partyId);
     if (dto.partyId) voucher.partyId = dto.partyId;
@@ -99,7 +109,9 @@ export class VoucherService {
     if (dto.amount !== undefined) voucher.amount = dto.amount;
     if (dto.fiscalYearId) voucher.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) voucher.accountingPeriodId = dto.accountingPeriodId;
-    if (dto.branchId !== undefined) voucher.branchId = dto.branchId ?? null;
+    // A branch-restricted user cannot move a document to another branch.
+    if (branchScope) voucher.branchId = branchScope;
+    else if (dto.branchId !== undefined) voucher.branchId = dto.branchId ?? null;
     if (dto.reference !== undefined) voucher.reference = dto.reference ?? null;
     if (dto.notes !== undefined) voucher.notes = dto.notes ?? null;
 
@@ -122,8 +134,8 @@ export class VoucherService {
     return this.voucherRepository.save(voucher);
   }
 
-  async remove(id: string, actorId?: string): Promise<void> {
-    await this.getEditableDraft(id);
+  async remove(id: string, actorId?: string, branchScope: string | null = null): Promise<void> {
+    await this.getEditableDraft(id, branchScope);
     await this.voucherRepository.update(id, { deletedBy: actorId ?? null });
     await this.voucherRepository.softDelete(id);
   }
@@ -131,8 +143,13 @@ export class VoucherService {
   // =========================================================
   // READ
   // =========================================================
-  async findAll(query: VoucherQueryDto): Promise<PaginatedResult<VoucherListItem>> {
+  async findAll(
+    query: VoucherQueryDto,
+    branchScope: string | null = null,
+  ): Promise<PaginatedResult<VoucherListItem>> {
     const qb = this.voucherRepository.createQueryBuilder('v');
+    // Branch-restricted users only ever see their own branch's documents.
+    if (branchScope) qb.andWhere('v.branchId = :branchScope', { branchScope });
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
@@ -171,14 +188,16 @@ export class VoucherService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string): Promise<Voucher> {
+  async findOne(id: string, branchScope: string | null = null): Promise<Voucher> {
     const voucher = await this.voucherRepository.findOne({ where: { id } });
-    if (!voucher) throw new NotFoundException('لم يتم العثور على السند');
+    if (!voucher || (branchScope && voucher.branchId !== branchScope)) {
+      throw new NotFoundException('لم يتم العثور على السند');
+    }
     return voucher;
   }
 
-  async findOneDetailed(id: string): Promise<Record<string, unknown>> {
-    const v = await this.findOne(id);
+  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+    const v = await this.findOne(id, branchScope);
     const [treasury, bank, branch, fiscalYear, period, users] = await Promise.all([
       v.treasuryId ? this.treasuryRepository.findOne({ where: { id: v.treasuryId } }) : null,
       v.bankAccountId ? this.bankRepository.findOne({ where: { id: v.bankAccountId } }) : null,
@@ -202,8 +221,8 @@ export class VoucherService {
   // =========================================================
   // HELPERS
   // =========================================================
-  private async getEditableDraft(id: string): Promise<Voucher> {
-    const voucher = await this.findOne(id);
+  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<Voucher> {
+    const voucher = await this.findOne(id, branchScope);
     if (voucher.status !== VoucherStatus.DRAFT) {
       throw new BadRequestException('لا يمكن تعديل أو حذف سند مُرحّل — استخدم العكس');
     }

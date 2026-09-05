@@ -15,6 +15,7 @@ import { CreateBranchDto } from './dto/create-branch.dto';
 import { UpdateBranchDto } from './dto/update-branch.dto';
 import { QueryBranchDto } from './dto/query-branch.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 @ApiTags('Branches')
 @ApiBearerAuth('access-token')
@@ -23,6 +24,7 @@ export class BranchController {
   constructor(private readonly branchService: BranchService) {}
 
   @Post()
+  @RequirePermissions('branches.manage')
   @ResponseMessage(
     'تم إنشاء الفرع بنجاح، وتم إنشاء مخزن افتراضي لهذا الفرع تلقائيًا وتعيينه كمخزن افتراضي',
   )
@@ -32,18 +34,21 @@ export class BranchController {
   }
 
   @Get()
+  @RequirePermissions('branches.view')
   @ApiOperation({ summary: 'عرض الفروع مع الترقيم' })
   findAll(@Query() query: QueryBranchDto) {
     return this.branchService.findAll(query);
   }
 
   @Get(':id')
+  @RequirePermissions('branches.view')
   @ApiOperation({ summary: 'عرض فرع' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.branchService.findOne(id);
   }
 
   @Put(':id')
+  @RequirePermissions('branches.manage')
   @ResponseMessage('تم حفظ البيانات بنجاح')
   @ApiOperation({ summary: 'تعديل فرع' })
   update(
@@ -54,6 +59,7 @@ export class BranchController {
   }
 
   @Delete(':id')
+  @RequirePermissions('branches.manage')
   @ResponseMessage('تم حذف الفرع بنجاح')
   @ApiOperation({ summary: 'حذف فرع' })
   remove(@Param('id', ParseUUIDPipe) id: string) {

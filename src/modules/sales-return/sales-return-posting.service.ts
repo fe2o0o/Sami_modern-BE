@@ -46,9 +46,12 @@ export class SalesReturnPostingService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async post(id: string, actorId?: string): Promise<SalesReturn> {
+  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<SalesReturn> {
     return this.dataSource.transaction(async (manager) => {
       const ret = await this.lock(manager, id);
+      if (branchScope && ret.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على مردود المبيعات');
+      }
       if (ret.status !== SalesReturnStatus.DRAFT) throw new BadRequestException('لا يمكن ترحيل مردود غير مسودة');
       if (!ret.items?.length) throw new BadRequestException('لا يمكن ترحيل مردود بدون أصناف');
 
@@ -143,9 +146,12 @@ export class SalesReturnPostingService {
     });
   }
 
-  async reverse(id: string, dto: ReverseSalesReturnDto, actorId?: string): Promise<SalesReturn> {
+  async reverse(id: string, dto: ReverseSalesReturnDto, actorId?: string, branchScope: string | null = null): Promise<SalesReturn> {
     return this.dataSource.transaction(async (manager) => {
       const ret = await this.lock(manager, id);
+      if (branchScope && ret.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على مردود المبيعات');
+      }
       if (ret.status === SalesReturnStatus.REVERSED) throw new ConflictException('المردود معكوس بالفعل');
       if (ret.status !== SalesReturnStatus.POSTED) throw new BadRequestException('لا يمكن عكس مردود غير مُرحّل');
 

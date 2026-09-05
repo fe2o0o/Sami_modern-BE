@@ -29,6 +29,14 @@ export class WarehouseStock extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   quantity!: number;
 
+  /**
+   * Soft hold: quantity committed to posted sales invoices but not yet delivered.
+   * Available-to-promise = `quantity − reservedQuantity`. A reservation is not a
+   * physical movement (no StockMovement row) — it only affects availability.
+   */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  reservedQuantity!: number;
+
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   avgCost!: number;
 }

@@ -12,6 +12,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { AuthModule } from './modules/auth/auth.module';
+import { PermissionsModule } from './modules/permissions/permissions.module';
 import { RoleModule } from './modules/role/role.module';
 import { UserModule } from './modules/user/user.module';
 import { CompanyModule } from './modules/company/company.module';
@@ -34,6 +35,8 @@ import { EmployeeModule } from './modules/employee/employee.module';
 import { InventoryAdjustmentModule } from './modules/inventory-adjustment/inventory-adjustment.module';
 import { StockTransferModule } from './modules/stock-transfer/stock-transfer.module';
 import { SalesReturnModule } from './modules/sales-return/sales-return.module';
+import { SalesDeliveryModule } from './modules/sales-delivery/sales-delivery.module';
+import { CodeSettingModule } from './modules/code-setting/code-setting.module';
 import { PurchaseReturnModule } from './modules/purchase-return/purchase-return.module';
 import { UnitModule } from './modules/unit/unit.module';
 import { BrandModule } from './modules/brand/brand.module';
@@ -55,6 +58,7 @@ import { ExcelModule } from './common/excel/excel.module';
     }),
     LoggerModule,
     DatabaseModule,
+    PermissionsModule,
     RoleModule,
     UserModule,
     AuthModule,
@@ -78,6 +82,8 @@ import { ExcelModule } from './common/excel/excel.module';
     InventoryAdjustmentModule,
     StockTransferModule,
     SalesReturnModule,
+    SalesDeliveryModule,
+    CodeSettingModule,
     PurchaseReturnModule,
     UnitModule,
     BrandModule,

@@ -45,9 +45,12 @@ export class PurchaseReturnPostingService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async post(id: string, actorId?: string): Promise<PurchaseReturn> {
+  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<PurchaseReturn> {
     return this.dataSource.transaction(async (manager) => {
       const ret = await this.lock(manager, id);
+      if (branchScope && ret.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على مردود المشتريات');
+      }
       if (ret.status !== PurchaseReturnStatus.DRAFT) throw new BadRequestException('لا يمكن ترحيل مردود غير مسودة');
       if (!ret.items?.length) throw new BadRequestException('لا يمكن ترحيل مردود بدون أصناف');
 
@@ -141,9 +144,12 @@ export class PurchaseReturnPostingService {
     });
   }
 
-  async reverse(id: string, dto: ReversePurchaseReturnDto, actorId?: string): Promise<PurchaseReturn> {
+  async reverse(id: string, dto: ReversePurchaseReturnDto, actorId?: string, branchScope: string | null = null): Promise<PurchaseReturn> {
     return this.dataSource.transaction(async (manager) => {
       const ret = await this.lock(manager, id);
+      if (branchScope && ret.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على مردود المشتريات');
+      }
       if (ret.status === PurchaseReturnStatus.REVERSED) throw new ConflictException('المردود معكوس بالفعل');
       if (ret.status !== PurchaseReturnStatus.POSTED) throw new BadRequestException('لا يمكن عكس مردود غير مُرحّل');
 

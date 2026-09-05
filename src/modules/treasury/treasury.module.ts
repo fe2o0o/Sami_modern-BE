@@ -7,6 +7,7 @@ import { TreasuryLedgerService } from './treasury-ledger.service';
 import { TreasuryController } from './treasury.controller';
 import { ChartOfAccount } from '../chart-of-account/entities/chart-of-account.entity';
 import { Branch } from '../branch/entities/branch.entity';
+import { CodeSettingModule } from '../code-setting/code-setting.module';
 
 /**
  * Treasuries (cashboxes) — operational cash entities mapped to GL cash accounts.
@@ -16,6 +17,7 @@ import { Branch } from '../branch/entities/branch.entity';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Treasury, TreasuryTransaction, ChartOfAccount, Branch]),
+    CodeSettingModule,
   ],
   controllers: [TreasuryController],
   providers: [TreasuryService, TreasuryLedgerService],

@@ -45,12 +45,14 @@ export class Warehouse extends BaseEntity {
   // =========================
   // RELATIONS
   // =========================
+  // A warehouse may be unassigned to any branch (a central/shared warehouse).
   @ManyToOne(() => Branch, (branch) => branch.warehouses, {
-    onDelete: 'CASCADE',
+    nullable: true,
+    onDelete: 'SET NULL',
   })
   @JoinColumn({ name: 'branch_id' })
-  branch!: Branch;
+  branch!: Branch | null;
 
-  @Column({ type: 'uuid' })
-  branchId!: string;
+  @Column({ type: 'uuid', nullable: true })
+  branchId!: string | null;
 }

@@ -11,10 +11,11 @@ import {
 import { WarehouseType } from '../enums/warehouse-type.enum';
 
 export class CreateWarehouseDto {
-  @ApiProperty({ example: 'WH-001' })
+  @ApiPropertyOptional({ example: 'WH-001', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
   @IsString({ message: 'كود المخزن يجب أن يكون نصاً' })
   @MaxLength(50, { message: 'كود المخزن يجب ألا يتجاوز 50 حرفاً' })
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'المخزن الرئيسي' })
   @IsString({ message: 'اسم المخزن مطلوب' })
@@ -25,9 +26,10 @@ export class CreateWarehouseDto {
   @IsEnum(WarehouseType, { message: 'نوع المخزن غير صحيح' })
   type!: WarehouseType;
 
-  @ApiProperty({ description: 'معرّف الفرع' })
-  @IsUUID('4', { message: 'الفرع مطلوب' })
-  branchId!: string;
+  @ApiPropertyOptional({ description: 'معرّف الفرع (اختياري — مخزن بدون فرع = مركزي)' })
+  @IsOptional()
+  @IsUUID('4', { message: 'الفرع غير صحيح' })
+  branchId?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()

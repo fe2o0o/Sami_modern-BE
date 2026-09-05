@@ -2,10 +2,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateTreasuryDto {
-  @ApiProperty({ example: 'TR-001' })
-  @IsString({ message: 'كود الخزينة مطلوب' })
+  @ApiPropertyOptional({ example: 'TR-001', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود الخزينة غير صحيح' })
   @MaxLength(50)
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'الخزينة الرئيسية' })
   @IsString({ message: 'اسم الخزينة مطلوب' })

@@ -5,6 +5,7 @@ import { Employee } from './entities/employee.entity';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { BaseCrudService } from '../../common/services/base-crud.service';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
@@ -33,6 +34,7 @@ export class EmployeeService extends BaseCrudService<Employee> {
     @InjectRepository(Employee)
     private readonly employeeRepository: Repository<Employee>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
     imports: ImportRegistry,
   ) {
@@ -45,8 +47,9 @@ export class EmployeeService extends BaseCrudService<Employee> {
   }
 
   async create(dto: CreateEmployeeDto): Promise<Employee> {
-    await this.ensureUnique('code', dto.code, undefined, 'كود الموظف مستخدم بالفعل');
-    return this.employeeRepository.save(this.employeeRepository.create(dto));
+    const code = await this.codeSettings.resolveCode('employee', dto.code);
+    await this.ensureUnique('code', code, undefined, 'كود الموظف مستخدم بالفعل');
+    return this.employeeRepository.save(this.employeeRepository.create({ ...dto, code }));
   }
 
   async update(id: string, dto: UpdateEmployeeDto): Promise<Employee> {

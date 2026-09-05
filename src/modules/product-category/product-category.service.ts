@@ -14,6 +14,7 @@ import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, bool } from '../../common/excel/import.helpers';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 
 /** ProductCategory node with its nested children (tree response). */
 export interface CategoryTreeNode extends ProductCategory {
@@ -37,6 +38,7 @@ export class ProductCategoryService {
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
     imports: ImportRegistry,
   ) {
@@ -102,7 +104,8 @@ export class ProductCategoryService {
   // CREATE
   // =========================================================
   async create(dto: CreateProductCategoryDto): Promise<ProductCategory> {
-    await this.ensureCodeUnique(dto.code);
+    const code = await this.codeSettings.resolveCode('product_category', dto.code);
+    await this.ensureCodeUnique(code);
 
     let level = 1;
     if (dto.parentId) {
@@ -114,6 +117,7 @@ export class ProductCategoryService {
       ...dto,
       parentId: dto.parentId ?? null,
       level,
+      code,
     });
     return this.categoryRepository.save(category);
   }

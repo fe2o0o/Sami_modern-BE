@@ -17,6 +17,7 @@ import { UpdateTreasuryDto } from './dto/update-treasury.dto';
 import { QueryTreasuryDto } from './dto/query-treasury.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 @ApiTags('Treasuries')
 @ApiBearerAuth('access-token')
@@ -28,6 +29,7 @@ export class TreasuryController {
   ) {}
 
   @Get('lookup')
+  @RequirePermissions('treasuries.view')
   @ApiQuery({ name: 'branchId', required: false })
   @ApiOperation({ summary: 'قائمة الخزائن النشطة (اختياريًا حسب الفرع)' })
   lookup(@Query('branchId') branchId?: string) {
@@ -35,24 +37,28 @@ export class TreasuryController {
   }
 
   @Get()
+  @RequirePermissions('treasuries.view')
   @ApiOperation({ summary: 'عرض الخزائن مع الترقيم والفلاتر' })
   findAll(@Query() query: QueryTreasuryDto) {
     return this.service.findAll(query);
   }
 
   @Get(':id')
+  @RequirePermissions('treasuries.view')
   @ApiOperation({ summary: 'عرض خزينة' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.findOne(id);
   }
 
   @Get(':id/statement')
+  @RequirePermissions('treasuries.view')
   @ApiOperation({ summary: 'كشف حركة الخزينة والرصيد' })
   statement(@Param('id', ParseUUIDPipe) id: string) {
     return this.ledger.statement(id);
   }
 
   @Post()
+  @RequirePermissions('treasuries.manage')
   @ResponseMessage('تم حفظ الخزينة بنجاح')
   @ApiOperation({ summary: 'إضافة خزينة' })
   create(@Body() dto: CreateTreasuryDto, @CurrentUser('userId') actorId: string) {
@@ -60,6 +66,7 @@ export class TreasuryController {
   }
 
   @Put(':id')
+  @RequirePermissions('treasuries.manage')
   @ResponseMessage('تم حفظ الخزينة بنجاح')
   @ApiOperation({ summary: 'تعديل خزينة' })
   update(
@@ -71,6 +78,7 @@ export class TreasuryController {
   }
 
   @Delete(':id')
+  @RequirePermissions('treasuries.manage')
   @ResponseMessage('تم حذف الخزينة بنجاح')
   @ApiOperation({ summary: 'حذف خزينة' })
   remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser('userId') actorId: string) {

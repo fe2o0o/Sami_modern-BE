@@ -103,7 +103,11 @@ export class PurchaseReturnService {
     };
   }
 
-  async create(dto: CreatePurchaseReturnDto, actorId?: string): Promise<PurchaseReturn> {
+  async create(
+    dto: CreatePurchaseReturnDto,
+    actorId?: string,
+    branchScope: string | null = null,
+  ): Promise<PurchaseReturn> {
     const invoice = await this.loadPostedInvoice(dto.purchaseInvoiceId);
     await this.assertPeriod(dto.fiscalYearId, dto.accountingPeriodId);
     const items = await this.buildItems(invoice, dto.items);
@@ -115,7 +119,8 @@ export class PurchaseReturnService {
       invoiceNumber: invoice.invoiceNumber,
       supplierId: invoice.supplierId,
       warehouseId: invoice.warehouseId,
-      branchId: invoice.branchId,
+      // A branch-restricted user's documents are forced onto their own branch.
+      branchId: branchScope ?? invoice.branchId,
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
       paymentType: invoice.paymentType,
@@ -129,11 +134,18 @@ export class PurchaseReturnService {
     return this.repository.save(ret);
   }
 
-  async update(id: string, dto: UpdatePurchaseReturnDto, actorId?: string): Promise<PurchaseReturn> {
-    const ret = await this.getEditableDraft(id);
+  async update(
+    id: string,
+    dto: UpdatePurchaseReturnDto,
+    actorId?: string,
+    branchScope: string | null = null,
+  ): Promise<PurchaseReturn> {
+    const ret = await this.getEditableDraft(id, branchScope);
     if (dto.returnDate) ret.returnDate = dto.returnDate;
     if (dto.fiscalYearId) ret.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) ret.accountingPeriodId = dto.accountingPeriodId;
+    // A branch-restricted user cannot move a document to another branch.
+    if (branchScope) ret.branchId = branchScope;
     if (dto.notes !== undefined) ret.notes = dto.notes ?? null;
     await this.assertPeriod(ret.fiscalYearId, ret.accountingPeriodId);
 
@@ -150,14 +162,19 @@ export class PurchaseReturnService {
     });
   }
 
-  async remove(id: string, actorId?: string): Promise<void> {
-    await this.getEditableDraft(id);
+  async remove(id: string, actorId?: string, branchScope: string | null = null): Promise<void> {
+    await this.getEditableDraft(id, branchScope);
     await this.repository.update(id, { deletedBy: actorId ?? null });
     await this.repository.softDelete(id);
   }
 
-  async findAll(query: PurchaseReturnQueryDto): Promise<PaginatedResult<PurchaseReturnListItem>> {
+  async findAll(
+    query: PurchaseReturnQueryDto,
+    branchScope: string | null = null,
+  ): Promise<PaginatedResult<PurchaseReturnListItem>> {
     const qb = this.repository.createQueryBuilder('r');
+    // Branch-restricted users only ever see their own branch's documents.
+    if (branchScope) qb.andWhere('r.branchId = :branchScope', { branchScope });
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
@@ -190,18 +207,20 @@ export class PurchaseReturnService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string): Promise<PurchaseReturn> {
+  async findOne(id: string, branchScope: string | null = null): Promise<PurchaseReturn> {
     const r = await this.repository.findOne({
       where: { id },
       relations: { items: true },
       order: { items: { lineNumber: 'ASC' } },
     });
-    if (!r) throw new NotFoundException('لم يتم العثور على مردود المشتريات');
+    if (!r || (branchScope && r.branchId !== branchScope)) {
+      throw new NotFoundException('لم يتم العثور على مردود المشتريات');
+    }
     return r;
   }
 
-  async findOneDetailed(id: string): Promise<Record<string, unknown>> {
-    const r = await this.findOne(id);
+  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+    const r = await this.findOne(id, branchScope);
     const [supplier, warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.supplierRepository.findOne({ where: { id: r.supplierId } }),
       this.warehouseRepository.findOne({ where: { id: r.warehouseId } }),
@@ -304,8 +323,8 @@ export class PurchaseReturnService {
     return invoice;
   }
 
-  private async getEditableDraft(id: string): Promise<PurchaseReturn> {
-    const r = await this.findOne(id);
+  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<PurchaseReturn> {
+    const r = await this.findOne(id, branchScope);
     if (r.status !== PurchaseReturnStatus.DRAFT) {
       throw new BadRequestException('لا يمكن تعديل أو حذف مردود مُرحّل — استخدم العكس');
     }

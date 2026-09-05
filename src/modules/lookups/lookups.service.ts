@@ -28,7 +28,7 @@ export interface LookupItem {
 }
 
 export interface WarehouseLookupItem extends LookupItem {
-  branchId: string;
+  branchId: string | null;
 }
 
 export interface EmployeeLookupItem extends LookupItem {

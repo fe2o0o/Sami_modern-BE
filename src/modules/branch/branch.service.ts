@@ -22,6 +22,7 @@ import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, bool } from '../../common/excel/import.helpers';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', required: true, example: 'BR-002', note: 'كود فريد للفرع' },
@@ -53,6 +54,7 @@ export class BranchService {
     @InjectRepository(SalesInvoice)
     private readonly salesInvoiceRepository: Repository<SalesInvoice>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     imports: ImportRegistry,
   ) {
     imports.register('branches', {
@@ -127,7 +129,8 @@ export class BranchService {
    * `defaultWarehouse` for the client.
    */
   async create(dto: CreateBranchDto): Promise<Branch> {
-    await this.ensureCodeUnique(dto.code);
+    const code = await this.codeSettings.resolveCode('branch', dto.code);
+    await this.ensureCodeUnique(code);
     const companyId = await this.resolveCompanyId();
 
     return this.branchRepository.manager.transaction(async (manager) => {
@@ -136,7 +139,7 @@ export class BranchService {
       }
 
       const branchRepo = manager.getRepository(Branch);
-      const branch = await branchRepo.save(branchRepo.create({ ...dto, companyId }));
+      const branch = await branchRepo.save(branchRepo.create({ ...dto, companyId, code }));
 
       const warehouseRepo = manager.getRepository(Warehouse);
       const warehouse = await warehouseRepo.save(

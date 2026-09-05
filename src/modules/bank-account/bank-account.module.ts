@@ -7,6 +7,7 @@ import { BankLedgerService } from './bank-ledger.service';
 import { BankAccountController } from './bank-account.controller';
 import { ChartOfAccount } from '../chart-of-account/entities/chart-of-account.entity';
 import { Branch } from '../branch/entities/branch.entity';
+import { CodeSettingModule } from '../code-setting/code-setting.module';
 
 /**
  * Bank accounts — operational bank entities mapped to GL bank accounts. Exports
@@ -16,6 +17,7 @@ import { Branch } from '../branch/entities/branch.entity';
 @Module({
   imports: [
     TypeOrmModule.forFeature([BankAccount, BankTransaction, ChartOfAccount, Branch]),
+    CodeSettingModule,
   ],
   controllers: [BankAccountController],
   providers: [BankAccountService, BankLedgerService],

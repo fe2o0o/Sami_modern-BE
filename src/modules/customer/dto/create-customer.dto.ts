@@ -11,10 +11,11 @@ import {
 } from 'class-validator';
 
 export class CreateCustomerDto {
-  @ApiProperty({ example: 'CUS-0001' })
-  @IsString({ message: 'كود العميل مطلوب' })
+  @ApiPropertyOptional({ example: 'CUS-0001', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود العميل غير صحيح' })
   @MaxLength(50, { message: 'الكود يجب ألا يتجاوز 50 حرفاً' })
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'شركة الأمل' })
   @IsString({ message: 'اسم العميل مطلوب' })

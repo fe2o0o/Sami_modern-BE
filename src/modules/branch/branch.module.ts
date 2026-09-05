@@ -8,6 +8,7 @@ import { StockMovement } from '../stock/entities/stock-movement.entity';
 import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { BranchService } from './branch.service';
 import { BranchController } from './branch.controller';
+import { CodeSettingModule } from '../code-setting/code-setting.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { BranchController } from './branch.controller';
       StockMovement,
       SalesInvoice,
     ]),
+    CodeSettingModule,
   ],
   controllers: [BranchController],
   providers: [BranchService],

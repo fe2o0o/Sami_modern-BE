@@ -10,10 +10,11 @@ import {
 } from 'class-validator';
 
 export class CreateSupplierDto {
-  @ApiProperty({ example: 'SUP-0001' })
-  @IsString({ message: 'كود المورد مطلوب' })
+  @ApiPropertyOptional({ example: 'SUP-0001', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود المورد غير صحيح' })
   @MaxLength(50, { message: 'الكود يجب ألا يتجاوز 50 حرفاً' })
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'مصنع الخشب الحديث' })
   @IsString({ message: 'اسم المورد مطلوب' })

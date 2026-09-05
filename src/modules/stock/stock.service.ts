@@ -69,12 +69,15 @@ export class StockService {
   /** Paginated stock-movements ledger (enriched with product + warehouse). */
   async findMovements(
     query: StockMovementQueryDto,
+    branchScope: string | null = null,
   ): Promise<PaginatedResult<StockMovement>> {
     const qb = this.movementRepository
       .createQueryBuilder('m')
       .leftJoinAndSelect('m.product', 'product')
       .leftJoinAndSelect('m.warehouse', 'warehouse');
 
+    // Branch-restricted users only see movements in their own branch's warehouses.
+    if (branchScope) qb.andWhere('warehouse.branchId = :branchScope', { branchScope });
     if (query.warehouseId) qb.andWhere('m.warehouseId = :wh', { wh: query.warehouseId });
     if (query.productId) qb.andWhere('m.productId = :pid', { pid: query.productId });
     if (query.direction) qb.andWhere('m.direction = :dir', { dir: query.direction });
@@ -289,6 +292,58 @@ export class StockService {
   }
 
   /**
+   * Soft-reserve stock for posted-but-undelivered sales lines. Increases
+   * `reservedQuantity` only — never `quantity`, never a movement row. Over-
+   * reservation is allowed (matching the "sell then procure" flow; availability
+   * is surfaced to the user before posting). Upserts the balance row if absent.
+   */
+  async reserve(items: StockLineInput[], manager: EntityManager): Promise<void> {
+    const stockRepo = manager.getRepository(WarehouseStock);
+    for (const item of items) {
+      const quantity = item.quantity || 0;
+      if (quantity <= 0) continue;
+      const existing = await stockRepo.findOne({
+        where: { warehouseId: item.warehouseId, productId: item.productId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (existing) {
+        existing.reservedQuantity = round3(existing.reservedQuantity + quantity);
+        await stockRepo.save(existing);
+      } else {
+        await stockRepo.save(
+          stockRepo.create({
+            warehouseId: item.warehouseId,
+            productId: item.productId,
+            quantity: 0,
+            reservedQuantity: round3(quantity),
+            avgCost: 0,
+          }),
+        );
+      }
+    }
+  }
+
+  /**
+   * Release a previously-held reservation — on delivery (goods actually issued)
+   * or when a reserving invoice is reversed. Decreases `reservedQuantity`,
+   * floored at zero. The row is locked before update.
+   */
+  async releaseReservation(items: StockLineInput[], manager: EntityManager): Promise<void> {
+    const stockRepo = manager.getRepository(WarehouseStock);
+    for (const item of items) {
+      const quantity = item.quantity || 0;
+      if (quantity <= 0) continue;
+      const existing = await stockRepo.findOne({
+        where: { warehouseId: item.warehouseId, productId: item.productId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!existing) continue;
+      existing.reservedQuantity = round3(Math.max(0, existing.reservedQuantity - quantity));
+      await stockRepo.save(existing);
+    }
+  }
+
+  /**
    * Receive stock INTO a warehouse (purchases, sale-returns, reversal of a
    * sale). Records an IN movement at the supplied `unitCost` and folds it into
    * the running weighted-average balance. The row is locked before update.
@@ -354,12 +409,15 @@ export class StockService {
   async findAll(
     query: PaginationQueryDto,
     warehouseId?: string,
+    branchScope: string | null = null,
   ): Promise<PaginatedResult<WarehouseStock>> {
     const qb = this.stockRepository
       .createQueryBuilder('stock')
       .leftJoinAndSelect('stock.product', 'product')
       .leftJoinAndSelect('stock.warehouse', 'warehouse');
 
+    // Branch-restricted users only see stock in their own branch's warehouses.
+    if (branchScope) qb.andWhere('warehouse.branchId = :branchScope', { branchScope });
     if (warehouseId) {
       qb.andWhere('stock.warehouseId = :warehouseId', { warehouseId });
     }

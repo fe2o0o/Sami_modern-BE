@@ -2,10 +2,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateBankAccountDto {
-  @ApiProperty({ example: 'BNK-001' })
-  @IsString({ message: 'كود الحساب مطلوب' })
+  @ApiPropertyOptional({ example: 'BNK-001', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود الحساب غير صحيح' })
   @MaxLength(50)
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'البنك التجاري الدولي CIB' })
   @IsString({ message: 'اسم البنك مطلوب' })

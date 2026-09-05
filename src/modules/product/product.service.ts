@@ -12,6 +12,7 @@ import { randomUUID } from 'crypto';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { ProductCategory } from '../product-category/entities/product-category.entity';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 import { Brand } from '../brand/entities/brand.entity';
 import { Unit } from '../unit/entities/unit.entity';
 import { ProductType, PRODUCT_TYPE_LABELS } from './enums/product-type.enum';
@@ -70,6 +71,7 @@ export class ProductService {
     @InjectRepository(ProductImage)
     private readonly imageRepository: Repository<ProductImage>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
     imports: ImportRegistry,
   ) {
@@ -165,11 +167,12 @@ export class ProductService {
   // CRUD
   // =========================================================
   async create(dto: CreateProductDto): Promise<Product> {
-    await this.ensureUnique('code', dto.code, undefined, 'كود المنتج مستخدم بالفعل');
+    const code = await this.codeSettings.resolveCode('product', dto.code);
+    await this.ensureUnique('code', code, undefined, 'كود المنتج مستخدم بالفعل');
     if (dto.barcode) {
       await this.ensureUnique('barcode', dto.barcode, undefined, 'الباركود مستخدم بالفعل');
     }
-    return this.productRepository.save(this.productRepository.create(dto));
+    return this.productRepository.save(this.productRepository.create({ ...dto, code }));
   }
 
   async findAll(query: QueryProductDto): Promise<PaginatedResult<Product>> {

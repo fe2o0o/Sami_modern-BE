@@ -13,7 +13,9 @@ import { UpdateSalesReturnDto } from './dto/update-sales-return.dto';
 import { SalesReturnQueryDto } from './dto/sales-return-query.dto';
 import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
-import { SalesInvoiceStatus } from '../sales-invoice/enums/sales-invoice.enum';
+import { SalesInvoiceStatus, SalesLineType } from '../sales-invoice/enums/sales-invoice.enum';
+import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
+import { SalesDeliveryStatus } from '../sales-delivery/enums/sales-delivery.enum';
 import { round2 } from '../sales-invoice/sales-math';
 import { Customer } from '../customer/entities/customer.entity';
 import { Warehouse } from '../warehouse/entities/warehouse.entity';
@@ -87,8 +89,13 @@ export class SalesReturnService {
       throw new BadRequestException('لا يمكن إنشاء مردود إلا من فاتورة مُرحّلة');
     }
     const returned = await this.returnedQtyByItem(invoice.items.map((i) => i.id));
+    // Only DELIVERED goods are returnable. Manufacturing lines never ship through
+    // a delivery note, so they fall back to the invoiced quantity.
+    const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
     const lines: ReturnableLine[] = invoice.items.map((it) => {
       const returnedQty = returned.get(it.id) ?? 0;
+      const basis =
+        it.lineType === SalesLineType.MANUFACTURING ? it.quantity : delivered.get(it.id)?.qty ?? 0;
       return {
         salesInvoiceItemId: it.id,
         productId: it.productId,
@@ -96,9 +103,9 @@ export class SalesReturnService {
         productName: it.productName,
         unitName: it.unitName,
         lineType: it.lineType,
-        soldQuantity: it.quantity,
+        soldQuantity: basis,
         returnedQuantity: round3(returnedQty),
-        remainingQuantity: round3(it.quantity - returnedQty),
+        remainingQuantity: round3(basis - returnedQty),
         unitPrice: it.unitPrice,
       };
     });
@@ -118,7 +125,11 @@ export class SalesReturnService {
   // =========================================================
   // CREATE / UPDATE / DELETE (DRAFT only)
   // =========================================================
-  async create(dto: CreateSalesReturnDto, actorId?: string): Promise<SalesReturn> {
+  async create(
+    dto: CreateSalesReturnDto,
+    actorId?: string,
+    branchScope: string | null = null,
+  ): Promise<SalesReturn> {
     const invoice = await this.loadPostedInvoice(dto.salesInvoiceId);
     await this.assertPeriod(dto.fiscalYearId, dto.accountingPeriodId);
     const items = await this.buildItems(invoice, dto.items);
@@ -131,7 +142,8 @@ export class SalesReturnService {
       invoiceNumber: invoice.invoiceNumber,
       customerId: invoice.customerId,
       warehouseId: invoice.warehouseId,
-      branchId: invoice.branchId,
+      // A branch-restricted user's documents are forced onto their own branch.
+      branchId: branchScope ?? invoice.branchId,
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
       paymentType: invoice.paymentType,
@@ -145,11 +157,18 @@ export class SalesReturnService {
     return this.repository.save(salesReturn);
   }
 
-  async update(id: string, dto: UpdateSalesReturnDto, actorId?: string): Promise<SalesReturn> {
-    const salesReturn = await this.getEditableDraft(id);
+  async update(
+    id: string,
+    dto: UpdateSalesReturnDto,
+    actorId?: string,
+    branchScope: string | null = null,
+  ): Promise<SalesReturn> {
+    const salesReturn = await this.getEditableDraft(id, branchScope);
     if (dto.returnDate) salesReturn.returnDate = dto.returnDate;
     if (dto.fiscalYearId) salesReturn.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) salesReturn.accountingPeriodId = dto.accountingPeriodId;
+    // A branch-restricted user cannot move a document to another branch.
+    if (branchScope) salesReturn.branchId = branchScope;
     if (dto.notes !== undefined) salesReturn.notes = dto.notes ?? null;
     await this.assertPeriod(salesReturn.fiscalYearId, salesReturn.accountingPeriodId);
 
@@ -167,8 +186,8 @@ export class SalesReturnService {
     });
   }
 
-  async remove(id: string, actorId?: string): Promise<void> {
-    await this.getEditableDraft(id);
+  async remove(id: string, actorId?: string, branchScope: string | null = null): Promise<void> {
+    await this.getEditableDraft(id, branchScope);
     await this.repository.update(id, { deletedBy: actorId ?? null });
     await this.repository.softDelete(id);
   }
@@ -176,8 +195,13 @@ export class SalesReturnService {
   // =========================================================
   // READ
   // =========================================================
-  async findAll(query: SalesReturnQueryDto): Promise<PaginatedResult<SalesReturnListItem>> {
+  async findAll(
+    query: SalesReturnQueryDto,
+    branchScope: string | null = null,
+  ): Promise<PaginatedResult<SalesReturnListItem>> {
     const qb = this.repository.createQueryBuilder('r');
+    // Branch-restricted users only ever see their own branch's documents.
+    if (branchScope) qb.andWhere('r.branchId = :branchScope', { branchScope });
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
@@ -210,18 +234,20 @@ export class SalesReturnService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string): Promise<SalesReturn> {
+  async findOne(id: string, branchScope: string | null = null): Promise<SalesReturn> {
     const r = await this.repository.findOne({
       where: { id },
       relations: { items: true },
       order: { items: { lineNumber: 'ASC' } },
     });
-    if (!r) throw new NotFoundException('لم يتم العثور على مردود المبيعات');
+    if (!r || (branchScope && r.branchId !== branchScope)) {
+      throw new NotFoundException('لم يتم العثور على مردود المبيعات');
+    }
     return r;
   }
 
-  async findOneDetailed(id: string): Promise<Record<string, unknown>> {
-    const r = await this.findOne(id);
+  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+    const r = await this.findOne(id, branchScope);
     const [customer, warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.customerRepository.findOne({ where: { id: r.customerId } }),
       this.warehouseRepository.findOne({ where: { id: r.warehouseId } }),
@@ -254,6 +280,7 @@ export class SalesReturnService {
   ): Promise<SalesReturnItem[]> {
     const itemById = new Map(invoice.items.map((i): [string, SalesInvoiceItem] => [i.id, i]));
     const alreadyReturned = await this.returnedQtyByItem(invoice.items.map((i) => i.id), excludeReturnId);
+    const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
 
     // Aggregate requested qty per invoice item to validate against remaining.
     const requested = new Map<string, number>();
@@ -262,10 +289,12 @@ export class SalesReturnService {
     return dtos.map((d, index) => {
       const src = itemById.get(d.salesInvoiceItemId);
       if (!src) throw new BadRequestException('أحد السطور لا يخص هذه الفاتورة');
-      const remaining = round3(src.quantity - (alreadyReturned.get(src.id) ?? 0));
+      const basis =
+        src.lineType === SalesLineType.MANUFACTURING ? src.quantity : delivered.get(src.id)?.qty ?? 0;
+      const remaining = round3(basis - (alreadyReturned.get(src.id) ?? 0));
       if (requested.get(src.id)! - remaining > 1e-6) {
         throw new BadRequestException(
-          `الكمية المرتجعة من "${src.productName}" تتجاوز المتبقي (${remaining})`,
+          `الكمية المرتجعة من "${src.productName}" تتجاوز المُسلَّم المتبقي (${remaining})`,
         );
       }
       const soldQty = src.quantity || 1;
@@ -290,9 +319,37 @@ export class SalesReturnService {
       item.vatRate = src.vatRate;
       item.vatAmount = round2(src.vatAmount * ratio);
       item.lineTotal = round2(item.netBeforeTax + item.vatAmount);
-      item.costAtPost = src.costAtPost;
+      // Cost basis comes from the delivery note (COGS is booked at delivery, not
+      // at invoicing). Manufacturing lines carry no inventory cost.
+      item.costAtPost =
+        src.lineType === SalesLineType.MANUFACTURING ? 0 : delivered.get(src.id)?.unitCost ?? 0;
       return item;
     });
+  }
+
+  /** Net delivered qty + weighted-average unit cost per invoice item (POSTED deliveries only). */
+  private async deliveredInfoByItem(
+    invoiceItemIds: string[],
+  ): Promise<Map<string, { qty: number; unitCost: number }>> {
+    if (!invoiceItemIds.length) return new Map();
+    const rows = await this.dataSource
+      .getRepository(SalesDeliveryItem)
+      .createQueryBuilder('di')
+      .innerJoin('di.salesDelivery', 'd')
+      .select('di.salesInvoiceItemId', 'itemId')
+      .addSelect('COALESCE(SUM(di.quantity), 0)', 'qty')
+      .addSelect('COALESCE(SUM(di.lineCost), 0)', 'cost')
+      .where('di.salesInvoiceItemId IN (:...ids)', { ids: invoiceItemIds })
+      .andWhere('d.status = :posted', { posted: SalesDeliveryStatus.POSTED })
+      .groupBy('di.salesInvoiceItemId')
+      .getRawMany<{ itemId: string; qty: string; cost: string }>();
+    return new Map(
+      rows.map((r): [string, { qty: number; unitCost: number }] => {
+        const qty = Number(r.qty);
+        const cost = Number(r.cost);
+        return [r.itemId, { qty, unitCost: qty > 0 ? round2(cost / qty) : 0 }];
+      }),
+    );
   }
 
   private sumTotals(items: SalesReturnItem[]): {
@@ -341,8 +398,8 @@ export class SalesReturnService {
     return invoice;
   }
 
-  private async getEditableDraft(id: string): Promise<SalesReturn> {
-    const r = await this.findOne(id);
+  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<SalesReturn> {
+    const r = await this.findOne(id, branchScope);
     if (r.status !== SalesReturnStatus.DRAFT) {
       throw new BadRequestException('لا يمكن تعديل أو حذف مردود مُرحّل — استخدم العكس');
     }

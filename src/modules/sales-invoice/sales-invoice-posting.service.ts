@@ -7,7 +7,7 @@ import {
 import { DataSource, EntityManager, In } from 'typeorm';
 import { SalesInvoice } from './entities/sales-invoice.entity';
 import { SalesInvoiceItem } from './entities/sales-invoice-item.entity';
-import { SalesInvoiceStatus, SalesLineType, SalesPaymentType } from './enums/sales-invoice.enum';
+import { SalesDeliveryStatus, SalesInvoiceStatus, SalesLineType, SalesPaymentType } from './enums/sales-invoice.enum';
 import { ReverseSalesInvoiceDto } from './dto/reverse-sales-invoice.dto';
 import { round2 } from './sales-math';
 import { Product } from '../product/entities/product.entity';
@@ -52,9 +52,12 @@ export class SalesInvoicePostingService {
   // =========================================================
   // POST
   // =========================================================
-  async post(id: string, actorId?: string): Promise<SalesInvoice> {
+  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<SalesInvoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(manager, id);
+      if (branchScope && invoice.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على فاتورة المبيعات');
+      }
       if (invoice.status !== SalesInvoiceStatus.DRAFT) {
         throw new BadRequestException('لا يمكن ترحيل فاتورة غير مسودة');
       }
@@ -87,8 +90,9 @@ export class SalesInvoicePostingService {
       // Mint the invoice number up-front so every side-effect shares it.
       const invoiceNumber = await this.sequenceService.nextDocumentNumber('SI', fiscalYear, manager);
 
-      // STOCK lines are sold from inventory (issued + COGS). MANUFACTURING lines
-      // are made-to-order — they touch NO stock and get a linked production order.
+      // STOCK lines are RESERVED (soft-held), not issued — the physical issue and
+      // the COGS entry happen later on the delivery note. MANUFACTURING lines are
+      // made-to-order: they touch no stock and get a linked production order.
       const stockItems = items.filter(
         (i) => i.lineType !== SalesLineType.MANUFACTURING && products.get(i.productId)?.trackInventory,
       );
@@ -101,15 +105,8 @@ export class SalesInvoicePostingService {
           productName: i.productName ?? products.get(i.productId)?.name,
           quantity: i.quantity,
         }));
-        const issued = await this.stockService.issue(stockLines, manager, {
-          movementType: StockMovementType.SALE,
-          sourceType: JournalSourceType.SALES_INVOICE,
-          sourceId: invoice.id,
-          sourceNumber: invoiceNumber,
-          movementDate: invoice.invoiceDate,
-          actorId,
-        });
-        stockItems.forEach((item, idx) => (item.costAtPost = issued[idx].unitCost));
+        // Hold the goods against this invoice; delivery releases the hold.
+        await this.stockService.reserve(stockLines, manager);
       }
 
       // Build + post the balanced journal entry via the central engine.
@@ -174,6 +171,10 @@ export class SalesInvoicePostingService {
 
       invoice.invoiceNumber = invoiceNumber;
       invoice.status = SalesInvoiceStatus.POSTED;
+      // Stock lines start awaiting delivery; a manufacturing-only invoice never ships.
+      invoice.deliveryStatus = stockItems.length
+        ? SalesDeliveryStatus.PENDING
+        : SalesDeliveryStatus.NOT_APPLICABLE;
       invoice.journalEntryId = journalEntry.id;
       invoice.postedAt = new Date();
       invoice.postedBy = actorId ?? null;
@@ -224,9 +225,13 @@ export class SalesInvoicePostingService {
     id: string,
     dto: ReverseSalesInvoiceDto,
     actorId?: string,
+    branchScope: string | null = null,
   ): Promise<SalesInvoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(manager, id);
+      if (branchScope && invoice.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على فاتورة المبيعات');
+      }
       if (invoice.status === SalesInvoiceStatus.REVERSED) {
         throw new ConflictException('الفاتورة معكوسة بالفعل');
       }
@@ -247,8 +252,15 @@ export class SalesInvoicePostingService {
         : null;
       if (!original) throw new BadRequestException('تعذّر إيجاد القيد الأصلي للفاتورة');
 
-      // Reverse inventory: receive sold quantities back at their ORIGINAL cost.
-      // Only STOCK lines moved inventory; MANUFACTURING lines never did.
+      // Goods were only RESERVED (never issued) at post, so reversal releases the
+      // hold rather than receiving stock back. A partially/fully delivered invoice
+      // cannot be reversed — its delivery notes must be reversed first.
+      const deliveredQty = invoice.items.reduce((s, i) => s + (i.deliveredQuantity ?? 0), 0);
+      if (deliveredQty > 0) {
+        throw new BadRequestException(
+          'لا يمكن عكس فاتورة تم تسليم جزء منها — يجب عكس أذون التسليم المرتبطة بها أولاً',
+        );
+      }
       const products = await this.loadProducts(invoice.items.map((i) => i.productId), manager);
       const stockLines: StockLineInput[] = invoice.items
         .filter(
@@ -258,17 +270,9 @@ export class SalesInvoicePostingService {
           warehouseId: invoice.warehouseId,
           productId: i.productId,
           quantity: i.quantity,
-          unitCost: i.costAtPost,
         }));
       if (stockLines.length) {
-        await this.stockService.receive(stockLines, manager, {
-          movementType: StockMovementType.SALE_REVERSAL,
-          sourceType: JournalSourceType.SALES_INVOICE,
-          sourceId: invoice.id,
-          sourceNumber: invoice.invoiceNumber,
-          movementDate: dto.reversalDate,
-          actorId,
-        });
+        await this.stockService.releaseReservation(stockLines, manager);
       }
 
       // Reverse the journal via an opposite POSTED entry.
@@ -382,19 +386,9 @@ export class SalesInvoicePostingService {
       add(settings.outputVatAccountId!, 0, invoice.vatAmount);
     }
 
-    // COGS (debit) + Inventory (credit) for STOCK tracked products only.
-    // MANUFACTURING (made-to-order) lines never touch inventory/COGS.
-    for (const item of items) {
-      if (item.lineType === SalesLineType.MANUFACTURING) continue;
-      const product = products.get(item.productId)!;
-      if (!product.trackInventory) continue;
-      const cost = round2(item.quantity * item.costAtPost);
-      if (cost <= 0) continue;
-      const cogsAccount = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId!;
-      const inventoryAccount = this.resolveInventoryAccount(product, settings)!;
-      add(cogsAccount, cost, 0);
-      add(inventoryAccount, 0, cost);
-    }
+    // NOTE: COGS + inventory are intentionally NOT booked here. Goods are only
+    // reserved at invoice time; the cost of sales is recognised on the delivery
+    // note when the stock physically leaves the warehouse.
 
     // Sales commission: DR commission expense / CR commission payable.
     if (invoice.commissionTotal > 0) {

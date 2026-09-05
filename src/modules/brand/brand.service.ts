@@ -5,6 +5,7 @@ import { Brand } from './entities/brand.entity';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { UpdateBrandDto } from './dto/update-brand.dto';
 import { BaseCrudService } from '../../common/services/base-crud.service';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
@@ -29,6 +30,7 @@ export class BrandService extends BaseCrudService<Brand> {
     @InjectRepository(Brand)
     private readonly brandRepository: Repository<Brand>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
     imports: ImportRegistry,
   ) {
@@ -75,8 +77,9 @@ export class BrandService extends BaseCrudService<Brand> {
   }
 
   async create(dto: CreateBrandDto): Promise<Brand> {
-    await this.ensureUnique('code', dto.code, undefined, 'كود العلامة مستخدم بالفعل');
-    return this.brandRepository.save(this.brandRepository.create(dto));
+    const code = await this.codeSettings.resolveCode('brand', dto.code);
+    await this.ensureUnique('code', code, undefined, 'كود العلامة مستخدم بالفعل');
+    return this.brandRepository.save(this.brandRepository.create({ ...dto, code }));
   }
 
   async update(id: string, dto: UpdateBrandDto): Promise<Brand> {

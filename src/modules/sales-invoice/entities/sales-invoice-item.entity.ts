@@ -92,7 +92,11 @@ export class SalesInvoiceItem extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   lineTotal!: number;
 
-  /** Weighted-average unit cost captured at posting (for COGS / returns). */
+  /** Weighted-average unit cost captured at posting (legacy — cost is now booked at delivery). */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   costAtPost!: number;
+
+  /** How much of this line has been shipped via delivery notes (≤ quantity). */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  deliveredQuantity!: number;
 }

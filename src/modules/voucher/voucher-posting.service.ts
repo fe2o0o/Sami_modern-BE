@@ -60,9 +60,12 @@ export class VoucherPostingService {
   // =========================================================
   // POST
   // =========================================================
-  async post(id: string, actorId?: string): Promise<Voucher> {
+  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<Voucher> {
     return this.dataSource.transaction(async (manager) => {
       const voucher = await this.lock(manager, id);
+      if (branchScope && voucher.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على السند');
+      }
       if (voucher.status !== VoucherStatus.DRAFT) {
         throw new BadRequestException('لا يمكن ترحيل سند غير مسودة');
       }
@@ -179,9 +182,12 @@ export class VoucherPostingService {
   // =========================================================
   // REVERSE
   // =========================================================
-  async reverse(id: string, dto: ReverseVoucherDto, actorId?: string): Promise<Voucher> {
+  async reverse(id: string, dto: ReverseVoucherDto, actorId?: string, branchScope: string | null = null): Promise<Voucher> {
     return this.dataSource.transaction(async (manager) => {
       const voucher = await this.lock(manager, id);
+      if (branchScope && voucher.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على السند');
+      }
       if (voucher.status === VoucherStatus.REVERSED) {
         throw new ConflictException('السند معكوس بالفعل');
       }

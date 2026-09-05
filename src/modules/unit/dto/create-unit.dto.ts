@@ -7,10 +7,11 @@ import {
 } from 'class-validator';
 
 export class CreateUnitDto {
-  @ApiProperty({ example: 'PCS' })
-  @IsString({ message: 'كود الوحدة مطلوب' })
+  @ApiPropertyOptional({ example: 'PCS', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود الوحدة غير صحيح' })
   @MaxLength(50, { message: 'الكود يجب ألا يتجاوز 50 حرفاً' })
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'قطعة' })
   @IsString({ message: 'اسم الوحدة مطلوب' })

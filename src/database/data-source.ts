@@ -28,7 +28,7 @@ export const dataSourceOptions: DataSourceOptions = {
   migrations: [__dirname + '/migrations/*.{ts,js}'],
   namingStrategy: new SnakeNamingStrategy(),
   // synchronize: process.env.DB_SYNCHRONIZE !== 'false',
-  synchronize: false,
+  synchronize: true,
   logging: process.env.DB_LOGGING === 'true',
 };
 

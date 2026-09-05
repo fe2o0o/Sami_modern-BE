@@ -213,14 +213,27 @@ export class OpeningBalanceService {
   // =========================================================
   // READ
   // =========================================================
-  async findAll(fiscalYearId?: string): Promise<OpeningBalance[]> {
-    return this.openingBalanceRepository.find({
-      where: fiscalYearId ? { fiscalYearId } : {},
-      order: { openingDate: 'DESC' },
-    });
+  async findAll(fiscalYearId?: string, branchScope: string | null = null): Promise<OpeningBalance[]> {
+    const qb = this.openingBalanceRepository.createQueryBuilder('ob');
+    if (fiscalYearId) qb.andWhere('ob.fiscalYearId = :fiscalYearId', { fiscalYearId });
+    // Branch-restricted users only see opening balances that carry a line for
+    // their branch (the document itself spans branches at the line level).
+    if (branchScope) {
+      qb.andWhere((sub) => {
+        const q = sub
+          .subQuery()
+          .select('1')
+          .from(OpeningBalanceDetail, 'd')
+          .where('d.openingBalanceId = ob.id')
+          .andWhere('d.branchId = :branchScope')
+          .getQuery();
+        return `EXISTS ${q}`;
+      }).setParameter('branchScope', branchScope);
+    }
+    return qb.orderBy('ob.openingDate', 'DESC').getMany();
   }
 
-  async findOne(id: string): Promise<OpeningBalance> {
+  async findOne(id: string, branchScope: string | null = null): Promise<OpeningBalance> {
     const openingBalance = await this.openingBalanceRepository.findOne({
       where: { id },
       relations: { details: true },
@@ -228,6 +241,14 @@ export class OpeningBalanceService {
     });
     if (!openingBalance) {
       throw new NotFoundException('لم يتم العثور على الرصيد الافتتاحي');
+    }
+    // A branch-restricted user only sees their branch's lines, and only if the
+    // document touches their branch at all.
+    if (branchScope) {
+      openingBalance.details = (openingBalance.details ?? []).filter((d) => d.branchId === branchScope);
+      if (openingBalance.details.length === 0) {
+        throw new NotFoundException('لم يتم العثور على الرصيد الافتتاحي');
+      }
     }
     return openingBalance;
   }

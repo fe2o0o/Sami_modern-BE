@@ -5,6 +5,7 @@ import { Customer } from './entities/customer.entity';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { BaseCrudService } from '../../common/services/base-crud.service';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
@@ -38,6 +39,7 @@ export class CustomerService extends BaseCrudService<Customer> {
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
     imports: ImportRegistry,
   ) {
@@ -94,8 +96,9 @@ export class CustomerService extends BaseCrudService<Customer> {
   }
 
   async create(dto: CreateCustomerDto): Promise<Customer> {
-    await this.ensureUnique('code', dto.code, undefined, 'كود العميل مستخدم بالفعل');
-    return this.customerRepository.save(this.customerRepository.create(dto));
+    const code = await this.codeSettings.resolveCode('customer', dto.code);
+    await this.ensureUnique('code', code, undefined, 'كود العميل مستخدم بالفعل');
+    return this.customerRepository.save(this.customerRepository.create({ ...dto, code }));
   }
 
   async update(id: string, dto: UpdateCustomerDto): Promise<Customer> {

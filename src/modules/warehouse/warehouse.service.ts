@@ -18,11 +18,12 @@ import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, bool, enumFromLabel } from '../../common/excel/import.helpers';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', required: true, example: 'WH-010', note: 'كود فريد للمخزن' },
   { field: 'name', header: 'الاسم', required: true, example: 'المخزن الرئيسي' },
-  { field: 'branchCode', header: 'كود الفرع', required: true, example: 'BR-001', note: 'كود فرع موجود' },
+  { field: 'branchCode', header: 'كود الفرع', example: 'BR-001', note: 'كود فرع موجود (اختياري — اتركه فارغاً لمخزن بدون فرع)' },
   { field: 'type', header: 'النوع', example: 'مخزن', note: 'مخزن / معرض / إنتاج / عبور (افتراضي: مخزن)' },
   { field: 'managerName', header: 'اسم المسؤول', example: 'محمد سعيد' },
   { field: 'phone', header: 'الهاتف', example: '0221000000' },
@@ -42,6 +43,7 @@ export class WarehouseService {
     @InjectRepository(Branch)
     private readonly branchRepository: Repository<Branch>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     imports: ImportRegistry,
   ) {
     imports.register('warehouses', {
@@ -74,20 +76,25 @@ export class WarehouseService {
         throw new Error(`كود المخزن «${code}» مستخدم بالفعل`);
       }
 
-      const branchCode = str(v.branchCode, 'كود الفرع');
-      const branch = await manager.getRepository(Branch).findOne({ where: { code: branchCode } });
-      if (!branch) throw new Error(`الفرع بكود «${branchCode}» غير موجود`);
+      // Branch is optional — a warehouse with no branch is a central warehouse.
+      const branchCode = optStr(v.branchCode);
+      let branchId: string | null = null;
+      if (branchCode) {
+        const branch = await manager.getRepository(Branch).findOne({ where: { code: branchCode } });
+        if (!branch) throw new Error(`الفرع بكود «${branchCode}» غير موجود`);
+        branchId = branch.id;
+      }
 
       const isDefault = bool(v.isDefault, false);
-      if (isDefault) {
-        await manager.update(Warehouse, { branchId: branch.id, isDefault: true }, { isDefault: false });
+      if (isDefault && branchId) {
+        await manager.update(Warehouse, { branchId, isDefault: true }, { isDefault: false });
       }
 
       await repo.save(
         repo.create({
           code,
           name: str(v.name, 'الاسم'),
-          branchId: branch.id,
+          branchId,
           type: enumFromLabel<WarehouseType>(v.type, WAREHOUSE_TYPE_LABELS, 'النوع', WarehouseType.STORE),
           managerName: optStr(v.managerName),
           phone: optStr(v.phone),
@@ -103,12 +110,14 @@ export class WarehouseService {
   }
 
   async create(dto: CreateWarehouseDto): Promise<Warehouse> {
-    await this.ensureBranchExists(dto.branchId);
-    await this.ensureCodeUnique(dto.code);
+    const code = await this.codeSettings.resolveCode('warehouse', dto.code);
+    if (dto.branchId) await this.ensureBranchExists(dto.branchId);
+    await this.ensureCodeUnique(code);
 
-    const warehouse = this.warehouseRepository.create(dto);
+    const warehouse = this.warehouseRepository.create({ ...dto, branchId: dto.branchId ?? null, code });
 
-    if (dto.isDefault) {
+    // The "default" flag is unique per branch; a branchless warehouse is exempt.
+    if (dto.isDefault && dto.branchId) {
       await this.clearDefaultFlag(dto.branchId);
     }
 
@@ -165,7 +174,7 @@ export class WarehouseService {
     }
 
     const targetBranchId = dto.branchId ?? warehouse.branchId;
-    if (dto.isDefault && !warehouse.isDefault) {
+    if (dto.isDefault && !warehouse.isDefault && targetBranchId) {
       await this.clearDefaultFlag(targetBranchId, id);
     }
 

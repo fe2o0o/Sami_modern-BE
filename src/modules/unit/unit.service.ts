@@ -5,6 +5,7 @@ import { Unit } from './entities/unit.entity';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
 import { BaseCrudService } from '../../common/services/base-crud.service';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
@@ -29,6 +30,7 @@ export class UnitService extends BaseCrudService<Unit> {
     @InjectRepository(Unit)
     private readonly unitRepository: Repository<Unit>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
     imports: ImportRegistry,
   ) {
@@ -75,8 +77,9 @@ export class UnitService extends BaseCrudService<Unit> {
   }
 
   async create(dto: CreateUnitDto): Promise<Unit> {
-    await this.ensureUnique('code', dto.code, undefined, 'كود الوحدة مستخدم بالفعل');
-    return this.unitRepository.save(this.unitRepository.create(dto));
+    const code = await this.codeSettings.resolveCode('unit', dto.code);
+    await this.ensureUnique('code', code, undefined, 'كود الوحدة مستخدم بالفعل');
+    return this.unitRepository.save(this.unitRepository.create({ ...dto, code }));
   }
 
   async update(id: string, dto: UpdateUnitDto): Promise<Unit> {

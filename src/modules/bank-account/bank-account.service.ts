@@ -21,6 +21,7 @@ import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, bool } from '../../common/excel/import.helpers';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', required: true, example: 'BNK-002', note: 'كود فريد للحساب البنكي' },
@@ -68,6 +69,7 @@ export class BankAccountService {
     @InjectRepository(Branch)
     private readonly branchRepository: Repository<Branch>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     imports: ImportRegistry,
   ) {
     imports.register('bank-accounts', {
@@ -150,7 +152,8 @@ export class BankAccountService {
   }
 
   async create(dto: CreateBankAccountDto, actorId?: string): Promise<BankAccount> {
-    await this.ensureCodeUnique(dto.code);
+    const code = await this.codeSettings.resolveCode('bank_account', dto.code);
+    await this.ensureCodeUnique(code);
     await this.assertBranch(dto.branchId);
     await this.assertAccount(dto.accountId);
 
@@ -161,7 +164,7 @@ export class BankAccountService {
       const repo = manager.getRepository(BankAccount);
       return repo.save(
         repo.create({
-          code: dto.code,
+          code,
           bankName: dto.bankName,
           accountName: dto.accountName,
           accountNumber: dto.accountNumber ?? null,

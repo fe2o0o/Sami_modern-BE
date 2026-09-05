@@ -26,6 +26,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { QueryProductDto } from './dto/query-product.dto';
 import { ReorderImagesDto } from './dto/reorder-images.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
@@ -50,6 +51,7 @@ export class ProductController {
   constructor(private readonly productService: ProductService) {}
 
   @Post()
+  @RequirePermissions('products.create')
   @ResponseMessage('تم حفظ المنتج بنجاح')
   @ApiOperation({ summary: 'إضافة منتج' })
   create(@Body() dto: CreateProductDto) {
@@ -57,18 +59,21 @@ export class ProductController {
   }
 
   @Get()
+  @RequirePermissions('products.view')
   @ApiOperation({ summary: 'عرض المنتجات مع الترقيم' })
   findAll(@Query() query: QueryProductDto) {
     return this.productService.findAll(query);
   }
 
   @Get(':id')
+  @RequirePermissions('products.view')
   @ApiOperation({ summary: 'عرض تفاصيل منتج' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.productService.findOne(id);
   }
 
   @Put(':id')
+  @RequirePermissions('products.edit')
   @ResponseMessage('تم حفظ المنتج بنجاح')
   @ApiOperation({ summary: 'تعديل منتج' })
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateProductDto) {
@@ -76,6 +81,7 @@ export class ProductController {
   }
 
   @Delete(':id')
+  @RequirePermissions('products.delete')
   @ResponseMessage('تم حذف المنتج بنجاح')
   @ApiOperation({ summary: 'حذف منتج' })
   remove(@Param('id', ParseUUIDPipe) id: string) {
@@ -83,6 +89,7 @@ export class ProductController {
   }
 
   @Patch(':id/restore')
+  @RequirePermissions('products.edit')
   @ResponseMessage('تم استعادة المنتج بنجاح')
   @ApiOperation({ summary: 'استعادة منتج محذوف' })
   restore(@Param('id', ParseUUIDPipe) id: string) {
@@ -93,6 +100,7 @@ export class ProductController {
   // IMAGES
   // =========================
   @Post(':id/images')
+  @RequirePermissions('products.create')
   @ResponseMessage('تم رفع الصور بنجاح')
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'رفع صور المنتج (JPG/PNG/WEBP، حد أقصى 10 ميجابايت)' })
@@ -110,6 +118,7 @@ export class ProductController {
   }
 
   @Patch(':id/images/reorder')
+  @RequirePermissions('products.edit')
   @ResponseMessage('تم إعادة ترتيب الصور بنجاح')
   @ApiOperation({ summary: 'إعادة ترتيب صور المنتج' })
   reorderImages(
@@ -120,6 +129,7 @@ export class ProductController {
   }
 
   @Patch(':id/images/:imageId/primary')
+  @RequirePermissions('products.edit')
   @ResponseMessage('تم تعيين الصورة الرئيسية بنجاح')
   @ApiOperation({ summary: 'تعيين صورة رئيسية للمنتج' })
   setPrimary(
@@ -130,6 +140,7 @@ export class ProductController {
   }
 
   @Delete(':id/images/:imageId')
+  @RequirePermissions('products.delete')
   @ResponseMessage('تم حذف الصورة بنجاح')
   @ApiOperation({ summary: 'حذف صورة منتج' })
   deleteImage(

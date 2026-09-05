@@ -5,9 +5,10 @@ import { SupplierTransaction } from './entities/supplier-transaction.entity';
 import { SupplierService } from './supplier.service';
 import { SupplierLedgerService } from './supplier-ledger.service';
 import { SupplierController } from './supplier.controller';
+import { CodeSettingModule } from '../code-setting/code-setting.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Supplier, SupplierTransaction])],
+  imports: [TypeOrmModule.forFeature([Supplier, SupplierTransaction]), CodeSettingModule],
   controllers: [SupplierController],
   providers: [SupplierService, SupplierLedgerService],
   exports: [SupplierService, SupplierLedgerService, TypeOrmModule],

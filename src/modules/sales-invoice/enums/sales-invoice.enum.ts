@@ -18,6 +18,25 @@ export enum SalesPaymentType {
   CASH = 'cash',
 }
 
+/**
+ * Delivery progress of a POSTED invoice's stock lines (goods are reserved at
+ * post, then shipped via delivery notes). Manufacturing-only invoices stay
+ * NOT_APPLICABLE.
+ */
+export enum SalesDeliveryStatus {
+  NOT_APPLICABLE = 'not_applicable',
+  PENDING = 'pending',
+  PARTIAL = 'partial',
+  DELIVERED = 'delivered',
+}
+
+export const SALES_DELIVERY_STATUS_LABELS: Record<SalesDeliveryStatus, string> = {
+  [SalesDeliveryStatus.NOT_APPLICABLE]: 'لا ينطبق',
+  [SalesDeliveryStatus.PENDING]: 'بانتظار التسليم',
+  [SalesDeliveryStatus.PARTIAL]: 'مُسلّم جزئياً',
+  [SalesDeliveryStatus.DELIVERED]: 'مُسلّم بالكامل',
+};
+
 export enum SalesDiscountType {
   PERCENTAGE = 'percentage',
   FIXED = 'fixed',

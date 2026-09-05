@@ -12,6 +12,8 @@ import * as bcrypt from 'bcrypt';
 import { UserService } from '../user/user.service';
 import { User } from '../user/entities/user.entity';
 import { Company } from '../company/entities/company.entity';
+import { PermissionsService } from '../permissions/permissions.service';
+import { ALL_PERMISSION_KEYS } from '../permissions/permission.catalog';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -30,6 +32,7 @@ export class AuthService {
     private readonly userService: UserService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    private readonly permissionsService: PermissionsService,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
   ) {}
@@ -61,7 +64,7 @@ export class AuthService {
     return {
       message: 'تم تسجيل الدخول بنجاح',
       ...tokens,
-      user: this.userService.sanitize(user),
+      user: await this.withPermissions(this.userService.sanitize(user), user.roleId),
     };
   }
 
@@ -95,7 +98,7 @@ export class AuthService {
     return {
       message: 'تم تحديث الجلسة',
       ...tokens,
-      user: this.userService.sanitize(user),
+      user: await this.withPermissions(this.userService.sanitize(user), user.roleId),
     };
   }
 
@@ -110,8 +113,20 @@ export class AuthService {
   // =========================
   // ME
   // =========================
-  me(actor: AuthenticatedUser) {
-    return this.userService.findOne(actor.userId);
+  async me(actor: AuthenticatedUser) {
+    const user = await this.userService.findOne(actor.userId);
+    return this.withPermissions(user, actor.roleId);
+  }
+
+  /** Attach the resolved permission set (+ super-admin flag) to a user payload. */
+  private async withPermissions<T extends { roleId: string }>(user: T, roleId: string) {
+    const resolved = await this.permissionsService.resolveForRole(roleId);
+    return {
+      ...user,
+      roleCode: resolved.roleCode,
+      isSuperAdmin: resolved.isSuperAdmin,
+      permissions: resolved.isSuperAdmin ? ALL_PERMISSION_KEYS : resolved.keys,
+    };
   }
 
   // =========================

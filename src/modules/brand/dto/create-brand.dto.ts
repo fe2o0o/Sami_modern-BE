@@ -7,10 +7,11 @@ import {
 } from 'class-validator';
 
 export class CreateBrandDto {
-  @ApiProperty({ example: 'IKEA' })
-  @IsString({ message: 'كود العلامة مطلوب' })
+  @ApiPropertyOptional({ example: 'IKEA', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود العلامة غير صحيح' })
   @MaxLength(50, { message: 'الكود يجب ألا يتجاوز 50 حرفاً' })
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'ايكيا' })
   @IsString({ message: 'اسم العلامة مطلوب' })

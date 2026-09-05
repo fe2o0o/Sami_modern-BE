@@ -13,6 +13,7 @@ import { AccountingPeriodService } from './accounting-period.service';
 import { UpdateAccountingPeriodDto } from './dto/update-accounting-period.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 @ApiTags('Accounting Periods')
 @ApiBearerAuth('access-token')
@@ -21,6 +22,7 @@ export class AccountingPeriodController {
   constructor(private readonly periodService: AccountingPeriodService) {}
 
   @Get()
+  @RequirePermissions('fiscal_years.view')
   @ApiQuery({ name: 'fiscalYearId', required: true })
   @ApiOperation({ summary: 'عرض الفترات المحاسبية لسنة مالية' })
   findAll(@Query('fiscalYearId', ParseUUIDPipe) fiscalYearId: string) {
@@ -28,12 +30,14 @@ export class AccountingPeriodController {
   }
 
   @Get(':id')
+  @RequirePermissions('fiscal_years.view')
   @ApiOperation({ summary: 'عرض فترة محاسبية' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.periodService.findOne(id);
   }
 
   @Put(':id')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم تعديل الفترة المحاسبية بنجاح')
   @ApiOperation({ summary: 'تعديل فترة محاسبية (المفتوحة فقط)' })
   update(
@@ -45,6 +49,7 @@ export class AccountingPeriodController {
   }
 
   @Post(':id/close')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم إغلاق الفترة المحاسبية بنجاح')
   @ApiOperation({ summary: 'إغلاق الفترة المحاسبية' })
   close(
@@ -55,6 +60,7 @@ export class AccountingPeriodController {
   }
 
   @Post(':id/reopen')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم إعادة فتح الفترة المحاسبية بنجاح')
   @ApiOperation({ summary: 'إعادة فتح الفترة المحاسبية' })
   reopen(

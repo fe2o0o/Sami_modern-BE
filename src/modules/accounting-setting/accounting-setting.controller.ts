@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AccountingSettingService } from './accounting-setting.service';
 import { UpdateAccountingSettingDto } from './dto/update-accounting-setting.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 /**
  * Accounting settings endpoints — single record only (no create/delete/list).
@@ -16,12 +17,14 @@ export class AccountingSettingController {
   ) {}
 
   @Get()
+  @RequirePermissions('accounting_settings.view')
   @ApiOperation({ summary: 'عرض إعدادات المحاسبة' })
   get() {
     return this.accountingSettingService.get();
   }
 
   @Get('account-options')
+  @RequirePermissions('accounting_settings.view')
   @ApiOperation({
     summary: 'الحسابات الصالحة لكل إعداد (مصفّاة حسب النوع والتصنيف)',
   })
@@ -30,6 +33,7 @@ export class AccountingSettingController {
   }
 
   @Put()
+  @RequirePermissions('accounting_settings.edit')
   @ResponseMessage('تم حفظ إعدادات المحاسبة بنجاح')
   @ApiOperation({ summary: 'تعديل إعدادات المحاسبة' })
   update(@Body() dto: UpdateAccountingSettingDto) {

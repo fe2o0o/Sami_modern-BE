@@ -44,9 +44,12 @@ export class InventoryAdjustmentPostingService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async post(id: string, actorId?: string): Promise<InventoryAdjustment> {
+  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<InventoryAdjustment> {
     return this.dataSource.transaction(async (manager) => {
       const adjustment = await this.lock(manager, id);
+      if (branchScope && adjustment.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على تسوية المخزون');
+      }
       if (adjustment.status !== InventoryAdjustmentStatus.DRAFT) {
         throw new BadRequestException('لا يمكن ترحيل تسوية غير مسودة');
       }
@@ -130,9 +133,12 @@ export class InventoryAdjustmentPostingService {
     });
   }
 
-  async reverse(id: string, dto: ReverseInventoryAdjustmentDto, actorId?: string): Promise<InventoryAdjustment> {
+  async reverse(id: string, dto: ReverseInventoryAdjustmentDto, actorId?: string, branchScope: string | null = null): Promise<InventoryAdjustment> {
     return this.dataSource.transaction(async (manager) => {
       const adjustment = await this.lock(manager, id);
+      if (branchScope && adjustment.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على تسوية المخزون');
+      }
       if (adjustment.status === InventoryAdjustmentStatus.REVERSED) {
         throw new ConflictException('التسوية معكوسة بالفعل');
       }

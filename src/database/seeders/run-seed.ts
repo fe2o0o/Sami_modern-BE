@@ -5,6 +5,7 @@ import { RoleSeeder } from './role.seeder';
 import { BranchSeeder } from './branch.seeder';
 import { AdminUserSeeder } from './admin-user.seeder';
 import { FiscalYearSeeder } from './fiscal-year.seeder';
+import { PermissionSeeder } from './permission.seeder';
 import { ChartOfAccountSeeder } from './chart-of-account.seeder';
 import { AccountingSettingSeeder } from './accounting-setting.seeder';
 import { TreasuryBankSeeder } from './treasury-bank.seeder';
@@ -19,6 +20,7 @@ import { SupplierSeeder } from './supplier.seeder';
 const seeders: Seeder[] = [
   new CompanySeeder(),
   new RoleSeeder(),
+  new PermissionSeeder(),
   new BranchSeeder(),
   new AdminUserSeeder(),
   new FiscalYearSeeder(),

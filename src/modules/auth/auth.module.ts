@@ -10,6 +10,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { UserModule } from '../user/user.module';
 import { CompanyModule } from '../company/company.module';
+import { PermissionsModule } from '../permissions/permissions.module';
+import { PermissionsGuard } from '../permissions/guards/permissions.guard';
 
 /**
  * Authentication module. Registers Passport + JWT, the JWT strategy, and the
@@ -20,6 +22,7 @@ import { CompanyModule } from '../company/company.module';
   imports: [
     UserModule,
     CompanyModule,
+    PermissionsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -33,7 +36,9 @@ import { CompanyModule } from '../company/company.module';
   providers: [
     AuthService,
     JwtStrategy,
+    // Order matters: authenticate first, then authorize. Both are global.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
   exports: [AuthService],
 })

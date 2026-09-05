@@ -9,10 +9,11 @@ import {
 } from 'class-validator';
 
 export class CreateBranchDto {
-  @ApiProperty({ example: 'BR-001' })
+  @ApiPropertyOptional({ example: 'BR-001', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
   @IsString({ message: 'كود الفرع يجب أن يكون نصاً' })
   @MaxLength(50, { message: 'كود الفرع يجب ألا يتجاوز 50 حرفاً' })
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'الفرع الرئيسي' })
   @IsString({ message: 'اسم الفرع مطلوب' })

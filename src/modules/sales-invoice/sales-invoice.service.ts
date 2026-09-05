@@ -97,6 +97,7 @@ export class SalesInvoiceService {
   async create(
     dto: CreateSalesInvoiceDto,
     actorId?: string,
+    branchScope: string | null = null,
   ): Promise<SalesInvoice> {
     await this.assertHeaderRefs(dto);
     const items = await this.buildItems(dto.items, dto.warehouseId);
@@ -108,7 +109,8 @@ export class SalesInvoiceService {
       invoiceNumber: null,
       invoiceDate: dto.invoiceDate,
       customerId: dto.customerId,
-      branchId: dto.branchId ?? null,
+      // A branch-restricted user's documents are forced onto their own branch.
+      branchId: branchScope ?? dto.branchId ?? null,
       warehouseId: dto.warehouseId,
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
@@ -135,12 +137,15 @@ export class SalesInvoiceService {
     id: string,
     dto: UpdateSalesInvoiceDto,
     actorId?: string,
+    branchScope: string | null = null,
   ): Promise<SalesInvoice> {
-    const invoice = await this.getEditableDraft(id);
+    const invoice = await this.getEditableDraft(id, branchScope);
 
     if (dto.customerId) invoice.customerId = dto.customerId;
     if (dto.invoiceDate) invoice.invoiceDate = dto.invoiceDate;
-    if (dto.branchId !== undefined) invoice.branchId = dto.branchId ?? null;
+    // A branch-restricted user cannot move a document to another branch.
+    if (branchScope) invoice.branchId = branchScope;
+    else if (dto.branchId !== undefined) invoice.branchId = dto.branchId ?? null;
     if (dto.warehouseId) invoice.warehouseId = dto.warehouseId;
     if (dto.fiscalYearId) invoice.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) invoice.accountingPeriodId = dto.accountingPeriodId;
@@ -178,8 +183,8 @@ export class SalesInvoiceService {
     });
   }
 
-  async remove(id: string, actorId?: string): Promise<void> {
-    await this.getEditableDraft(id);
+  async remove(id: string, actorId?: string, branchScope: string | null = null): Promise<void> {
+    await this.getEditableDraft(id, branchScope);
     await this.invoiceRepository.update(id, { deletedBy: actorId ?? null });
     await this.invoiceRepository.softDelete(id);
   }
@@ -189,8 +194,11 @@ export class SalesInvoiceService {
   // =========================================================
   async findAll(
     query: SalesInvoiceQueryDto,
+    branchScope: string | null = null,
   ): Promise<PaginatedResult<SalesInvoiceListItem>> {
     const qb = this.invoiceRepository.createQueryBuilder('si');
+    // Branch-restricted users only ever see their own branch's documents.
+    if (branchScope) qb.andWhere('si.branchId = :branchScope', { branchScope });
 
     if (query.search) {
       qb.andWhere(
@@ -243,20 +251,20 @@ export class SalesInvoiceService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string): Promise<SalesInvoice> {
+  async findOne(id: string, branchScope: string | null = null): Promise<SalesInvoice> {
     const invoice = await this.invoiceRepository.findOne({
       where: { id },
       relations: { items: true, commissions: true },
       order: { items: { lineNumber: 'ASC' }, commissions: { lineNumber: 'ASC' } },
     });
-    if (!invoice) {
+    if (!invoice || (branchScope && invoice.branchId !== branchScope)) {
       throw new NotFoundException('لم يتم العثور على فاتورة المبيعات');
     }
     return invoice;
   }
 
-  async findOneDetailed(id: string): Promise<Record<string, unknown>> {
-    const invoice = await this.findOne(id);
+  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+    const invoice = await this.findOne(id, branchScope);
     const [customer, warehouse, branch, fiscalYear, period, users] =
       await Promise.all([
         this.customerRepository.findOne({ where: { id: invoice.customerId } }),
@@ -413,8 +421,8 @@ export class SalesInvoiceService {
     });
   }
 
-  private async getEditableDraft(id: string): Promise<SalesInvoice> {
-    const invoice = await this.findOne(id);
+  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<SalesInvoice> {
+    const invoice = await this.findOne(id, branchScope);
     if (invoice.status !== SalesInvoiceStatus.DRAFT) {
       throw new BadRequestException(
         'لا يمكن تعديل أو حذف فاتورة مُرحّلة — استخدم العكس أو المردود',

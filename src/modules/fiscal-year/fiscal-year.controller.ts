@@ -16,6 +16,7 @@ import { UpdateFiscalYearDto } from './dto/update-fiscal-year.dto';
 import { QueryFiscalYearDto } from './dto/query-fiscal-year.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 @ApiTags('Fiscal Years')
 @ApiBearerAuth('access-token')
@@ -24,6 +25,7 @@ export class FiscalYearController {
   constructor(private readonly fiscalYearService: FiscalYearService) {}
 
   @Post()
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم إنشاء السنة المالية بنجاح')
   @ApiOperation({ summary: 'إضافة سنة مالية' })
   create(@Body() dto: CreateFiscalYearDto, @CurrentUser('userId') actorId: string) {
@@ -31,6 +33,7 @@ export class FiscalYearController {
   }
 
   @Get()
+  @RequirePermissions('fiscal_years.view')
   @ApiOperation({ summary: 'عرض السنوات المالية مع الترقيم' })
   findAll(@Query() query: QueryFiscalYearDto) {
     return this.fiscalYearService.findAll(query);
@@ -38,18 +41,21 @@ export class FiscalYearController {
 
   // NOTE: must be declared before ':id' so "current" is not treated as an id.
   @Get('current')
+  @RequirePermissions('fiscal_years.view')
   @ApiOperation({ summary: 'السنة المالية الحالية' })
   findCurrent() {
     return this.fiscalYearService.findCurrent();
   }
 
   @Get(':id')
+  @RequirePermissions('fiscal_years.view')
   @ApiOperation({ summary: 'عرض سنة مالية' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.fiscalYearService.findOne(id);
   }
 
   @Put(':id')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم تعديل السنة المالية بنجاح')
   @ApiOperation({ summary: 'تعديل سنة مالية (المفتوحة فقط)' })
   update(
@@ -61,6 +67,7 @@ export class FiscalYearController {
   }
 
   @Delete(':id')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم حذف السنة المالية بنجاح')
   @ApiOperation({ summary: 'حذف سنة مالية (غير مستخدمة)' })
   remove(
@@ -71,6 +78,7 @@ export class FiscalYearController {
   }
 
   @Post(':id/generate-periods')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم إنشاء الفترات المحاسبية بنجاح')
   @ApiOperation({ summary: 'إنشاء الفترات المحاسبية للسنة المالية' })
   generatePeriods(
@@ -81,6 +89,7 @@ export class FiscalYearController {
   }
 
   @Post(':id/set-current')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم تعيين السنة المالية الحالية بنجاح')
   @ApiOperation({ summary: 'تعيين السنة المالية الحالية' })
   setCurrent(@Param('id', ParseUUIDPipe) id: string) {
@@ -88,6 +97,7 @@ export class FiscalYearController {
   }
 
   @Post(':id/close')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم إقفال السنة المالية بنجاح')
   @ApiOperation({ summary: 'إقفال السنة المالية' })
   close(
@@ -98,6 +108,7 @@ export class FiscalYearController {
   }
 
   @Post(':id/reopen')
+  @RequirePermissions('fiscal_years.manage')
   @ResponseMessage('تم إعادة فتح السنة المالية بنجاح')
   @ApiOperation({ summary: 'إعادة فتح السنة المالية (مدير النظام)' })
   reopen(

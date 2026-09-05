@@ -75,7 +75,11 @@ export class ManufacturingService {
   // =========================================================
   // CREATE / UPDATE / DELETE
   // =========================================================
-  async create(dto: CreateManufacturingOrderDto, actorId?: string): Promise<ManufacturingOrder> {
+  async create(
+    dto: CreateManufacturingOrderDto,
+    actorId?: string,
+    branchScope: string | null = null,
+  ): Promise<ManufacturingOrder> {
     const product = await this.productRepository.findOne({ where: { id: dto.productId } });
     if (!product) throw new NotFoundException('المنتج غير موجود');
     const customer = dto.customerId
@@ -101,7 +105,8 @@ export class ManufacturingService {
           material: dto.material ?? null,
           specifications: dto.specifications ?? null,
           status: ManufacturingOrderStatus.NEW,
-          branchId: dto.branchId ?? null,
+          // A branch-restricted user's documents are forced onto their own branch.
+          branchId: branchScope ?? dto.branchId ?? null,
           fiscalYearId: fiscalYear.id,
           notes: dto.notes ?? null,
           createdBy: actorId ?? null,
@@ -114,8 +119,9 @@ export class ManufacturingService {
     id: string,
     dto: UpdateManufacturingOrderDto,
     actorId?: string,
+    branchScope: string | null = null,
   ): Promise<ManufacturingOrder> {
-    const order = await this.getEditable(id);
+    const order = await this.getEditable(id, branchScope);
 
     if (dto.productId && dto.productId !== order.productId) {
       const product = await this.productRepository.findOne({ where: { id: dto.productId } });
@@ -136,7 +142,9 @@ export class ManufacturingService {
     if (dto.color !== undefined) order.color = dto.color ?? null;
     if (dto.material !== undefined) order.material = dto.material ?? null;
     if (dto.specifications !== undefined) order.specifications = dto.specifications ?? null;
-    if (dto.branchId !== undefined) order.branchId = dto.branchId ?? null;
+    // A branch-restricted user cannot move a document to another branch.
+    if (branchScope) order.branchId = branchScope;
+    else if (dto.branchId !== undefined) order.branchId = dto.branchId ?? null;
     if (dto.notes !== undefined) order.notes = dto.notes ?? null;
     order.updatedBy = actorId ?? null;
 
@@ -163,8 +171,12 @@ export class ManufacturingService {
     return this.orderRepository.save(order);
   }
 
-  async remove(id: string, actorId?: string): Promise<void> {
-    const order = await this.findOne(id);
+  async remove(
+    id: string,
+    actorId?: string,
+    branchScope: string | null = null,
+  ): Promise<void> {
+    const order = await this.findOne(id, branchScope);
     if (order.status !== ManufacturingOrderStatus.NEW) {
       throw new BadRequestException('لا يمكن حذف أمر بدأ تنفيذه — يمكن إلغاؤه بدلاً من ذلك');
     }
@@ -177,8 +189,11 @@ export class ManufacturingService {
   // =========================================================
   async findAll(
     query: ManufacturingOrderQueryDto,
+    branchScope: string | null = null,
   ): Promise<PaginatedResult<ManufacturingOrderListItem>> {
     const qb = this.orderRepository.createQueryBuilder('mo');
+    // Branch-restricted users only ever see their own branch's documents.
+    if (branchScope) qb.andWhere('mo.branchId = :branchScope', { branchScope });
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
@@ -214,14 +229,16 @@ export class ManufacturingService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string): Promise<ManufacturingOrder> {
+  async findOne(id: string, branchScope: string | null = null): Promise<ManufacturingOrder> {
     const order = await this.orderRepository.findOne({ where: { id } });
-    if (!order) throw new NotFoundException('لم يتم العثور على أمر التصنيع');
+    if (!order || (branchScope && order.branchId !== branchScope)) {
+      throw new NotFoundException('لم يتم العثور على أمر التصنيع');
+    }
     return order;
   }
 
-  async findOneDetailed(id: string): Promise<Record<string, unknown>> {
-    const order = await this.findOne(id);
+  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+    const order = await this.findOne(id, branchScope);
     const [branch, fiscalYear, users] = await Promise.all([
       order.branchId ? this.branchRepository.findOne({ where: { id: order.branchId } }) : null,
       order.fiscalYearId ? this.fiscalYearRepository.findOne({ where: { id: order.fiscalYearId } }) : null,
@@ -238,8 +255,8 @@ export class ManufacturingService {
   // =========================================================
   // HELPERS
   // =========================================================
-  private async getEditable(id: string): Promise<ManufacturingOrder> {
-    const order = await this.findOne(id);
+  private async getEditable(id: string, branchScope: string | null = null): Promise<ManufacturingOrder> {
+    const order = await this.findOne(id, branchScope);
     if (
       order.status === ManufacturingOrderStatus.DONE ||
       order.status === ManufacturingOrderStatus.CANCELLED

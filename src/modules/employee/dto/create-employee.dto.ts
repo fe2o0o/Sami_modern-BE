@@ -11,10 +11,11 @@ import {
 } from 'class-validator';
 
 export class CreateEmployeeDto {
-  @ApiProperty({ example: 'EMP-001' })
-  @IsString({ message: 'كود الموظف مطلوب' })
+  @ApiPropertyOptional({ example: 'EMP-001', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود الموظف غير صحيح' })
   @MaxLength(50)
-  code!: string;
+  code?: string;
 
   @ApiProperty({ example: 'أحمد محمد' })
   @IsString({ message: 'اسم الموظف مطلوب' })

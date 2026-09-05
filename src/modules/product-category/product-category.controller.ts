@@ -14,6 +14,7 @@ import { ProductCategoryService } from './product-category.service';
 import { CreateProductCategoryDto } from './dto/create-product-category.dto';
 import { UpdateProductCategoryDto } from './dto/update-product-category.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 @ApiTags('Product Categories')
 @ApiBearerAuth('access-token')
@@ -22,6 +23,7 @@ export class ProductCategoryController {
   constructor(private readonly categoryService: ProductCategoryService) {}
 
   @Post()
+  @RequirePermissions('product_catalog.manage')
   @ResponseMessage('تم حفظ التصنيف بنجاح')
   @ApiOperation({ summary: 'إضافة تصنيف منتجات' })
   create(@Body() dto: CreateProductCategoryDto) {
@@ -30,18 +32,21 @@ export class ProductCategoryController {
 
   // NOTE: declared before ':id' so "tree" is not treated as an id.
   @Get()
+  @RequirePermissions('product_catalog.view')
   @ApiOperation({ summary: 'عرض شجرة التصنيفات' })
   tree() {
     return this.categoryService.tree();
   }
 
   @Get(':id')
+  @RequirePermissions('product_catalog.view')
   @ApiOperation({ summary: 'عرض تصنيف' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.categoryService.findOne(id);
   }
 
   @Put(':id')
+  @RequirePermissions('product_catalog.manage')
   @ResponseMessage('تم حفظ التصنيف بنجاح')
   @ApiOperation({ summary: 'تعديل تصنيف' })
   update(
@@ -52,6 +57,7 @@ export class ProductCategoryController {
   }
 
   @Delete(':id')
+  @RequirePermissions('product_catalog.manage')
   @ResponseMessage('تم حذف التصنيف بنجاح')
   @ApiOperation({ summary: 'حذف تصنيف' })
   remove(@Param('id', ParseUUIDPipe) id: string) {
@@ -59,6 +65,7 @@ export class ProductCategoryController {
   }
 
   @Patch(':id/restore')
+  @RequirePermissions('product_catalog.manage')
   @ResponseMessage('تم استعادة التصنيف بنجاح')
   @ApiOperation({ summary: 'استعادة تصنيف محذوف' })
   restore(@Param('id', ParseUUIDPipe) id: string) {

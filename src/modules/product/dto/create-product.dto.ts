@@ -13,10 +13,11 @@ import { ProductType } from '../enums/product-type.enum';
 
 export class CreateProductDto {
   // ── Basic ──
-  @ApiProperty({ example: 'PRD-0001' })
-  @IsString({ message: 'كود المنتج مطلوب' })
+  @ApiPropertyOptional({ example: 'PRD-0001', description: 'اختياري عند تفعيل التوليد التلقائي' })
+  @IsOptional()
+  @IsString({ message: 'كود المنتج غير صحيح' })
   @MaxLength(50, { message: 'الكود يجب ألا يتجاوز 50 حرفاً' })
-  code!: string;
+  code?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

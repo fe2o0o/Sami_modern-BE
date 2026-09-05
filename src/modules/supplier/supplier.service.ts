@@ -5,6 +5,7 @@ import { Supplier } from './entities/supplier.entity';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { BaseCrudService } from '../../common/services/base-crud.service';
+import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
@@ -37,6 +38,7 @@ export class SupplierService extends BaseCrudService<Supplier> {
     @InjectRepository(Supplier)
     private readonly supplierRepository: Repository<Supplier>,
     private readonly excel: ExcelService,
+    private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
     imports: ImportRegistry,
   ) {
@@ -92,8 +94,9 @@ export class SupplierService extends BaseCrudService<Supplier> {
   }
 
   async create(dto: CreateSupplierDto): Promise<Supplier> {
-    await this.ensureUnique('code', dto.code, undefined, 'كود المورد مستخدم بالفعل');
-    return this.supplierRepository.save(this.supplierRepository.create(dto));
+    const code = await this.codeSettings.resolveCode('supplier', dto.code);
+    await this.ensureUnique('code', code, undefined, 'كود المورد مستخدم بالفعل');
+    return this.supplierRepository.save(this.supplierRepository.create({ ...dto, code }));
   }
 
   async update(id: string, dto: UpdateSupplierDto): Promise<Supplier> {

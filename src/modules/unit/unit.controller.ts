@@ -16,6 +16,7 @@ import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
 import { StatusQueryDto } from '../../common/dto/status-query.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
+import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
 @ApiTags('Units')
 @ApiBearerAuth('access-token')
@@ -24,6 +25,7 @@ export class UnitController {
   constructor(private readonly unitService: UnitService) {}
 
   @Post()
+  @RequirePermissions('product_catalog.manage')
   @ResponseMessage('تم حفظ الوحدة بنجاح')
   @ApiOperation({ summary: 'إضافة وحدة قياس' })
   create(@Body() dto: CreateUnitDto) {
@@ -31,18 +33,21 @@ export class UnitController {
   }
 
   @Get()
+  @RequirePermissions('product_catalog.view')
   @ApiOperation({ summary: 'عرض وحدات القياس مع الترقيم' })
   findAll(@Query() query: StatusQueryDto) {
     return this.unitService.findAll(query);
   }
 
   @Get(':id')
+  @RequirePermissions('product_catalog.view')
   @ApiOperation({ summary: 'عرض وحدة قياس' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.unitService.findOne(id);
   }
 
   @Put(':id')
+  @RequirePermissions('product_catalog.manage')
   @ResponseMessage('تم حفظ الوحدة بنجاح')
   @ApiOperation({ summary: 'تعديل وحدة قياس' })
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateUnitDto) {
@@ -50,6 +55,7 @@ export class UnitController {
   }
 
   @Delete(':id')
+  @RequirePermissions('product_catalog.manage')
   @ResponseMessage('تم حذف الوحدة بنجاح')
   @ApiOperation({ summary: 'حذف وحدة قياس' })
   remove(@Param('id', ParseUUIDPipe) id: string) {
@@ -57,6 +63,7 @@ export class UnitController {
   }
 
   @Patch(':id/restore')
+  @RequirePermissions('product_catalog.manage')
   @ResponseMessage('تم استعادة الوحدة بنجاح')
   @ApiOperation({ summary: 'استعادة وحدة محذوفة' })
   restore(@Param('id', ParseUUIDPipe) id: string) {

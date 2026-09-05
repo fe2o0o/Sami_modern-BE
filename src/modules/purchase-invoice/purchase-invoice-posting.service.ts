@@ -52,9 +52,12 @@ export class PurchaseInvoicePostingService {
   // =========================================================
   // POST
   // =========================================================
-  async post(id: string, actorId?: string): Promise<PurchaseInvoice> {
+  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<PurchaseInvoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(manager, id);
+      if (branchScope && invoice.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على فاتورة المشتريات');
+      }
       if (invoice.status !== PurchaseInvoiceStatus.DRAFT) {
         throw new BadRequestException('لا يمكن ترحيل فاتورة غير مسودة');
       }
@@ -184,9 +187,13 @@ export class PurchaseInvoicePostingService {
     id: string,
     dto: ReversePurchaseInvoiceDto,
     actorId?: string,
+    branchScope: string | null = null,
   ): Promise<PurchaseInvoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(manager, id);
+      if (branchScope && invoice.branchId !== branchScope) {
+        throw new NotFoundException('لم يتم العثور على فاتورة المشتريات');
+      }
       if (invoice.status === PurchaseInvoiceStatus.REVERSED) {
         throw new ConflictException('الفاتورة معكوسة بالفعل');
       }
