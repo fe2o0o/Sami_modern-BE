@@ -28,7 +28,8 @@ import { PermissionsGuard } from '../permissions/guards/permissions.guard';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('jwt.secret') ?? 'change-me-in-env',
+        // jwt.secret is guaranteed present (see jwt.config: fails fast if unset).
+        secret: config.get<string>('jwt.secret'),
       }),
     }),
   ],

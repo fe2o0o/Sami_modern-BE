@@ -27,8 +27,12 @@ export const dataSourceOptions: DataSourceOptions = {
   entities: [__dirname + '/../**/*.entity.{ts,js}'],
   migrations: [__dirname + '/migrations/*.{ts,js}'],
   namingStrategy: new SnakeNamingStrategy(),
-  // synchronize: process.env.DB_SYNCHRONIZE !== 'false',
-  synchronize: true,
+  // NEVER auto-sync in production. This DataSource is what the migration CLI
+  // initializes, so a `true` here would auto-alter the schema before migrating.
+  // Opt in explicitly (dev only) with DB_SYNCHRONIZE=true; production forces off.
+  synchronize:
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DB_SYNCHRONIZE === 'true',
   logging: process.env.DB_LOGGING === 'true',
 };
 

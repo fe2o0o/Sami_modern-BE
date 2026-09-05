@@ -45,13 +45,20 @@ export class EnvironmentVariables {
   @IsString()
   DB_DATABASE!: string;
 
-  // --- JWT ---
+  // --- JWT (both secrets are mandatory; no insecure fallbacks) ---
   @IsString()
   JWT_SECRET!: string;
+
+  @IsString()
+  JWT_REFRESH_SECRET!: string;
 
   @IsOptional()
   @IsString()
   JWT_EXPIRES_IN?: string;
+
+  @IsOptional()
+  @IsString()
+  JWT_REFRESH_EXPIRES_IN?: string;
 }
 
 /**

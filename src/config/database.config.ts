@@ -3,9 +3,9 @@ import { registerAs } from '@nestjs/config';
 /**
  * Database (MySQL / TypeORM) configuration.
  *
- * DEV: `synchronize` is ON (auto-creates/updates tables) for fast iteration.
- * BEFORE PRODUCTION: set DB_SYNCHRONIZE=false and rely on migrations only
- * (an InitSchema migration is already generated as the baseline).
+ * DEV: opt in to `synchronize` with DB_SYNCHRONIZE=true for fast iteration.
+ * PRODUCTION: synchronize is ALWAYS off (guarded by NODE_ENV) — schema changes
+ * are applied through migrations only (see src/database/migrations).
  */
 export default registerAs('database', () => ({
   type: 'mysql' as const,
@@ -14,6 +14,9 @@ export default registerAs('database', () => ({
   username: process.env.DB_USERNAME ?? 'root',
   password: process.env.DB_PASSWORD ?? '',
   name: process.env.DB_DATABASE ?? 'sami_modern',
-  synchronize: process.env.DB_SYNCHRONIZE !== 'false',
+  // Explicit opt-in only, and never in production regardless of the flag.
+  synchronize:
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DB_SYNCHRONIZE === 'true',
   logging: process.env.DB_LOGGING === 'true',
 }));

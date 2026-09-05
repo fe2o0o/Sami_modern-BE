@@ -18,6 +18,7 @@ async function bootstrap() {
   const port = config.get<number>('app.port') ?? 3000;
   const apiPrefix = config.get<string>('app.apiPrefix') ?? 'api/v1';
   const corsOrigins = config.get<string>('app.corsOrigins') ?? '*';
+  const isProduction = config.get<string>('app.env') === 'production';
 
   // =========================
   // SECURITY & PERFORMANCE MIDDLEWARE
@@ -25,7 +26,14 @@ async function bootstrap() {
   // Allow the SPA (different origin in dev) to load uploaded images via <img>.
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(compression());
-  app.use(morgan('dev'));
+  // Concise, Apache-style access logs in production; verbose colored logs in dev.
+  app.use(morgan(isProduction ? 'combined' : 'dev'));
+
+  // Behind CloudPanel/NGINX: trust the proxy so client IPs / protocol are correct.
+  app.set('trust proxy', 1);
+
+  // Flush DB connections and in-flight work on SIGTERM/SIGINT (PM2 reloads).
+  app.enableShutdownHooks();
 
   // =========================
   // STATIC UPLOADS  →  http://host/uploads/products/<file>
@@ -87,8 +95,9 @@ async function bootstrap() {
     logger.log(`📄 Swagger docs: http://localhost:${port}/${swaggerPath}`);
   }
 
-  await app.listen(port);
-  logger.log(`🚀 Server running on http://localhost:${port}/${apiPrefix}`);
+  // Bind to 0.0.0.0 so the reverse proxy (CloudPanel/NGINX) can reach the app.
+  await app.listen(port, '0.0.0.0');
+  logger.log(`🚀 Server running on port ${port} (prefix /${apiPrefix})`);
 }
 
 void bootstrap();
