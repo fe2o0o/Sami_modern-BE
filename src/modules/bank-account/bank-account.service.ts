@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, In, Not, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { BankAccount } from './entities/bank-account.entity';
 import { BankTransaction } from './entities/bank-transaction.entity';
 import { CreateBankAccountDto } from './dto/create-bank-account.dto';
@@ -29,10 +29,9 @@ const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'accountName', header: 'اسم الحساب', required: true, example: 'سامي للأثاث' },
   { field: 'accountNumber', header: 'رقم الحساب', example: '1234567890' },
   { field: 'iban', header: 'الآيبان', example: 'EG380000000000000001234567890' },
-  { field: 'branchCode', header: 'كود الفرع', required: true, example: 'BR-001', note: 'كود فرع موجود' },
+  { field: 'branchCodes', header: 'أكواد الفروع', example: 'BR-001,BR-002', note: 'أكواد فروع مفصولة بفاصلة. اتركها فارغة ليكون متاحًا لكل الفروع' },
   { field: 'accountCode', header: 'كود الحساب البنكي (GL)', required: true, example: '111300', note: 'حساب أصول/بنك قابل للترحيل' },
   { field: 'currencyCode', header: 'العملة', example: 'EGP', note: 'افتراضي: EGP' },
-  { field: 'isDefault', header: 'افتراضي للفرع', type: 'boolean', example: 'لا', note: 'نعم/لا' },
   { field: 'isActive', header: 'نشط', type: 'boolean', example: 'نعم', note: 'نعم/لا (افتراضي: نعم)' },
   { field: 'notes', header: 'ملاحظات', example: '' },
 ];
@@ -40,7 +39,9 @@ const IMPORT_COLUMNS: ImportColumn[] = [
 export interface BankAccountView extends BankAccount {
   accountCode: string | null;
   glAccountName: string | null;
-  branchName: string | null;
+  /** Empty = available to all branches. */
+  branchIds: string[];
+  branchNames: string[];
 }
 
 export interface BankAccountLookupItem {
@@ -49,12 +50,12 @@ export interface BankAccountLookupItem {
   bankName: string;
   accountName: string;
   accountNumberMasked: string | null;
-  branchId: string;
+  /** Empty = available to all branches. */
+  branchIds: string[];
   accountId: string;
   accountCode: string | null;
   glAccountName: string | null;
   currencyCode: string;
-  isDefault: boolean;
 }
 
 @Injectable()
@@ -102,9 +103,18 @@ export class BankAccountService {
         throw new Error(`كود الحساب البنكي «${code}» مستخدم بالفعل`);
       }
 
-      const branchCode = str(v.branchCode, 'كود الفرع');
-      const branch = await manager.getRepository(Branch).findOne({ where: { code: branchCode } });
-      if (!branch) throw new Error(`الفرع بكود «${branchCode}» غير موجود`);
+      // Optional comma-separated branch codes. Empty = available to all branches.
+      const branchCodesRaw = optStr(v.branchCodes) ?? '';
+      const branchCodes = branchCodesRaw
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      const branches: Branch[] = [];
+      for (const branchCode of branchCodes) {
+        const branch = await manager.getRepository(Branch).findOne({ where: { code: branchCode } });
+        if (!branch) throw new Error(`الفرع بكود «${branchCode}» غير موجود`);
+        branches.push(branch);
+      }
 
       const accountCode = str(v.accountCode, 'كود الحساب البنكي (GL)');
       const account = await manager
@@ -128,11 +138,6 @@ export class BankAccountService {
         },
       );
 
-      const isDefault = bool(v.isDefault, false);
-      if (isDefault) {
-        await manager.update(BankAccount, { branchId: branch.id, isDefault: true }, { isDefault: false });
-      }
-
       await repo.save(
         repo.create({
           code,
@@ -140,10 +145,9 @@ export class BankAccountService {
           accountName: str(v.accountName, 'اسم الحساب'),
           accountNumber: optStr(v.accountNumber),
           iban: optStr(v.iban),
-          branchId: branch.id,
+          branches,
           accountId: account.id,
           currencyCode: optStr(v.currencyCode) ?? 'EGP',
-          isDefault,
           isActive: bool(v.isActive, true),
           notes: optStr(v.notes),
         }),
@@ -154,31 +158,24 @@ export class BankAccountService {
   async create(dto: CreateBankAccountDto, actorId?: string): Promise<BankAccount> {
     const code = await this.codeSettings.resolveCode('bank_account', dto.code);
     await this.ensureCodeUnique(code);
-    await this.assertBranch(dto.branchId);
+    const branches = await this.resolveBranches(dto.branchIds);
     await this.assertAccount(dto.accountId);
 
-    return this.bankRepository.manager.transaction(async (manager) => {
-      if (dto.isDefault) {
-        await this.clearDefault(manager, dto.branchId);
-      }
-      const repo = manager.getRepository(BankAccount);
-      return repo.save(
-        repo.create({
-          code,
-          bankName: dto.bankName,
-          accountName: dto.accountName,
-          accountNumber: dto.accountNumber ?? null,
-          iban: dto.iban ?? null,
-          branchId: dto.branchId,
-          accountId: dto.accountId,
-          currencyCode: dto.currencyCode ?? 'EGP',
-          isDefault: dto.isDefault ?? false,
-          isActive: dto.isActive ?? true,
-          notes: dto.notes ?? null,
-          createdBy: actorId ?? null,
-        }),
-      );
-    });
+    return this.bankRepository.save(
+      this.bankRepository.create({
+        code,
+        bankName: dto.bankName,
+        accountName: dto.accountName,
+        accountNumber: dto.accountNumber ?? null,
+        iban: dto.iban ?? null,
+        branches,
+        accountId: dto.accountId,
+        currencyCode: dto.currencyCode ?? 'EGP',
+        isActive: dto.isActive ?? true,
+        notes: dto.notes ?? null,
+        createdBy: actorId ?? null,
+      }),
+    );
   }
 
   async findAll(query: QueryBankAccountDto): Promise<PaginatedResult<BankAccountView>> {
@@ -188,7 +185,9 @@ export class BankAccountService {
         s: `%${query.search}%`,
       });
     }
-    if (query.branchId) qb.andWhere('b.branchId = :br', { br: query.branchId });
+    // A branch matches an account assigned to it OR an account with no branches
+    // (a shared/all-branches account).
+    if (query.branchId) qb.andWhere(this.branchVisibilityClause('b'), { br: query.branchId });
     if (query.isActive !== undefined) qb.andWhere('b.isActive = :a', { a: query.isActive });
 
     qb.orderBy('b.code', query.order).skip(query.skip).take(query.perPage);
@@ -208,35 +207,30 @@ export class BankAccountService {
     dto: UpdateBankAccountDto,
     actorId?: string,
   ): Promise<BankAccount> {
-    const bank = await this.bankRepository.findOne({ where: { id } });
+    const bank = await this.bankRepository.findOne({
+      where: { id },
+      relations: { branches: true },
+    });
     if (!bank) throw new NotFoundException('لم يتم العثور على الحساب البنكي');
 
     if (dto.code && dto.code !== bank.code) await this.ensureCodeUnique(dto.code, id);
-    if (dto.branchId) await this.assertBranch(dto.branchId);
     if (dto.accountId) await this.assertAccount(dto.accountId);
+    if (dto.branchIds !== undefined) bank.branches = await this.resolveBranches(dto.branchIds);
 
-    const targetBranch = dto.branchId ?? bank.branchId;
-
-    return this.bankRepository.manager.transaction(async (manager) => {
-      if (dto.isDefault && !(bank.isDefault && targetBranch === bank.branchId)) {
-        await this.clearDefault(manager, targetBranch, id);
-      }
-      Object.assign(bank, {
-        code: dto.code ?? bank.code,
-        bankName: dto.bankName ?? bank.bankName,
-        accountName: dto.accountName ?? bank.accountName,
-        accountNumber: dto.accountNumber !== undefined ? dto.accountNumber : bank.accountNumber,
-        iban: dto.iban !== undefined ? dto.iban : bank.iban,
-        branchId: targetBranch,
-        accountId: dto.accountId ?? bank.accountId,
-        currencyCode: dto.currencyCode ?? bank.currencyCode,
-        isDefault: dto.isDefault ?? bank.isDefault,
-        isActive: dto.isActive ?? bank.isActive,
-        notes: dto.notes !== undefined ? dto.notes : bank.notes,
-        updatedBy: actorId ?? null,
-      });
-      return manager.getRepository(BankAccount).save(bank);
+    Object.assign(bank, {
+      code: dto.code ?? bank.code,
+      bankName: dto.bankName ?? bank.bankName,
+      accountName: dto.accountName ?? bank.accountName,
+      accountNumber: dto.accountNumber !== undefined ? dto.accountNumber : bank.accountNumber,
+      iban: dto.iban !== undefined ? dto.iban : bank.iban,
+      accountId: dto.accountId ?? bank.accountId,
+      currencyCode: dto.currencyCode ?? bank.currencyCode,
+      isActive: dto.isActive ?? bank.isActive,
+      notes: dto.notes !== undefined ? dto.notes : bank.notes,
+      updatedBy: actorId ?? null,
     });
+    // Saving the owning side syncs the bank_account_branches join rows.
+    return this.bankRepository.save(bank);
   }
 
   async remove(id: string, actorId?: string): Promise<void> {
@@ -252,10 +246,14 @@ export class BankAccountService {
   }
 
   async lookup(branchId?: string): Promise<BankAccountLookupItem[]> {
-    const banks = await this.bankRepository.find({
-      where: { isActive: true, ...(branchId ? { branchId } : {}) },
-      order: { code: 'ASC' },
-    });
+    const qb = this.bankRepository
+      .createQueryBuilder('b')
+      .leftJoinAndSelect('b.branches', 'br')
+      .where('b.isActive = :a', { a: true });
+    if (branchId) qb.andWhere(this.branchVisibilityClause('b'), { br: branchId });
+    qb.orderBy('b.code', 'ASC');
+
+    const banks = await qb.getMany();
     const accounts = await this.accountMap(banks.map((b) => b.accountId));
     return banks.map((b) => ({
       id: b.id,
@@ -263,29 +261,56 @@ export class BankAccountService {
       bankName: b.bankName,
       accountName: b.accountName,
       accountNumberMasked: this.mask(b.accountNumber),
-      branchId: b.branchId,
+      branchIds: (b.branches ?? []).map((x) => x.id),
       accountId: b.accountId,
       accountCode: accounts.get(b.accountId)?.code ?? null,
       glAccountName: accounts.get(b.accountId)?.name ?? null,
       currencyCode: b.currencyCode,
-      isDefault: b.isDefault,
     }));
   }
 
   // =========================================================
   // HELPERS
   // =========================================================
+  /**
+   * SQL predicate: the account is visible to :br when it is explicitly linked to
+   * that branch, OR it has no branch links at all (shared / all-branches).
+   */
+  private branchVisibilityClause(alias: string): string {
+    return `(
+      EXISTS (SELECT 1 FROM bank_account_branches bab
+              WHERE bab.bank_account_id = ${alias}.id AND bab.branch_id = :br)
+      OR NOT EXISTS (SELECT 1 FROM bank_account_branches babx
+                     WHERE babx.bank_account_id = ${alias}.id)
+    )`;
+  }
+
   private async enrich(items: BankAccount[]): Promise<BankAccountView[]> {
     const accounts = await this.accountMap(items.map((b) => b.accountId));
-    const branches = await this.branchMap(items.map((b) => b.branchId));
+    const branchesByAccount = await this.branchesFor(items.map((b) => b.id));
     return items.map((b) => {
       const info = accounts.get(b.accountId);
+      const branches = branchesByAccount.get(b.id) ?? [];
       return Object.assign(b, {
         accountCode: info?.code ?? null,
         glAccountName: info?.name ?? null,
-        branchName: branches.get(b.branchId) ?? null,
+        branches,
+        branchIds: branches.map((x) => x.id),
+        branchNames: branches.map((x) => x.name),
       }) as BankAccountView;
     });
+  }
+
+  /** Load the branch links for a set of accounts in one query. */
+  private async branchesFor(ids: string[]): Promise<Map<string, Branch[]>> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (!unique.length) return new Map();
+    const rows = await this.bankRepository
+      .createQueryBuilder('b')
+      .leftJoinAndSelect('b.branches', 'br')
+      .where('b.id IN (:...ids)', { ids: unique })
+      .getMany();
+    return new Map(rows.map((r): [string, Branch[]] => [r.id, r.branches ?? []]));
   }
 
   private mask(accountNumber: string | null): string | null {
@@ -308,13 +333,6 @@ export class BankAccountService {
     );
   }
 
-  private async branchMap(ids: string[]): Promise<Map<string, string>> {
-    const unique = [...new Set(ids.filter(Boolean))];
-    if (!unique.length) return new Map();
-    const rows = await this.branchRepository.find({ where: { id: In(unique) } });
-    return new Map(rows.map((b): [string, string] => [b.id, b.name]));
-  }
-
   private async ensureCodeUnique(code: string, ignoreId?: string): Promise<void> {
     const existing = await this.bankRepository.findOne({ where: { code } });
     if (existing && existing.id !== ignoreId) {
@@ -322,9 +340,15 @@ export class BankAccountService {
     }
   }
 
-  private async assertBranch(branchId: string): Promise<void> {
-    const branch = await this.branchRepository.findOne({ where: { id: branchId } });
-    if (!branch) throw new NotFoundException('الفرع غير موجود');
+  /** Resolve+validate the branch ids. Empty/undefined → no branches (all). */
+  private async resolveBranches(ids?: string[]): Promise<Branch[]> {
+    const unique = [...new Set((ids ?? []).filter(Boolean))];
+    if (!unique.length) return [];
+    const rows = await this.branchRepository.find({ where: { id: In(unique) } });
+    if (rows.length !== unique.length) {
+      throw new NotFoundException('أحد الفروع المختارة غير موجود');
+    }
+    return rows;
   }
 
   private async assertAccount(accountId: string): Promise<void> {
@@ -346,18 +370,6 @@ export class BankAccountService {
         label: 'الحساب البنكي',
         kind: 'حساب بنك',
       },
-    );
-  }
-
-  private async clearDefault(
-    manager: EntityManager,
-    branchId: string,
-    exceptId?: string,
-  ): Promise<void> {
-    await manager.update(
-      BankAccount,
-      { branchId, isDefault: true, ...(exceptId ? { id: Not(exceptId) } : {}) },
-      { isDefault: false },
     );
   }
 }

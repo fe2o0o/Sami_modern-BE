@@ -1,5 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateBankAccountDto {
   @ApiPropertyOptional({ example: 'BNK-001', description: 'اختياري عند تفعيل التوليد التلقائي' })
@@ -30,9 +37,15 @@ export class CreateBankAccountDto {
   @MaxLength(60)
   iban?: string | null;
 
-  @ApiProperty({ format: 'uuid' })
-  @IsUUID('4', { message: 'يجب اختيار الفرع' })
-  branchId!: string;
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'الفروع التي يخدمها الحساب. اتركها فارغة ليكون متاحًا لكل الفروع.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true, message: 'أحد الفروع المختارة غير صالح' })
+  branchIds?: string[];
 
   @ApiProperty({ format: 'uuid', description: 'الحساب المحاسبي (بنك)' })
   @IsUUID('4', { message: 'يجب اختيار الحساب المحاسبي' })
@@ -43,11 +56,6 @@ export class CreateBankAccountDto {
   @IsString()
   @MaxLength(10)
   currencyCode?: string;
-
-  @ApiPropertyOptional({ default: false })
-  @IsOptional()
-  @IsBoolean()
-  isDefault?: boolean;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()

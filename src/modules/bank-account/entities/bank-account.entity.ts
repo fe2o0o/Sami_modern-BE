@@ -1,4 +1,4 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinTable, ManyToMany } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { Branch } from '../../branch/entities/branch.entity';
 
@@ -7,6 +7,9 @@ import { Branch } from '../../branch/entities/branch.entity';
  * account. `accountId` maps it to the chart-of-account bank account it posts to;
  * several bank accounts may share one GL account while their operational
  * balances stay separate.
+ *
+ * A bank account may serve MANY branches (`branches`). An EMPTY branch set means
+ * the account is shared/available to every branch (a central account).
  */
 @Entity('bank_accounts')
 export class BankAccount extends BaseEntity {
@@ -26,13 +29,14 @@ export class BankAccount extends BaseEntity {
   @Column({ type: 'varchar', length: 60, nullable: true })
   iban!: string | null;
 
-  @Index()
-  @Column({ type: 'uuid' })
-  branchId!: string;
-
-  @ManyToOne(() => Branch, { onDelete: 'RESTRICT' })
-  @JoinColumn({ name: 'branch_id' })
-  branch!: Branch;
+  /** Branches this account serves. EMPTY = available to all branches. */
+  @ManyToMany(() => Branch)
+  @JoinTable({
+    name: 'bank_account_branches',
+    joinColumn: { name: 'bank_account_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'branch_id', referencedColumnName: 'id' },
+  })
+  branches!: Branch[];
 
   /** GL bank account this account posts to. */
   @Column({ type: 'uuid' })
@@ -40,9 +44,6 @@ export class BankAccount extends BaseEntity {
 
   @Column({ type: 'varchar', length: 10, default: 'EGP' })
   currencyCode!: string;
-
-  @Column({ type: 'boolean', default: false })
-  isDefault!: boolean;
 
   @Column({ type: 'boolean', default: true })
   isActive!: boolean;

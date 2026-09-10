@@ -321,7 +321,9 @@ export class VoucherPostingService {
     }
     const b = await manager.getRepository(BankAccount).findOne({ where: { id: voucher.bankAccountId ?? '' } });
     if (!b) throw new NotFoundException('الحساب البنكي غير موجود');
-    return { accountId: b.accountId, branchId: b.branchId, label: `${b.bankName} - ${b.accountName}` };
+    // A bank account may serve many branches (or none), so it has no single
+    // branch — the voucher's own branch is used (see caller: voucher.branchId ?? …).
+    return { accountId: b.accountId, branchId: null, label: `${b.bankName} - ${b.accountName}` };
   }
 
   private async recordCashLeg(

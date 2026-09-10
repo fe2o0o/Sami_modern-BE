@@ -45,19 +45,16 @@ export class TreasuryBankSeeder implements Seeder {
     }
 
     // Default bank account → bank GL account.
-    const existingBank = await bankRepo.findOne({
-      where: { branchId: branch.id },
-    });
+    const existingBank = await bankRepo.findOne({ where: { code: 'BNK-001' } });
     if (!existingBank && settings?.defaultBankAccountId) {
       await bankRepo.save(
         bankRepo.create({
           code: 'BNK-001',
           bankName: 'البنك الرئيسي',
           accountName: 'الحساب الرئيسي',
-          branchId: branch.id,
+          branches: [branch],
           accountId: settings.defaultBankAccountId,
           currencyCode: 'EGP',
-          isDefault: true,
           isActive: true,
         }),
       );
