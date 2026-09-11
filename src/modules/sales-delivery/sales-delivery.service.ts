@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import { SalesDelivery } from './entities/sales-delivery.entity';
 import { SalesDeliveryItem } from './entities/sales-delivery-item.entity';
@@ -190,10 +191,10 @@ export class SalesDeliveryService {
   // =========================================================
   async findAll(
     query: SalesDeliveryQueryDto,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<SalesDeliveryListItem>> {
     const qb = this.repository.createQueryBuilder('d');
-    if (branchScope) qb.andWhere('d.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 'd.branchId', branchScope);
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
@@ -234,19 +235,19 @@ export class SalesDeliveryService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string, branchScope: string | null = null): Promise<SalesDelivery> {
+  async findOne(id: string, branchScope: BranchScope = null): Promise<SalesDelivery> {
     const d = await this.repository.findOne({
       where: { id },
       relations: { items: true },
       order: { items: { lineNumber: 'ASC' } },
     });
-    if (!d || (branchScope && d.branchId !== branchScope)) {
+    if (!d || !isWithinBranchScope(d.branchId, branchScope)) {
       throw new NotFoundException('لم يتم العثور على إذن التسليم');
     }
     return d;
   }
 
-  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+  async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const d = await this.findOne(id, branchScope);
     const [customer, warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.customerRepository.findOne({ where: { id: d.customerId } }),

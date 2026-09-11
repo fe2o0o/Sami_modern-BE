@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
+import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { Voucher } from './entities/voucher.entity';
 import {
   VoucherPaymentMethod,
@@ -60,10 +61,10 @@ export class VoucherPostingService {
   // =========================================================
   // POST
   // =========================================================
-  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<Voucher> {
+  async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<Voucher> {
     return this.dataSource.transaction(async (manager) => {
       const voucher = await this.lock(manager, id);
-      if (branchScope && voucher.branchId !== branchScope) {
+      if (!isWithinBranchScope(voucher.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على السند');
       }
       if (voucher.status !== VoucherStatus.DRAFT) {
@@ -182,10 +183,10 @@ export class VoucherPostingService {
   // =========================================================
   // REVERSE
   // =========================================================
-  async reverse(id: string, dto: ReverseVoucherDto, actorId?: string, branchScope: string | null = null): Promise<Voucher> {
+  async reverse(id: string, dto: ReverseVoucherDto, actorId?: string, branchScope: string[] | null = null): Promise<Voucher> {
     return this.dataSource.transaction(async (manager) => {
       const voucher = await this.lock(manager, id);
-      if (branchScope && voucher.branchId !== branchScope) {
+      if (!isWithinBranchScope(voucher.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على السند');
       }
       if (voucher.status === VoucherStatus.REVERSED) {

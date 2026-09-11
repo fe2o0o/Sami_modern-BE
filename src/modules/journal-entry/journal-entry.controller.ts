@@ -29,14 +29,14 @@ export class JournalEntryController {
   @Get()
   @RequirePermissions('journal_entries.view')
   @ApiOperation({ summary: 'عرض القيود اليومية مع الترقيم والفلاتر' })
-  findAll(@Query() query: JournalEntryQueryDto, @BranchScope() branchScope: string | null) {
+  findAll(@Query() query: JournalEntryQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.service.findAll(query, branchScope);
   }
 
   @Get(':id')
   @RequirePermissions('journal_entries.view')
   @ApiOperation({ summary: 'عرض تفاصيل قيد يومية' })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string | null) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOneDetailed(id, branchScope);
   }
 
@@ -47,7 +47,7 @@ export class JournalEntryController {
   create(
     @Body() dto: CreateJournalEntryDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.createManual(dto, actorId, branchScope);
   }
@@ -60,7 +60,7 @@ export class JournalEntryController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateJournalEntryDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.updateManual(id, dto, actorId, branchScope);
   }
@@ -72,7 +72,7 @@ export class JournalEntryController {
   remove(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.remove(id, actorId, branchScope);
   }
@@ -84,7 +84,7 @@ export class JournalEntryController {
   post(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.post(id, actorId, branchScope);
   }
@@ -97,7 +97,7 @@ export class JournalEntryController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReverseJournalEntryDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.reverse(id, dto, actorId, branchScope);
   }

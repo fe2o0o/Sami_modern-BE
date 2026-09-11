@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { applyBranchScope } from "../../common/utils/branch-scope.util";
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { JournalEntryLine } from '../journal-entry/entities/journal-entry-line.entity';
@@ -65,7 +66,11 @@ export class TrialBalanceService {
     private readonly periodRepository: Repository<AccountingPeriod>,
   ) {}
 
-  async generate(query: TrialBalanceQueryDto): Promise<TrialBalanceReport> {
+  async generate(
+    query: TrialBalanceQueryDto,
+    branchScope: string[] | null = null,
+  ): Promise<TrialBalanceReport> {
+    query.branchScope = branchScope;
     const { from, to } = await resolveReportRange(
       this.fiscalYearRepository,
       this.periodRepository,
@@ -193,6 +198,7 @@ export class TrialBalanceService {
     if (query.branchId) {
       qb.andWhere('l.branchId = :branchId', { branchId: query.branchId });
     }
+    applyBranchScope(qb, 'l.branchId', query.branchScope ?? null);
 
     return window(qb).getRawMany<{ accountId: string; d: string; c: string }>();
   }

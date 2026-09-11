@@ -33,14 +33,14 @@ export class VoucherController {
   @Get()
   @RequirePermissions('vouchers.view')
   @ApiOperation({ summary: 'عرض سندات القبض والصرف مع الترقيم والفلاتر' })
-  findAll(@Query() query: VoucherQueryDto, @BranchScope() branchScope: string | null) {
+  findAll(@Query() query: VoucherQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.service.findAll(query, branchScope);
   }
 
   @Get(':id')
   @RequirePermissions('vouchers.view')
   @ApiOperation({ summary: 'تفاصيل سند' })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string | null) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOneDetailed(id, branchScope);
   }
 
@@ -51,7 +51,7 @@ export class VoucherController {
   create(
     @Body() dto: CreateVoucherDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.create(dto, actorId, branchScope);
   }
@@ -64,7 +64,7 @@ export class VoucherController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateVoucherDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.update(id, dto, actorId, branchScope);
   }
@@ -76,7 +76,7 @@ export class VoucherController {
   remove(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.remove(id, actorId, branchScope);
   }
@@ -88,7 +88,7 @@ export class VoucherController {
   post(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.post(id, actorId, branchScope);
   }
@@ -101,7 +101,7 @@ export class VoucherController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReverseVoucherDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.reverse(id, dto, actorId, branchScope);
   }

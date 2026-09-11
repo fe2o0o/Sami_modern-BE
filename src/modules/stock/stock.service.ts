@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { EntityManager, Repository } from 'typeorm';
 import { WarehouseStock } from './entities/warehouse-stock.entity';
 import { StockMovement } from './entities/stock-movement.entity';
@@ -69,7 +70,7 @@ export class StockService {
   /** Paginated stock-movements ledger (enriched with product + warehouse). */
   async findMovements(
     query: StockMovementQueryDto,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<StockMovement>> {
     const qb = this.movementRepository
       .createQueryBuilder('m')
@@ -77,7 +78,7 @@ export class StockService {
       .leftJoinAndSelect('m.warehouse', 'warehouse');
 
     // Branch-restricted users only see movements in their own branch's warehouses.
-    if (branchScope) qb.andWhere('warehouse.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 'warehouse.branchId', branchScope);
     if (query.warehouseId) qb.andWhere('m.warehouseId = :wh', { wh: query.warehouseId });
     if (query.productId) qb.andWhere('m.productId = :pid', { pid: query.productId });
     if (query.direction) qb.andWhere('m.direction = :dir', { dir: query.direction });
@@ -409,7 +410,7 @@ export class StockService {
   async findAll(
     query: PaginationQueryDto,
     warehouseId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<WarehouseStock>> {
     const qb = this.stockRepository
       .createQueryBuilder('stock')
@@ -417,7 +418,7 @@ export class StockService {
       .leftJoinAndSelect('stock.warehouse', 'warehouse');
 
     // Branch-restricted users only see stock in their own branch's warehouses.
-    if (branchScope) qb.andWhere('warehouse.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 'warehouse.branchId', branchScope);
     if (warehouseId) {
       qb.andWhere('stock.warehouseId = :warehouseId', { warehouseId });
     }

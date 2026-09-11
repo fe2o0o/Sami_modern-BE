@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { applyBranchScope } from "../../common/utils/branch-scope.util";
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { JournalEntryLine } from '../journal-entry/entities/journal-entry-line.entity';
@@ -71,7 +72,11 @@ export class FinancialStatementsService {
   // =========================================================
   // INCOME STATEMENT
   // =========================================================
-  async incomeStatement(query: FinancialStatementQueryDto): Promise<IncomeStatement> {
+  async incomeStatement(
+    query: FinancialStatementQueryDto,
+    branchScope: string[] | null = null,
+  ): Promise<IncomeStatement> {
+    query.branchScope = branchScope;
     const { from, to } = await resolveReportRange(this.fiscalYearRepository, this.periodRepository, query);
     const byAccount = await this.aggregate(query, (qb) =>
       qb.andWhere('je.entryDate >= :from', { from }).andWhere('je.entryDate <= :to', { to }),
@@ -116,7 +121,11 @@ export class FinancialStatementsService {
   // =========================================================
   // BALANCE SHEET
   // =========================================================
-  async balanceSheet(query: FinancialStatementQueryDto): Promise<BalanceSheet> {
+  async balanceSheet(
+    query: FinancialStatementQueryDto,
+    branchScope: string[] | null = null,
+  ): Promise<BalanceSheet> {
+    query.branchScope = branchScope;
     const { to } = await resolveReportRange(this.fiscalYearRepository, this.periodRepository, query);
     // Cumulative: everything up to and including the as-of date.
     const byAccount = await this.aggregate(query, (qb) => qb.andWhere('je.entryDate <= :to', { to }));
@@ -211,6 +220,7 @@ export class FinancialStatementsService {
       .where('je.isPosted = :posted', { posted: true })
       .groupBy('l.accountId');
     if (query.branchId) qb.andWhere('l.branchId = :branchId', { branchId: query.branchId });
+    applyBranchScope(qb, 'l.branchId', query.branchScope ?? null);
 
     const rows = await window(qb).getRawMany<{ accountId: string; d: string; c: string }>();
     return new Map(rows.map((r): [string, Agg] => [r.accountId, { debit: round2(Number(r.d)), credit: round2(Number(r.c)) }]));

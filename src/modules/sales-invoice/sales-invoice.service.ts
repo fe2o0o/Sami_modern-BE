@@ -5,6 +5,12 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, In, Repository } from 'typeorm';
+import {
+  BranchScope,
+  applyBranchScope,
+  isWithinBranchScope,
+  resolveWriteBranch,
+} from '../../common/utils/branch-scope.util';
 import { SalesInvoice } from './entities/sales-invoice.entity';
 import { SalesInvoiceItem } from './entities/sales-invoice-item.entity';
 import { SalesInvoiceCommission } from './entities/sales-invoice-commission.entity';
@@ -97,7 +103,7 @@ export class SalesInvoiceService {
   async create(
     dto: CreateSalesInvoiceDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<SalesInvoice> {
     await this.assertHeaderRefs(dto);
     const items = await this.buildItems(dto.items, dto.warehouseId);
@@ -109,8 +115,8 @@ export class SalesInvoiceService {
       invoiceNumber: null,
       invoiceDate: dto.invoiceDate,
       customerId: dto.customerId,
-      // A branch-restricted user's documents are forced onto their own branch.
-      branchId: branchScope ?? dto.branchId ?? null,
+      // A branch-restricted user picks among their branches (validated); one → auto.
+      branchId: resolveWriteBranch(branchScope, dto.branchId),
       warehouseId: dto.warehouseId,
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
@@ -137,15 +143,18 @@ export class SalesInvoiceService {
     id: string,
     dto: UpdateSalesInvoiceDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<SalesInvoice> {
     const invoice = await this.getEditableDraft(id, branchScope);
 
     if (dto.customerId) invoice.customerId = dto.customerId;
     if (dto.invoiceDate) invoice.invoiceDate = dto.invoiceDate;
-    // A branch-restricted user cannot move a document to another branch.
-    if (branchScope) invoice.branchId = branchScope;
-    else if (dto.branchId !== undefined) invoice.branchId = dto.branchId ?? null;
+    // A branch-restricted user can only keep/move the document within their branches.
+    if (branchScope !== null) {
+      invoice.branchId = resolveWriteBranch(branchScope, dto.branchId ?? invoice.branchId);
+    } else if (dto.branchId !== undefined) {
+      invoice.branchId = dto.branchId ?? null;
+    }
     if (dto.warehouseId) invoice.warehouseId = dto.warehouseId;
     if (dto.fiscalYearId) invoice.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) invoice.accountingPeriodId = dto.accountingPeriodId;
@@ -183,7 +192,7 @@ export class SalesInvoiceService {
     });
   }
 
-  async remove(id: string, actorId?: string, branchScope: string | null = null): Promise<void> {
+  async remove(id: string, actorId?: string, branchScope: BranchScope = null): Promise<void> {
     await this.getEditableDraft(id, branchScope);
     await this.invoiceRepository.update(id, { deletedBy: actorId ?? null });
     await this.invoiceRepository.softDelete(id);
@@ -194,11 +203,11 @@ export class SalesInvoiceService {
   // =========================================================
   async findAll(
     query: SalesInvoiceQueryDto,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<SalesInvoiceListItem>> {
     const qb = this.invoiceRepository.createQueryBuilder('si');
     // Branch-restricted users only ever see their own branch's documents.
-    if (branchScope) qb.andWhere('si.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 'si.branchId', branchScope);
 
     if (query.search) {
       qb.andWhere(
@@ -251,19 +260,19 @@ export class SalesInvoiceService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string, branchScope: string | null = null): Promise<SalesInvoice> {
+  async findOne(id: string, branchScope: BranchScope = null): Promise<SalesInvoice> {
     const invoice = await this.invoiceRepository.findOne({
       where: { id },
       relations: { items: true, commissions: true },
       order: { items: { lineNumber: 'ASC' }, commissions: { lineNumber: 'ASC' } },
     });
-    if (!invoice || (branchScope && invoice.branchId !== branchScope)) {
+    if (!invoice || !isWithinBranchScope(invoice.branchId, branchScope)) {
       throw new NotFoundException('لم يتم العثور على فاتورة المبيعات');
     }
     return invoice;
   }
 
-  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+  async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const invoice = await this.findOne(id, branchScope);
     const [customer, warehouse, branch, fiscalYear, period, users] =
       await Promise.all([
@@ -421,7 +430,7 @@ export class SalesInvoiceService {
     });
   }
 
-  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<SalesInvoice> {
+  private async getEditableDraft(id: string, branchScope: BranchScope = null): Promise<SalesInvoice> {
     const invoice = await this.findOne(id, branchScope);
     if (invoice.status !== SalesInvoiceStatus.DRAFT) {
       throw new BadRequestException(

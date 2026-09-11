@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DataSource, EntityManager, In } from 'typeorm';
+import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { PurchaseInvoice } from './entities/purchase-invoice.entity';
 import { PurchaseInvoiceItem } from './entities/purchase-invoice-item.entity';
 import {
@@ -52,10 +53,10 @@ export class PurchaseInvoicePostingService {
   // =========================================================
   // POST
   // =========================================================
-  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<PurchaseInvoice> {
+  async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<PurchaseInvoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(manager, id);
-      if (branchScope && invoice.branchId !== branchScope) {
+      if (!isWithinBranchScope(invoice.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على فاتورة المشتريات');
       }
       if (invoice.status !== PurchaseInvoiceStatus.DRAFT) {
@@ -187,11 +188,11 @@ export class PurchaseInvoicePostingService {
     id: string,
     dto: ReversePurchaseInvoiceDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: string[] | null = null,
   ): Promise<PurchaseInvoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(manager, id);
-      if (branchScope && invoice.branchId !== branchScope) {
+      if (!isWithinBranchScope(invoice.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على فاتورة المشتريات');
       }
       if (invoice.status === PurchaseInvoiceStatus.REVERSED) {

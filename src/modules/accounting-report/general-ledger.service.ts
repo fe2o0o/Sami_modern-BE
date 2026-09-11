@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { applyBranchScope } from "../../common/utils/branch-scope.util";
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
 import { JournalEntryLine } from '../journal-entry/entities/journal-entry-line.entity';
@@ -68,7 +69,11 @@ export class GeneralLedgerService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async generate(query: GeneralLedgerQueryDto): Promise<GeneralLedgerReport> {
+  async generate(
+    query: GeneralLedgerQueryDto,
+    branchScope: string[] | null = null,
+  ): Promise<GeneralLedgerReport> {
+    query.branchScope = branchScope;
     const account = await this.accountRepository.findOne({
       where: { id: query.accountId },
     });
@@ -188,6 +193,7 @@ export class GeneralLedgerService {
     if (query.branchId) {
       qb.andWhere('l.branchId = :branchId', { branchId: query.branchId });
     }
+    applyBranchScope(qb, 'l.branchId', query.branchScope ?? null);
     if (query.sourceType) {
       qb.andWhere('je.sourceType = :sourceType', { sourceType: query.sourceType });
     }
@@ -211,6 +217,7 @@ export class GeneralLedgerService {
     if (query.branchId) {
       qb.andWhere('l.branchId = :branchId', { branchId: query.branchId });
     }
+    applyBranchScope(qb, 'l.branchId', query.branchScope ?? null);
 
     const row = await qb.getRawOne<{ d: string; c: string }>();
     return round2(Number(row?.d ?? 0) - Number(row?.c ?? 0));

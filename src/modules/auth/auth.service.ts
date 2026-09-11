@@ -164,7 +164,7 @@ export class AuthService {
       username: user.username,
       email: user.email,
       roleId: user.roleId,
-      branchId: user.branchId,
+      branchIds: (user.branches ?? []).map((b) => b.id),
       companyId,
     };
 

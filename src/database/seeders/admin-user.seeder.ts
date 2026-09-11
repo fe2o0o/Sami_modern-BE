@@ -34,7 +34,7 @@ export class AdminUserSeeder implements Seeder {
         email: 'admin@samy.com',
         password: await bcrypt.hash('Admin@123', 10),
         roleId: adminRole.id,
-        branchId: mainBranch.id,
+        branches: [mainBranch],
         isActive: true,
         isLocked: false,
       }),

@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsBoolean,
   IsEmail,
   IsOptional,
@@ -34,10 +35,15 @@ export class UpdateUserDto {
   @IsUUID('4', { message: 'الدور غير صحيح' })
   roleId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'الفروع المخصّصة للمستخدم (تستبدل القائمة الحالية بالكامل).',
+  })
   @IsOptional()
-  @IsUUID('4', { message: 'الفرع غير صحيح' })
-  branchId?: string;
+  @IsArray()
+  @IsUUID('4', { each: true, message: 'أحد الفروع المختارة غير صالح' })
+  branchIds?: string[];
 
   @ApiPropertyOptional()
   @IsOptional()

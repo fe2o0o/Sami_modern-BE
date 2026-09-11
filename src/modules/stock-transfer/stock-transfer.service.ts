@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { StockTransfer } from './entities/stock-transfer.entity';
 import { StockTransferItem } from './entities/stock-transfer-item.entity';
@@ -67,7 +68,7 @@ export class StockTransferService {
   async create(
     dto: CreateStockTransferDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<StockTransfer> {
     await this.assertRefs(dto);
     const transfer = this.repository.create({
@@ -77,7 +78,7 @@ export class StockTransferService {
       toWarehouseId: dto.toWarehouseId,
       fiscalYearId: dto.fiscalYearId,
       // A branch-restricted user's documents are forced onto their own branch.
-      branchId: branchScope ?? dto.branchId ?? null,
+      branchId: resolveWriteBranch(branchScope, dto.branchId),
       status: StockTransferStatus.DRAFT,
       notes: dto.notes ?? null,
       createdBy: actorId ?? null,
@@ -90,7 +91,7 @@ export class StockTransferService {
     id: string,
     dto: UpdateStockTransferDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<StockTransfer> {
     const transfer = await this.getEditableDraft(id, branchScope);
     if (dto.transferDate) transfer.transferDate = dto.transferDate;
@@ -98,7 +99,7 @@ export class StockTransferService {
     if (dto.toWarehouseId) transfer.toWarehouseId = dto.toWarehouseId;
     if (dto.fiscalYearId) transfer.fiscalYearId = dto.fiscalYearId;
     // A branch-restricted user cannot move a document to another branch.
-    if (branchScope) transfer.branchId = branchScope;
+    if (branchScope !== null) transfer.branchId = resolveWriteBranch(branchScope, transfer.branchId);
     else if (dto.branchId !== undefined) transfer.branchId = dto.branchId ?? null;
     if (dto.notes !== undefined) transfer.notes = dto.notes ?? null;
     await this.assertRefs({ fromWarehouseId: transfer.fromWarehouseId, toWarehouseId: transfer.toWarehouseId });
@@ -116,7 +117,7 @@ export class StockTransferService {
   async remove(
     id: string,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<void> {
     await this.getEditableDraft(id, branchScope);
     await this.repository.update(id, { deletedBy: actorId ?? null });
@@ -126,10 +127,10 @@ export class StockTransferService {
   // =========================================================
   // POST / REVERSE
   // =========================================================
-  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<StockTransfer> {
+  async post(id: string, actorId?: string, branchScope: BranchScope = null): Promise<StockTransfer> {
     return this.dataSource.transaction(async (manager) => {
       const transfer = await this.lock(manager, id);
-      if (branchScope && transfer.branchId !== branchScope) {
+      if (!isWithinBranchScope(transfer.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على التحويل');
       }
       if (transfer.status !== StockTransferStatus.DRAFT) {
@@ -180,10 +181,10 @@ export class StockTransferService {
     });
   }
 
-  async reverse(id: string, dto: ReverseStockTransferDto, actorId?: string, branchScope: string | null = null): Promise<StockTransfer> {
+  async reverse(id: string, dto: ReverseStockTransferDto, actorId?: string, branchScope: BranchScope = null): Promise<StockTransfer> {
     return this.dataSource.transaction(async (manager) => {
       const transfer = await this.lock(manager, id);
-      if (branchScope && transfer.branchId !== branchScope) {
+      if (!isWithinBranchScope(transfer.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على التحويل');
       }
       if (transfer.status === StockTransferStatus.REVERSED) {
@@ -222,11 +223,11 @@ export class StockTransferService {
   // =========================================================
   async findAll(
     query: StockTransferQueryDto,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<StockTransferListItem>> {
     const qb = this.repository.createQueryBuilder('t').leftJoinAndSelect('t.items', 'items');
     // Branch-restricted users only ever see their own branch's documents.
-    if (branchScope) qb.andWhere('t.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 't.branchId', branchScope);
     if (query.search) qb.andWhere('t.transferNumber LIKE :s', { s: `%${query.search}%` });
     if (query.warehouseId) {
       qb.andWhere(
@@ -264,19 +265,19 @@ export class StockTransferService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string, branchScope: string | null = null): Promise<StockTransfer> {
+  async findOne(id: string, branchScope: BranchScope = null): Promise<StockTransfer> {
     const transfer = await this.repository.findOne({
       where: { id },
       relations: { items: true },
       order: { items: { lineNumber: 'ASC' } },
     });
-    if (!transfer || (branchScope && transfer.branchId !== branchScope)) {
+    if (!transfer || !isWithinBranchScope(transfer.branchId, branchScope)) {
       throw new NotFoundException('لم يتم العثور على التحويل');
     }
     return transfer;
   }
 
-  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+  async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const t = await this.findOne(id, branchScope);
     const [names, fiscalYear, users] = await Promise.all([
       this.nameMap(this.warehouseRepository, [t.fromWarehouseId, t.toWarehouseId]),
@@ -337,7 +338,7 @@ export class StockTransferService {
     });
   }
 
-  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<StockTransfer> {
+  private async getEditableDraft(id: string, branchScope: BranchScope = null): Promise<StockTransfer> {
     const t = await this.findOne(id, branchScope);
     if (t.status !== StockTransferStatus.DRAFT) {
       throw new BadRequestException('لا يمكن تعديل أو حذف تحويل مُرحّل — استخدم العكس');

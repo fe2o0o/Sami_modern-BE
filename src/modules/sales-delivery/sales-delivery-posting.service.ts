@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DataSource, EntityManager, In } from 'typeorm';
+import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { SalesDelivery } from './entities/sales-delivery.entity';
 import { SalesDeliverySource, SalesDeliveryStatus } from './enums/sales-delivery.enum';
 import { ReverseSalesDeliveryDto } from './dto/reverse-sales-delivery.dto';
@@ -43,10 +44,10 @@ export class SalesDeliveryPostingService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<SalesDelivery> {
+  async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<SalesDelivery> {
     return this.dataSource.transaction(async (manager) => {
       const delivery = await this.lock(manager, id);
-      if (branchScope && delivery.branchId !== branchScope) {
+      if (!isWithinBranchScope(delivery.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على إذن التسليم');
       }
       if (delivery.status !== SalesDeliveryStatus.DRAFT) throw new BadRequestException('لا يمكن ترحيل إذن تسليم غير مسودة');
@@ -123,10 +124,10 @@ export class SalesDeliveryPostingService {
     });
   }
 
-  async reverse(id: string, dto: ReverseSalesDeliveryDto, actorId?: string, branchScope: string | null = null): Promise<SalesDelivery> {
+  async reverse(id: string, dto: ReverseSalesDeliveryDto, actorId?: string, branchScope: string[] | null = null): Promise<SalesDelivery> {
     return this.dataSource.transaction(async (manager) => {
       const delivery = await this.lock(manager, id);
-      if (branchScope && delivery.branchId !== branchScope) {
+      if (!isWithinBranchScope(delivery.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على إذن التسليم');
       }
       if (delivery.status === SalesDeliveryStatus.REVERSED) throw new ConflictException('إذن التسليم معكوس بالفعل');

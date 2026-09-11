@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import { PurchaseInvoice } from './entities/purchase-invoice.entity';
 import { PurchaseInvoiceItem } from './entities/purchase-invoice-item.entity';
@@ -94,7 +95,7 @@ export class PurchaseInvoiceService {
   async create(
     dto: CreatePurchaseInvoiceDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PurchaseInvoice> {
     await this.assertHeaderRefs(dto);
     const items = await this.buildItems(dto.items, dto.warehouseId);
@@ -106,7 +107,7 @@ export class PurchaseInvoiceService {
       invoiceDate: dto.invoiceDate,
       supplierId: dto.supplierId,
       // A branch-restricted user's documents are forced onto their own branch.
-      branchId: branchScope ?? dto.branchId ?? null,
+      branchId: resolveWriteBranch(branchScope, dto.branchId),
       warehouseId: dto.warehouseId,
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
@@ -131,7 +132,7 @@ export class PurchaseInvoiceService {
     id: string,
     dto: UpdatePurchaseInvoiceDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PurchaseInvoice> {
     const invoice = await this.getEditableDraft(id, branchScope);
 
@@ -141,7 +142,7 @@ export class PurchaseInvoiceService {
       invoice.supplierInvoiceNumber = dto.supplierInvoiceNumber ?? null;
     }
     // A branch-restricted user cannot move a document to another branch.
-    if (branchScope) invoice.branchId = branchScope;
+    if (branchScope !== null) invoice.branchId = resolveWriteBranch(branchScope, invoice.branchId);
     else if (dto.branchId !== undefined) invoice.branchId = dto.branchId ?? null;
     if (dto.warehouseId) invoice.warehouseId = dto.warehouseId;
     if (dto.fiscalYearId) invoice.fiscalYearId = dto.fiscalYearId;
@@ -174,7 +175,7 @@ export class PurchaseInvoiceService {
     });
   }
 
-  async remove(id: string, actorId?: string, branchScope: string | null = null): Promise<void> {
+  async remove(id: string, actorId?: string, branchScope: BranchScope = null): Promise<void> {
     await this.getEditableDraft(id, branchScope);
     await this.invoiceRepository.update(id, { deletedBy: actorId ?? null });
     await this.invoiceRepository.softDelete(id);
@@ -185,11 +186,11 @@ export class PurchaseInvoiceService {
   // =========================================================
   async findAll(
     query: PurchaseInvoiceQueryDto,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<PurchaseInvoiceListItem>> {
     const qb = this.invoiceRepository.createQueryBuilder('pi');
     // Branch-restricted users only ever see their own branch's documents.
-    if (branchScope) qb.andWhere('pi.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 'pi.branchId', branchScope);
 
     if (query.search) {
       qb.andWhere(
@@ -242,19 +243,19 @@ export class PurchaseInvoiceService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string, branchScope: string | null = null): Promise<PurchaseInvoice> {
+  async findOne(id: string, branchScope: BranchScope = null): Promise<PurchaseInvoice> {
     const invoice = await this.invoiceRepository.findOne({
       where: { id },
       relations: { items: true },
       order: { items: { lineNumber: 'ASC' } },
     });
-    if (!invoice || (branchScope && invoice.branchId !== branchScope)) {
+    if (!invoice || !isWithinBranchScope(invoice.branchId, branchScope)) {
       throw new NotFoundException('لم يتم العثور على فاتورة المشتريات');
     }
     return invoice;
   }
 
-  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+  async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const invoice = await this.findOne(id, branchScope);
     const [supplier, warehouse, branch, fiscalYear, period, users] =
       await Promise.all([
@@ -380,7 +381,7 @@ export class PurchaseInvoiceService {
     });
   }
 
-  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<PurchaseInvoice> {
+  private async getEditableDraft(id: string, branchScope: BranchScope = null): Promise<PurchaseInvoice> {
     const invoice = await this.findOne(id, branchScope);
     if (invoice.status !== PurchaseInvoiceStatus.DRAFT) {
       throw new BadRequestException(

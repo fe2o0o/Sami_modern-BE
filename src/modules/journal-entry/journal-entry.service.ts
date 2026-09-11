@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { JournalEntry } from './entities/journal-entry.entity';
 import { JournalEntryLine } from './entities/journal-entry-line.entity';
@@ -234,11 +235,11 @@ export class JournalEntryService {
   // =========================================================
   async findAll(
     query: JournalEntryQueryDto,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<JournalEntryListItem>> {
     const qb = this.entryRepository.createQueryBuilder('je');
     // Branch-restricted users only ever see their own branch's documents.
-    if (branchScope) qb.andWhere('je.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 'je.branchId', branchScope);
 
     if (query.search) {
       qb.andWhere(
@@ -308,10 +309,10 @@ export class JournalEntryService {
   /** Enriched details for the view page. */
   async findOneDetailed(
     id: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<JournalEntryDetail> {
     const entry = await this.findWithLines(id);
-    if (!entry || (branchScope && entry.branchId !== branchScope)) {
+    if (!entry || !isWithinBranchScope(entry.branchId, branchScope)) {
       throw new NotFoundException('لم يتم العثور على القيد المحاسبي');
     }
 
@@ -389,7 +390,7 @@ export class JournalEntryService {
   async createManual(
     dto: CreateJournalEntryDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<JournalEntry> {
     await this.assertPeriodBelongsToYear(dto.fiscalYearId, dto.accountingPeriodId);
     const lines = this.toLineInputs(dto.lines);
@@ -401,7 +402,7 @@ export class JournalEntryService {
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
       // A branch-restricted user's documents are forced onto their own branch.
-      branchId: branchScope ?? dto.branchId ?? null,
+      branchId: resolveWriteBranch(branchScope, dto.branchId),
       description: dto.description ?? null,
       sourceType: JournalSourceType.MANUAL,
       sourceId: null,
@@ -422,7 +423,7 @@ export class JournalEntryService {
     id: string,
     dto: UpdateJournalEntryDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<JournalEntry> {
     const entry = await this.getEditableDraft(id, branchScope);
 
@@ -430,7 +431,7 @@ export class JournalEntryService {
     if (dto.fiscalYearId) entry.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) entry.accountingPeriodId = dto.accountingPeriodId;
     // A branch-restricted user cannot move a document to another branch.
-    if (branchScope) entry.branchId = branchScope;
+    if (branchScope !== null) entry.branchId = resolveWriteBranch(branchScope, entry.branchId);
     else if (dto.branchId !== undefined) entry.branchId = dto.branchId ?? null;
     if (dto.description !== undefined) entry.description = dto.description ?? null;
     await this.assertPeriodBelongsToYear(
@@ -457,7 +458,7 @@ export class JournalEntryService {
   async remove(
     id: string,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<void> {
     await this.getEditableDraft(id, branchScope);
     await this.entryRepository.update(id, { deletedBy: actorId ?? null });
@@ -467,10 +468,10 @@ export class JournalEntryService {
   // =========================================================
   // MANUAL: POST
   // =========================================================
-  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<JournalEntry> {
+  async post(id: string, actorId?: string, branchScope: BranchScope = null): Promise<JournalEntry> {
     return this.dataSource.transaction(async (manager) => {
       const entry = await this.lockEntry(manager, id);
-      if (branchScope && entry.branchId !== branchScope) {
+      if (!isWithinBranchScope(entry.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على القيد المحاسبي');
       }
       if (entry.sourceType !== JournalSourceType.MANUAL) {
@@ -523,11 +524,11 @@ export class JournalEntryService {
     id: string,
     dto: ReverseJournalEntryDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<JournalEntry> {
     return this.dataSource.transaction(async (manager) => {
       const original = await this.lockEntry(manager, id);
-      if (branchScope && original.branchId !== branchScope) {
+      if (!isWithinBranchScope(original.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على القيد المحاسبي');
       }
 
@@ -718,10 +719,10 @@ export class JournalEntryService {
 
   private async getEditableDraft(
     id: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<JournalEntry> {
     const entry = await this.findWithLines(id);
-    if (!entry || (branchScope && entry.branchId !== branchScope)) {
+    if (!entry || !isWithinBranchScope(entry.branchId, branchScope)) {
       throw new NotFoundException('لم يتم العثور على القيد المحاسبي');
     }
     if (entry.sourceType !== JournalSourceType.MANUAL) {

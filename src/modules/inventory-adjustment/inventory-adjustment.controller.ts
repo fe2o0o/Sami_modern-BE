@@ -33,14 +33,14 @@ export class InventoryAdjustmentController {
   @Get()
   @RequirePermissions('inventory_adjustments.view')
   @ApiOperation({ summary: 'عرض تسويات المخزون مع الترقيم والفلاتر' })
-  findAll(@Query() query: InventoryAdjustmentQueryDto, @BranchScope() branchScope: string | null) {
+  findAll(@Query() query: InventoryAdjustmentQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.service.findAll(query, branchScope);
   }
 
   @Get(':id')
   @RequirePermissions('inventory_adjustments.view')
   @ApiOperation({ summary: 'تفاصيل تسوية مخزون' })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string | null) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOneDetailed(id, branchScope);
   }
 
@@ -51,7 +51,7 @@ export class InventoryAdjustmentController {
   create(
     @Body() dto: CreateInventoryAdjustmentDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.create(dto, actorId, branchScope);
   }
@@ -64,7 +64,7 @@ export class InventoryAdjustmentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateInventoryAdjustmentDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.update(id, dto, actorId, branchScope);
   }
@@ -76,7 +76,7 @@ export class InventoryAdjustmentController {
   remove(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.remove(id, actorId, branchScope);
   }
@@ -88,7 +88,7 @@ export class InventoryAdjustmentController {
   post(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.post(id, actorId, branchScope);
   }
@@ -101,7 +101,7 @@ export class InventoryAdjustmentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReverseInventoryAdjustmentDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.reverse(id, dto, actorId, branchScope);
   }

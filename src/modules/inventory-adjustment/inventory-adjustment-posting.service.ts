@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DataSource, EntityManager, In } from 'typeorm';
+import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { InventoryAdjustment } from './entities/inventory-adjustment.entity';
 import {
   AdjustmentType,
@@ -44,10 +45,10 @@ export class InventoryAdjustmentPostingService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<InventoryAdjustment> {
+  async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<InventoryAdjustment> {
     return this.dataSource.transaction(async (manager) => {
       const adjustment = await this.lock(manager, id);
-      if (branchScope && adjustment.branchId !== branchScope) {
+      if (!isWithinBranchScope(adjustment.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على تسوية المخزون');
       }
       if (adjustment.status !== InventoryAdjustmentStatus.DRAFT) {
@@ -133,10 +134,10 @@ export class InventoryAdjustmentPostingService {
     });
   }
 
-  async reverse(id: string, dto: ReverseInventoryAdjustmentDto, actorId?: string, branchScope: string | null = null): Promise<InventoryAdjustment> {
+  async reverse(id: string, dto: ReverseInventoryAdjustmentDto, actorId?: string, branchScope: string[] | null = null): Promise<InventoryAdjustment> {
     return this.dataSource.transaction(async (manager) => {
       const adjustment = await this.lock(manager, id);
-      if (branchScope && adjustment.branchId !== branchScope) {
+      if (!isWithinBranchScope(adjustment.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على تسوية المخزون');
       }
       if (adjustment.status === InventoryAdjustmentStatus.REVERSED) {

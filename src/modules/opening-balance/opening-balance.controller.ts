@@ -39,14 +39,14 @@ export class OpeningBalanceController {
   @RequirePermissions('opening_balances.view')
   @ApiQuery({ name: 'fiscalYearId', required: false })
   @ApiOperation({ summary: 'عرض الأرصدة الافتتاحية' })
-  findAll(@BranchScope() branchScope: string | null, @Query('fiscalYearId') fiscalYearId?: string) {
+  findAll(@BranchScope() branchScope: string[] | null, @Query('fiscalYearId') fiscalYearId?: string) {
     return this.service.findAll(fiscalYearId, branchScope);
   }
 
   @Get(':id')
   @RequirePermissions('opening_balances.view')
   @ApiOperation({ summary: 'عرض رصيد افتتاحي' })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string | null) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOne(id, branchScope);
   }
 

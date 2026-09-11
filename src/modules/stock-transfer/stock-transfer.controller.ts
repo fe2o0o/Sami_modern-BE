@@ -29,14 +29,14 @@ export class StockTransferController {
   @Get()
   @RequirePermissions('stock_transfers.view')
   @ApiOperation({ summary: 'عرض التحويلات المخزنية مع الترقيم والفلاتر' })
-  findAll(@Query() query: StockTransferQueryDto, @BranchScope() branchScope: string | null) {
+  findAll(@Query() query: StockTransferQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.service.findAll(query, branchScope);
   }
 
   @Get(':id')
   @RequirePermissions('stock_transfers.view')
   @ApiOperation({ summary: 'تفاصيل تحويل مخزني' })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string | null) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOneDetailed(id, branchScope);
   }
 
@@ -47,7 +47,7 @@ export class StockTransferController {
   create(
     @Body() dto: CreateStockTransferDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.create(dto, actorId, branchScope);
   }
@@ -60,7 +60,7 @@ export class StockTransferController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateStockTransferDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.update(id, dto, actorId, branchScope);
   }
@@ -72,7 +72,7 @@ export class StockTransferController {
   remove(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.remove(id, actorId, branchScope);
   }
@@ -84,7 +84,7 @@ export class StockTransferController {
   post(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.post(id, actorId, branchScope);
   }
@@ -97,7 +97,7 @@ export class StockTransferController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReverseStockTransferDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.reverse(id, dto, actorId, branchScope);
   }

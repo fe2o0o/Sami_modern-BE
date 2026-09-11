@@ -1,4 +1,12 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  JoinTable,
+  ManyToMany,
+  ManyToOne,
+} from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { Role } from '../../role/entities/role.entity';
 import { Branch } from '../../branch/entities/branch.entity';
@@ -63,12 +71,18 @@ export class User extends BaseEntity {
   @Column({ type: 'uuid' })
   roleId!: string;
 
-  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'branch_id' })
-  branch!: Branch | null;
-
-  @Column({ type: 'uuid', nullable: true })
-  branchId!: string | null;
+  /**
+   * Branches this user may access. EMPTY = no branch-scoped access at all
+   * (unless the role grants `all_branches.view` or is super-admin, which see
+   * every branch regardless).
+   */
+  @ManyToMany(() => Branch)
+  @JoinTable({
+    name: 'user_branches',
+    joinColumn: { name: 'user_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'branch_id', referencedColumnName: 'id' },
+  })
+  branches!: Branch[];
 
   // =========================
   // AUDIT (who)

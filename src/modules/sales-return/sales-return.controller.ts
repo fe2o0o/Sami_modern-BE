@@ -40,14 +40,14 @@ export class SalesReturnController {
   @Get()
   @RequirePermissions('sales_returns.view')
   @ApiOperation({ summary: 'عرض مردودات المبيعات مع الترقيم والفلاتر' })
-  findAll(@Query() query: SalesReturnQueryDto, @BranchScope() branchScope: string | null) {
+  findAll(@Query() query: SalesReturnQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.service.findAll(query, branchScope);
   }
 
   @Get(':id')
   @RequirePermissions('sales_returns.view')
   @ApiOperation({ summary: 'تفاصيل مردود مبيعات' })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string | null) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOneDetailed(id, branchScope);
   }
 
@@ -58,7 +58,7 @@ export class SalesReturnController {
   create(
     @Body() dto: CreateSalesReturnDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.create(dto, actorId, branchScope);
   }
@@ -71,7 +71,7 @@ export class SalesReturnController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSalesReturnDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.update(id, dto, actorId, branchScope);
   }
@@ -83,7 +83,7 @@ export class SalesReturnController {
   remove(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.remove(id, actorId, branchScope);
   }
@@ -95,7 +95,7 @@ export class SalesReturnController {
   post(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.post(id, actorId, branchScope);
   }
@@ -108,7 +108,7 @@ export class SalesReturnController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReverseSalesReturnDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.reverse(id, dto, actorId, branchScope);
   }

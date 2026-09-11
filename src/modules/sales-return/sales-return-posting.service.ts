@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DataSource, EntityManager, In } from 'typeorm';
+import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { SalesReturn } from './entities/sales-return.entity';
 import { SalesReturnItem } from './entities/sales-return-item.entity';
 import { SalesReturnStatus } from './enums/sales-return.enum';
@@ -46,10 +47,10 @@ export class SalesReturnPostingService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async post(id: string, actorId?: string, branchScope: string | null = null): Promise<SalesReturn> {
+  async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<SalesReturn> {
     return this.dataSource.transaction(async (manager) => {
       const ret = await this.lock(manager, id);
-      if (branchScope && ret.branchId !== branchScope) {
+      if (!isWithinBranchScope(ret.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على مردود المبيعات');
       }
       if (ret.status !== SalesReturnStatus.DRAFT) throw new BadRequestException('لا يمكن ترحيل مردود غير مسودة');
@@ -146,10 +147,10 @@ export class SalesReturnPostingService {
     });
   }
 
-  async reverse(id: string, dto: ReverseSalesReturnDto, actorId?: string, branchScope: string | null = null): Promise<SalesReturn> {
+  async reverse(id: string, dto: ReverseSalesReturnDto, actorId?: string, branchScope: string[] | null = null): Promise<SalesReturn> {
     return this.dataSource.transaction(async (manager) => {
       const ret = await this.lock(manager, id);
-      if (branchScope && ret.branchId !== branchScope) {
+      if (!isWithinBranchScope(ret.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على مردود المبيعات');
       }
       if (ret.status === SalesReturnStatus.REVERSED) throw new ConflictException('المردود معكوس بالفعل');

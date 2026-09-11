@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsBoolean,
   IsEmail,
   IsOptional,
@@ -37,9 +38,15 @@ export class CreateUserDto {
   @IsUUID('4', { message: 'الدور مطلوب' })
   roleId!: string;
 
-  @ApiProperty({ description: 'معرّف الفرع' })
-  @IsUUID('4', { message: 'الفرع مطلوب' })
-  branchId!: string;
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'الفروع المخصّصة للمستخدم. اتركها فارغة = لا وصول لبيانات الفروع.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true, message: 'أحد الفروع المختارة غير صالح' })
+  branchIds?: string[];
 
   @ApiPropertyOptional()
   @IsOptional()

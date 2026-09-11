@@ -40,14 +40,14 @@ export class SalesDeliveryController {
   @Get()
   @RequirePermissions('sales_deliveries.view')
   @ApiOperation({ summary: 'عرض أذون التسليم مع الترقيم والفلاتر' })
-  findAll(@Query() query: SalesDeliveryQueryDto, @BranchScope() branchScope: string | null) {
+  findAll(@Query() query: SalesDeliveryQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.service.findAll(query, branchScope);
   }
 
   @Get(':id')
   @RequirePermissions('sales_deliveries.view')
   @ApiOperation({ summary: 'تفاصيل إذن تسليم' })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string | null) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOneDetailed(id, branchScope);
   }
 
@@ -86,7 +86,7 @@ export class SalesDeliveryController {
   post(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.post(id, actorId, branchScope);
   }
@@ -99,7 +99,7 @@ export class SalesDeliveryController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReverseSalesDeliveryDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.reverse(id, dto, actorId, branchScope);
   }

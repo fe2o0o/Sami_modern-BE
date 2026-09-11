@@ -20,6 +20,9 @@ export class FinancialStatementQueryDto {
   @IsUUID()
   branchId?: string;
 
+  /** Internal: branch access scope injected by the controller (not user input). */
+  branchScope?: string[] | null;
+
   @ApiPropertyOptional({ format: 'date' })
   @IsOptional()
   @IsDateString()

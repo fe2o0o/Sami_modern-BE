@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { DataSource, In, Repository } from 'typeorm';
 import { InventoryAdjustment } from './entities/inventory-adjustment.entity';
 import { InventoryAdjustmentItem } from './entities/inventory-adjustment-item.entity';
@@ -64,7 +65,7 @@ export class InventoryAdjustmentService {
   async create(
     dto: CreateInventoryAdjustmentDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<InventoryAdjustment> {
     await this.assertRefs(dto);
     const items = await this.buildItems(dto.items);
@@ -73,7 +74,7 @@ export class InventoryAdjustmentService {
       adjustmentDate: dto.adjustmentDate,
       warehouseId: dto.warehouseId,
       // A branch-restricted user's documents are forced onto their own branch.
-      branchId: branchScope ?? dto.branchId ?? null,
+      branchId: resolveWriteBranch(branchScope, dto.branchId),
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
       status: InventoryAdjustmentStatus.DRAFT,
@@ -89,13 +90,13 @@ export class InventoryAdjustmentService {
     id: string,
     dto: UpdateInventoryAdjustmentDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<InventoryAdjustment> {
     const adjustment = await this.getEditableDraft(id, branchScope);
     if (dto.adjustmentDate) adjustment.adjustmentDate = dto.adjustmentDate;
     if (dto.warehouseId) adjustment.warehouseId = dto.warehouseId;
     // A branch-restricted user cannot move a document to another branch.
-    if (branchScope) adjustment.branchId = branchScope;
+    if (branchScope !== null) adjustment.branchId = resolveWriteBranch(branchScope, adjustment.branchId);
     else if (dto.branchId !== undefined) adjustment.branchId = dto.branchId ?? null;
     if (dto.fiscalYearId) adjustment.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) adjustment.accountingPeriodId = dto.accountingPeriodId;
@@ -121,7 +122,7 @@ export class InventoryAdjustmentService {
   async remove(
     id: string,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<void> {
     await this.getEditableDraft(id, branchScope);
     await this.repository.update(id, { deletedBy: actorId ?? null });
@@ -130,11 +131,11 @@ export class InventoryAdjustmentService {
 
   async findAll(
     query: InventoryAdjustmentQueryDto,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<InventoryAdjustmentListItem>> {
     const qb = this.repository.createQueryBuilder('a').leftJoinAndSelect('a.items', 'items');
     // Branch-restricted users only ever see their own branch's documents.
-    if (branchScope) qb.andWhere('a.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 'a.branchId', branchScope);
     if (query.search) qb.andWhere('a.adjustmentNumber LIKE :s', { s: `%${query.search}%` });
     if (query.warehouseId) qb.andWhere('a.warehouseId = :wh', { wh: query.warehouseId });
     if (query.fiscalYearId) qb.andWhere('a.fiscalYearId = :fy', { fy: query.fiscalYearId });
@@ -159,19 +160,19 @@ export class InventoryAdjustmentService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string, branchScope: string | null = null): Promise<InventoryAdjustment> {
+  async findOne(id: string, branchScope: BranchScope = null): Promise<InventoryAdjustment> {
     const adjustment = await this.repository.findOne({
       where: { id },
       relations: { items: true },
       order: { items: { lineNumber: 'ASC' } },
     });
-    if (!adjustment || (branchScope && adjustment.branchId !== branchScope)) {
+    if (!adjustment || !isWithinBranchScope(adjustment.branchId, branchScope)) {
       throw new NotFoundException('لم يتم العثور على تسوية المخزون');
     }
     return adjustment;
   }
 
-  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+  async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const a = await this.findOne(id, branchScope);
     const [warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.warehouseRepository.findOne({ where: { id: a.warehouseId } }),
@@ -230,7 +231,7 @@ export class InventoryAdjustmentService {
     });
   }
 
-  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<InventoryAdjustment> {
+  private async getEditableDraft(id: string, branchScope: BranchScope = null): Promise<InventoryAdjustment> {
     const a = await this.findOne(id, branchScope);
     if (a.status !== InventoryAdjustmentStatus.DRAFT) {
       throw new BadRequestException('لا يمكن تعديل أو حذف تسوية مُرحّلة — استخدم العكس');

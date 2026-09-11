@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import { SalesReturn } from './entities/sales-return.entity';
 import { SalesReturnItem } from './entities/sales-return-item.entity';
@@ -128,7 +129,7 @@ export class SalesReturnService {
   async create(
     dto: CreateSalesReturnDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<SalesReturn> {
     const invoice = await this.loadPostedInvoice(dto.salesInvoiceId);
     await this.assertPeriod(dto.fiscalYearId, dto.accountingPeriodId);
@@ -143,7 +144,7 @@ export class SalesReturnService {
       customerId: invoice.customerId,
       warehouseId: invoice.warehouseId,
       // A branch-restricted user's documents are forced onto their own branch.
-      branchId: branchScope ?? invoice.branchId,
+      branchId: resolveWriteBranch(branchScope, invoice.branchId),
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
       paymentType: invoice.paymentType,
@@ -161,14 +162,14 @@ export class SalesReturnService {
     id: string,
     dto: UpdateSalesReturnDto,
     actorId?: string,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<SalesReturn> {
     const salesReturn = await this.getEditableDraft(id, branchScope);
     if (dto.returnDate) salesReturn.returnDate = dto.returnDate;
     if (dto.fiscalYearId) salesReturn.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) salesReturn.accountingPeriodId = dto.accountingPeriodId;
     // A branch-restricted user cannot move a document to another branch.
-    if (branchScope) salesReturn.branchId = branchScope;
+    if (branchScope !== null) salesReturn.branchId = resolveWriteBranch(branchScope, salesReturn.branchId);
     if (dto.notes !== undefined) salesReturn.notes = dto.notes ?? null;
     await this.assertPeriod(salesReturn.fiscalYearId, salesReturn.accountingPeriodId);
 
@@ -186,7 +187,7 @@ export class SalesReturnService {
     });
   }
 
-  async remove(id: string, actorId?: string, branchScope: string | null = null): Promise<void> {
+  async remove(id: string, actorId?: string, branchScope: BranchScope = null): Promise<void> {
     await this.getEditableDraft(id, branchScope);
     await this.repository.update(id, { deletedBy: actorId ?? null });
     await this.repository.softDelete(id);
@@ -197,11 +198,11 @@ export class SalesReturnService {
   // =========================================================
   async findAll(
     query: SalesReturnQueryDto,
-    branchScope: string | null = null,
+    branchScope: BranchScope = null,
   ): Promise<PaginatedResult<SalesReturnListItem>> {
     const qb = this.repository.createQueryBuilder('r');
     // Branch-restricted users only ever see their own branch's documents.
-    if (branchScope) qb.andWhere('r.branchId = :branchScope', { branchScope });
+    applyBranchScope(qb, 'r.branchId', branchScope);
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
@@ -234,19 +235,19 @@ export class SalesReturnService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
-  async findOne(id: string, branchScope: string | null = null): Promise<SalesReturn> {
+  async findOne(id: string, branchScope: BranchScope = null): Promise<SalesReturn> {
     const r = await this.repository.findOne({
       where: { id },
       relations: { items: true },
       order: { items: { lineNumber: 'ASC' } },
     });
-    if (!r || (branchScope && r.branchId !== branchScope)) {
+    if (!r || !isWithinBranchScope(r.branchId, branchScope)) {
       throw new NotFoundException('لم يتم العثور على مردود المبيعات');
     }
     return r;
   }
 
-  async findOneDetailed(id: string, branchScope: string | null = null): Promise<Record<string, unknown>> {
+  async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const r = await this.findOne(id, branchScope);
     const [customer, warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.customerRepository.findOne({ where: { id: r.customerId } }),
@@ -398,7 +399,7 @@ export class SalesReturnService {
     return invoice;
   }
 
-  private async getEditableDraft(id: string, branchScope: string | null = null): Promise<SalesReturn> {
+  private async getEditableDraft(id: string, branchScope: BranchScope = null): Promise<SalesReturn> {
     const r = await this.findOne(id, branchScope);
     if (r.status !== SalesReturnStatus.DRAFT) {
       throw new BadRequestException('لا يمكن تعديل أو حذف مردود مُرحّل — استخدم العكس');

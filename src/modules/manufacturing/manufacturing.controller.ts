@@ -32,14 +32,14 @@ export class ManufacturingController {
   @Get()
   @RequirePermissions('manufacturing.view')
   @ApiOperation({ summary: 'عرض أوامر التصنيع مع الترقيم والفلاتر' })
-  findAll(@Query() query: ManufacturingOrderQueryDto, @BranchScope() branchScope: string | null) {
+  findAll(@Query() query: ManufacturingOrderQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.service.findAll(query, branchScope);
   }
 
   @Get(':id')
   @RequirePermissions('manufacturing.view')
   @ApiOperation({ summary: 'تفاصيل أمر تصنيع' })
-  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string | null) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOneDetailed(id, branchScope);
   }
 
@@ -50,7 +50,7 @@ export class ManufacturingController {
   create(
     @Body() dto: CreateManufacturingOrderDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.create(dto, actorId, branchScope);
   }
@@ -63,7 +63,7 @@ export class ManufacturingController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateManufacturingOrderDto,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.update(id, dto, actorId, branchScope);
   }
@@ -87,7 +87,7 @@ export class ManufacturingController {
   remove(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') actorId: string,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
   ) {
     return this.service.remove(id, actorId, branchScope);
   }

@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { User } from './entities/user.entity';
@@ -44,11 +44,12 @@ export class UserService {
     await this.ensureUsernameUnique(dto.username);
     await this.ensureEmailUnique(dto.email);
     await this.ensureRoleExists(dto.roleId);
-    await this.ensureBranchExists(dto.branchId);
+    const branches = await this.resolveBranches(dto.branchIds);
 
-    const { confirmPassword: _cp, password, ...rest } = dto;
+    const { confirmPassword: _cp, password, branchIds: _bi, ...rest } = dto;
     const user = this.userRepository.create({
       ...rest,
+      branches,
       password: await bcrypt.hash(password, SALT_ROUNDS),
       createdBy: actorId ?? null,
     });
@@ -64,7 +65,7 @@ export class UserService {
     const qb = this.userRepository
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.role', 'role')
-      .leftJoinAndSelect('user.branch', 'branch');
+      .leftJoinAndSelect('user.branches', 'branch');
 
     if (query.search) {
       qb.andWhere(
@@ -73,7 +74,12 @@ export class UserService {
       );
     }
     if (query.branchId) {
-      qb.andWhere('user.branchId = :branchId', { branchId: query.branchId });
+      // Users assigned to this branch (EXISTS keeps the full branch list in the row).
+      qb.andWhere(
+        `EXISTS (SELECT 1 FROM user_branches ub
+                 WHERE ub.user_id = user.id AND ub.branch_id = :branchId)`,
+        { branchId: query.branchId },
+      );
     }
     if (query.roleId) {
       qb.andWhere('user.roleId = :roleId', { roleId: query.roleId });
@@ -96,7 +102,7 @@ export class UserService {
   async findOne(id: string): Promise<SafeUser> {
     const user = await this.userRepository.findOne({
       where: { id },
-      relations: { role: true, branch: true },
+      relations: { role: true, branches: true },
     });
     if (!user) {
       throw new NotFoundException('لم يتم العثور على المستخدم');
@@ -108,7 +114,14 @@ export class UserService {
   // UPDATE (admin)
   // =========================
   async update(id: string, dto: UpdateUserDto, actorId?: string): Promise<SafeUser> {
-    const user = await this.getEntity(id);
+    // Load branches so the M2M diff on save is computed against the real set.
+    const user = await this.userRepository.findOne({
+      where: { id },
+      relations: { branches: true },
+    });
+    if (!user) {
+      throw new NotFoundException('لم يتم العثور على المستخدم');
+    }
 
     if (dto.email && dto.email !== user.email) {
       await this.ensureEmailUnique(dto.email, id);
@@ -116,11 +129,14 @@ export class UserService {
     if (dto.roleId) {
       await this.ensureRoleExists(dto.roleId);
     }
-    if (dto.branchId) {
-      await this.ensureBranchExists(dto.branchId);
+    // Only touch the branch set when the caller sends branchIds — saving the
+    // owning side then syncs the user_branches join table.
+    if (dto.branchIds !== undefined) {
+      user.branches = await this.resolveBranches(dto.branchIds);
     }
 
-    Object.assign(user, dto, { updatedBy: actorId ?? null });
+    const { branchIds: _bi, ...rest } = dto;
+    Object.assign(user, rest, { updatedBy: actorId ?? null });
     await this.userRepository.save(user);
     return this.findOne(id);
   }
@@ -189,7 +205,7 @@ export class UserService {
       .createQueryBuilder('user')
       .addSelect(['user.password', 'user.refreshToken'])
       .leftJoinAndSelect('user.role', 'role')
-      .leftJoinAndSelect('user.branch', 'branch')
+      .leftJoinAndSelect('user.branches', 'branch')
       .where('user.email = :login OR user.username = :login', { login })
       .getOne();
   }
@@ -199,7 +215,7 @@ export class UserService {
       .createQueryBuilder('user')
       .addSelect(['user.password', 'user.refreshToken'])
       .leftJoinAndSelect('user.role', 'role')
-      .leftJoinAndSelect('user.branch', 'branch')
+      .leftJoinAndSelect('user.branches', 'branch')
       .where('user.id = :id', { id })
       .getOne();
   }
@@ -255,11 +271,15 @@ export class UserService {
     }
   }
 
-  private async ensureBranchExists(branchId: string): Promise<void> {
-    const branch = await this.branchRepository.findOne({ where: { id: branchId } });
-    if (!branch) {
-      throw new NotFoundException('لم يتم العثور على الفرع');
+  /** Resolve+validate the assigned branch ids. Empty/undefined → no branches. */
+  private async resolveBranches(ids?: string[]): Promise<Branch[]> {
+    const unique = [...new Set((ids ?? []).filter(Boolean))];
+    if (!unique.length) return [];
+    const rows = await this.branchRepository.find({ where: { id: In(unique) } });
+    if (rows.length !== unique.length) {
+      throw new NotFoundException('أحد الفروع المختارة غير موجود');
     }
+    return rows;
   }
 
   private generatePassword(): string {

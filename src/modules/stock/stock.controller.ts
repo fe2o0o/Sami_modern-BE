@@ -18,7 +18,7 @@ export class StockController {
   @ApiOperation({ summary: 'عرض أرصدة المخزون الحالية' })
   findAll(
     @Query() query: PaginationQueryDto,
-    @BranchScope() branchScope: string | null,
+    @BranchScope() branchScope: string[] | null,
     @Query('warehouseId') warehouseId?: string,
   ) {
     return this.stockService.findAll(query, warehouseId, branchScope);
@@ -27,7 +27,7 @@ export class StockController {
   @Get('movements')
   @RequirePermissions('stock.view')
   @ApiOperation({ summary: 'سجل حركات المخزون مع الفلاتر' })
-  findMovements(@Query() query: StockMovementQueryDto, @BranchScope() branchScope: string | null) {
+  findMovements(@Query() query: StockMovementQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.stockService.findMovements(query, branchScope);
   }
 }
