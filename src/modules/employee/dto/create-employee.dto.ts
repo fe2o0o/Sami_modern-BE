@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsBoolean,
   IsDateString,
   IsNumber,
@@ -48,10 +49,15 @@ export class CreateEmployeeDto {
   @IsString()
   jobTitle?: string | null;
 
-  @ApiPropertyOptional({ format: 'uuid' })
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'الفروع التي يخدمها الموظف. اتركها فارغة ليكون متاحًا لكل الفروع.',
+  })
   @IsOptional()
-  @IsUUID('4', { message: 'الفرع غير صالح' })
-  branchId?: string | null;
+  @IsArray()
+  @IsUUID('4', { each: true, message: 'أحد الفروع المختارة غير صالح' })
+  branchIds?: string[];
 
   @ApiPropertyOptional({ format: 'date' })
   @IsOptional()

@@ -1,6 +1,7 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Column, Entity, Index, JoinTable, ManyToMany } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
+import { Branch } from '../../branch/entities/branch.entity';
 
 /** Employee master — basic data, net salary, and a default sales-commission rate. */
 @Entity('employees')
@@ -27,8 +28,14 @@ export class Employee extends BaseEntity {
   @Column({ type: 'varchar', length: 150, nullable: true })
   jobTitle!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
-  branchId!: string | null;
+  /** Branches this employee serves. EMPTY = available to all branches. */
+  @ManyToMany(() => Branch)
+  @JoinTable({
+    name: 'employee_branches',
+    joinColumn: { name: 'employee_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'branch_id', referencedColumnName: 'id' },
+  })
+  branches!: Branch[];
 
   @Column({ type: 'date', nullable: true })
   hireDate!: string | null;

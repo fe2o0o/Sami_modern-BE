@@ -70,13 +70,25 @@ export class LookupsService {
     private readonly productRepository: Repository<Product>,
   ) {}
 
-  /** Active employees with their default commission rate (for invoice pickers). */
-  async employees(): Promise<EmployeeLookupItem[]> {
-    const rows = await this.employeeRepository.find({
-      where: { isActive: true },
-      select: { id: true, code: true, name: true, commissionRate: true },
-      order: { name: 'ASC' },
-    });
+  /**
+   * Active employees with their default commission rate (for invoice pickers).
+   * When `branchId` is given, returns employees serving that branch PLUS
+   * employees with no branch (available to all branches).
+   */
+  async employees(branchId?: string): Promise<EmployeeLookupItem[]> {
+    const qb = this.employeeRepository
+      .createQueryBuilder('e')
+      .where('e.isActive = :a', { a: true });
+    if (branchId) {
+      qb.andWhere(
+        `(EXISTS (SELECT 1 FROM employee_branches eb
+                  WHERE eb.employee_id = e.id AND eb.branch_id = :br)
+          OR NOT EXISTS (SELECT 1 FROM employee_branches ebx
+                         WHERE ebx.employee_id = e.id))`,
+        { br: branchId },
+      );
+    }
+    const rows = await qb.orderBy('e.name', 'ASC').getMany();
     return rows.map((e) => ({
       id: e.id,
       name: e.name,

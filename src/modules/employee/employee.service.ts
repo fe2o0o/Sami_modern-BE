@@ -1,10 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { Employee } from './entities/employee.entity';
+import { Branch } from '../branch/entities/branch.entity';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
-import { BaseCrudService } from '../../common/services/base-crud.service';
+import { BaseCrudService, ListQuery } from '../../common/services/base-crud.service';
+import { PaginatedResult } from '../../common/interfaces/api-response.interface';
+import { paginate } from '../../common/utils/pagination.util';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
@@ -33,6 +36,8 @@ export class EmployeeService extends BaseCrudService<Employee> {
   constructor(
     @InjectRepository(Employee)
     private readonly employeeRepository: Repository<Employee>,
+    @InjectRepository(Branch)
+    private readonly branchRepository: Repository<Branch>,
     private readonly excel: ExcelService,
     private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
@@ -49,16 +54,66 @@ export class EmployeeService extends BaseCrudService<Employee> {
   async create(dto: CreateEmployeeDto): Promise<Employee> {
     const code = await this.codeSettings.resolveCode('employee', dto.code);
     await this.ensureUnique('code', code, undefined, 'كود الموظف مستخدم بالفعل');
-    return this.employeeRepository.save(this.employeeRepository.create({ ...dto, code }));
+    const branches = await this.resolveBranches(dto.branchIds);
+    const { branchIds: _bi, ...rest } = dto;
+    return this.employeeRepository.save(
+      this.employeeRepository.create({ ...rest, code, branches }),
+    );
   }
 
   async update(id: string, dto: UpdateEmployeeDto): Promise<Employee> {
-    const employee = await this.findOne(id);
+    const employee = await this.employeeRepository.findOne({
+      where: { id },
+      relations: { branches: true },
+    });
+    if (!employee) throw new NotFoundException(this.notFoundMessage);
     if (dto.code && dto.code !== employee.code) {
       await this.ensureUnique('code', dto.code, id, 'كود الموظف مستخدم بالفعل');
     }
-    Object.assign(employee, dto);
+    if (dto.branchIds !== undefined) {
+      employee.branches = await this.resolveBranches(dto.branchIds);
+    }
+    const { branchIds: _bi, ...rest } = dto;
+    Object.assign(employee, rest);
     return this.employeeRepository.save(employee);
+  }
+
+  // Load the branch set on detail + list (the base service loads no relations).
+  async findOne(id: string): Promise<Employee> {
+    const employee = await this.employeeRepository.findOne({
+      where: { id },
+      relations: { branches: true },
+    });
+    if (!employee) throw new NotFoundException(this.notFoundMessage);
+    return employee;
+  }
+
+  async findAll(query: ListQuery): Promise<PaginatedResult<Employee>> {
+    const qb = this.employeeRepository
+      .createQueryBuilder('employee')
+      .leftJoinAndSelect('employee.branches', 'branch');
+    if (query.search) {
+      const cond = this.searchFields.map((f) => `employee.${f} LIKE :s`).join(' OR ');
+      qb.andWhere(`(${cond})`, { s: `%${query.search}%` });
+    }
+    if (query.isActive !== undefined) {
+      qb.andWhere('employee.isActive = :active', { active: query.isActive });
+    }
+    const sortBy = this.sortableFields.includes(query.sortBy ?? '') ? query.sortBy! : 'createdAt';
+    qb.orderBy(`employee.${sortBy}`, query.order).skip(query.skip).take(query.perPage);
+    const [items, total] = await qb.getManyAndCount();
+    return paginate(items, total, query.page, query.perPage);
+  }
+
+  /** Resolve+validate the branch ids. Empty/undefined → no branches (all). */
+  private async resolveBranches(ids?: string[]): Promise<Branch[]> {
+    const unique = [...new Set((ids ?? []).filter(Boolean))];
+    if (!unique.length) return [];
+    const rows = await this.branchRepository.find({ where: { id: In(unique) } });
+    if (rows.length !== unique.length) {
+      throw new NotFoundException('أحد الفروع المختارة غير موجود');
+    }
+    return rows;
   }
 
   // =========================

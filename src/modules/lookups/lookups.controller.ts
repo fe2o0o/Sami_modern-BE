@@ -81,9 +81,10 @@ export class LookupsController {
   }
 
   @Get('employees')
-  @ApiOperation({ summary: 'قائمة الموظفين مع نسبة العمولة' })
-  employees() {
-    return this.lookupsService.employees();
+  @ApiQuery({ name: 'branchId', required: false })
+  @ApiOperation({ summary: 'قائمة الموظفين مع نسبة العمولة (اختياريًا حسب الفرع)' })
+  employees(@Query('branchId') branchId?: string) {
+    return this.lookupsService.employees(branchId);
   }
 
   @Get('warehouses')
