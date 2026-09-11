@@ -25,7 +25,7 @@ import { str, optStr, bool } from '../../common/excel/import.helpers';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
-  { field: 'code', header: 'الكود', required: true, example: 'BR-002', note: 'كود فريد للفرع' },
+  { field: 'code', header: 'الكود', example: 'BR-002', note: 'كود فريد للفرع' },
   { field: 'name', header: 'الاسم', required: true, example: 'فرع الإسكندرية' },
   { field: 'managerName', header: 'اسم المدير', example: 'أحمد علي' },
   { field: 'phone', header: 'الهاتف', example: '0221000000' },
@@ -80,7 +80,7 @@ export class BranchService {
     const seen = new Set<string>();
     return this.excel.runImport(this.branchRepository.manager.connection, parsed, async (v, manager) => {
       const branchRepo = manager.getRepository(Branch);
-      const code = str(v.code, 'الكود');
+      const code = await this.codeSettings.resolveCode('branch', optStr(v.code), manager);
       const key = code.toLowerCase();
       if (seen.has(key)) throw new Error(`الكود «${code}» مكرر داخل الملف`);
       seen.add(key);

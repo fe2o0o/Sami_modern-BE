@@ -40,7 +40,7 @@ const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
 const SORTABLE = ['code', 'name', 'sellingPrice', 'createdAt'];
 
 const IMPORT_COLUMNS: ImportColumn[] = [
-  { field: 'code', header: 'الكود', required: true, example: 'P-001', note: 'كود فريد للمنتج' },
+  { field: 'code', header: 'الكود', example: 'P-001', note: 'كود فريد للمنتج' },
   { field: 'name', header: 'الاسم', required: true, example: 'كرسي خشبي' },
   { field: 'barcode', header: 'الباركود', example: '6221000000001' },
   { field: 'nameEn', header: 'الاسم بالإنجليزية', example: 'Wooden Chair' },
@@ -98,7 +98,7 @@ export class ProductService {
     const seenBarcode = new Set<string>();
     return this.excel.runImport(this.dataSource, parsed, async (v, manager) => {
       const repo = manager.getRepository(Product);
-      const code = str(v.code, 'الكود');
+      const code = await this.codeSettings.resolveCode('product', optStr(v.code), manager);
       const codeKey = code.toLowerCase();
       if (seenCode.has(codeKey)) throw new Error(`الكود «${code}» مكرر داخل الملف`);
       seenCode.add(codeKey);

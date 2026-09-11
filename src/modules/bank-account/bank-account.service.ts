@@ -24,7 +24,7 @@ import { str, optStr, bool } from '../../common/excel/import.helpers';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
-  { field: 'code', header: 'الكود', required: true, example: 'BNK-002', note: 'كود فريد للحساب البنكي' },
+  { field: 'code', header: 'الكود', example: 'BNK-002', note: 'كود فريد للحساب البنكي' },
   { field: 'bankName', header: 'اسم البنك', required: true, example: 'البنك الأهلي' },
   { field: 'accountName', header: 'اسم الحساب', required: true, example: 'سامي للأثاث' },
   { field: 'accountNumber', header: 'رقم الحساب', example: '1234567890' },
@@ -95,7 +95,7 @@ export class BankAccountService {
     const seen = new Set<string>();
     return this.excel.runImport(this.bankRepository.manager.connection, parsed, async (v, manager) => {
       const repo = manager.getRepository(BankAccount);
-      const code = str(v.code, 'الكود');
+      const code = await this.codeSettings.resolveCode('bank_account', optStr(v.code), manager);
       const key = code.toLowerCase();
       if (seen.has(key)) throw new Error(`الكود «${code}» مكرر داخل الملف`);
       seen.add(key);

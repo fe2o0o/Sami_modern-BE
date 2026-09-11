@@ -12,7 +12,7 @@ import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/ex
 import { str, optStr, optNum, bool } from '../../common/excel/import.helpers';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
-  { field: 'code', header: 'الكود', required: true, example: 'EMP-001', note: 'كود فريد للموظف' },
+  { field: 'code', header: 'الكود', example: 'EMP-001', note: 'كود فريد للموظف' },
   { field: 'name', header: 'الاسم', required: true, example: 'أحمد محمد' },
   { field: 'mobile', header: 'الجوال', example: '01000000000' },
   { field: 'nationalId', header: 'الرقم القومي', example: '29001010000000' },
@@ -75,7 +75,7 @@ export class EmployeeService extends BaseCrudService<Employee> {
     const parsed = await this.excel.parse(file, IMPORT_COLUMNS);
     const seen = new Set<string>();
     return this.excel.runImport(this.dataSource, parsed, async (v, manager) => {
-      const code = str(v.code, 'الكود');
+      const code = await this.codeSettings.resolveCode('employee', optStr(v.code), manager);
       const key = code.toLowerCase();
       if (seen.has(key)) throw new Error(`الكود «${code}» مكرر داخل الملف`);
       seen.add(key);

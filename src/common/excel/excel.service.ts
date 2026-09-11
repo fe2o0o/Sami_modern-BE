@@ -163,8 +163,10 @@ export class ExcelService {
       if (match) fieldByCol.set(col, match);
     });
 
+    // Only REQUIRED columns must be present. Optional ones (e.g. `code` when the
+    // entity auto-generates it) may be omitted from the file entirely.
     const missing = columns.filter(
-      (c) => ![...fieldByCol.values()].includes(c),
+      (c) => c.required && ![...fieldByCol.values()].includes(c),
     );
     if (missing.length) {
       throw new BadRequestException(

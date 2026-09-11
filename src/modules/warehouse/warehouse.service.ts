@@ -21,7 +21,7 @@ import { str, optStr, bool, enumFromLabel } from '../../common/excel/import.help
 import { CodeSettingService } from '../code-setting/code-setting.service';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
-  { field: 'code', header: 'الكود', required: true, example: 'WH-010', note: 'كود فريد للمخزن' },
+  { field: 'code', header: 'الكود', example: 'WH-010', note: 'كود فريد للمخزن' },
   { field: 'name', header: 'الاسم', required: true, example: 'المخزن الرئيسي' },
   { field: 'branchCode', header: 'كود الفرع', example: 'BR-001', note: 'كود فرع موجود (اختياري — اتركه فارغاً لمخزن بدون فرع)' },
   { field: 'type', header: 'النوع', example: 'مخزن', note: 'مخزن / معرض / إنتاج / عبور (افتراضي: مخزن)' },
@@ -68,7 +68,7 @@ export class WarehouseService {
     const seen = new Set<string>();
     return this.excel.runImport(this.warehouseRepository.manager.connection, parsed, async (v, manager) => {
       const repo = manager.getRepository(Warehouse);
-      const code = str(v.code, 'الكود');
+      const code = await this.codeSettings.resolveCode('warehouse', optStr(v.code), manager);
       const key = code.toLowerCase();
       if (seen.has(key)) throw new Error(`الكود «${code}» مكرر داخل الملف`);
       seen.add(key);

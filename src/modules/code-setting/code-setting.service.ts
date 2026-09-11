@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { CodeSetting } from './entities/code-setting.entity';
 import { UpdateCodeSettingDto } from './dto/update-code-setting.dto';
 import { CODE_ENTITIES, CODE_ENTITY_KEYS } from './code-entities';
@@ -95,17 +95,23 @@ export class CodeSettingService {
   /**
    * Atomically assign the next code for an entity when auto-generation is on,
    * consuming the counter under a row lock. Returns `null` when the entity is
-   * set to manual (the caller keeps the user-entered code). Safe to call
-   * outside a surrounding transaction — it runs its own.
+   * set to manual (the caller keeps the user-entered code).
+   *
+   * Pass a `manager` to join an existing transaction (e.g. a bulk Excel import)
+   * so the counter increment commits/rolls back with it; omit it to run standalone.
    */
-  async generateCode(entityKey: string): Promise<string | null> {
+  async generateCode(entityKey: string, manager?: EntityManager): Promise<string | null> {
     if (!CODE_ENTITY_KEYS.includes(entityKey)) return null;
-    return this.dataSource.transaction(async (manager) => {
-      const repo = manager.getRepository(CodeSetting);
+    const run = async (m: EntityManager): Promise<string | null> => {
+      const repo = m.getRepository(CodeSetting);
       let s = await repo.findOne({ where: { entityKey }, lock: { mode: 'pessimistic_write' } });
       if (!s) {
-        // Lazily create then re-lock so the counter increments atomically.
-        await this.ensure(entityKey);
+        // Lazily create (on this same manager) then re-lock so the increment is atomic.
+        const def = CODE_ENTITIES.find((e) => e.key === entityKey);
+        if (!def) throw new NotFoundException('كيان غير معروف لإعداد الأكواد');
+        await repo.save(
+          repo.create({ entityKey, autoGenerate: false, prefix: def.prefix, padding: 4, nextNumber: 1 }),
+        );
         s = await repo.findOne({ where: { entityKey }, lock: { mode: 'pessimistic_write' } });
       }
       if (!s || !s.autoGenerate) return null;
@@ -113,15 +119,21 @@ export class CodeSettingService {
       s.nextNumber = n + 1;
       await repo.save(s);
       return this.format(s, n);
-    });
+    };
+    return manager ? run(manager) : this.dataSource.transaction(run);
   }
 
   /**
    * Resolve the code to persist for a new record: the generated one when auto,
-   * otherwise the user-entered code (which must be present).
+   * otherwise the user-entered code (which must be present). Pass a `manager` to
+   * join a surrounding transaction (bulk imports).
    */
-  async resolveCode(entityKey: string, provided?: string | null): Promise<string> {
-    const generated = await this.generateCode(entityKey);
+  async resolveCode(
+    entityKey: string,
+    provided?: string | null,
+    manager?: EntityManager,
+  ): Promise<string> {
+    const generated = await this.generateCode(entityKey, manager);
     if (generated) return generated;
     const code = (provided ?? '').trim();
     if (!code) throw new BadRequestException('الكود مطلوب');

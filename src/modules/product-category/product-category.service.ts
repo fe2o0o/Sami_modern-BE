@@ -22,7 +22,7 @@ export interface CategoryTreeNode extends ProductCategory {
 }
 
 const IMPORT_COLUMNS: ImportColumn[] = [
-  { field: 'code', header: 'الكود', required: true, example: 'CAT-001', note: 'كود فريد للتصنيف' },
+  { field: 'code', header: 'الكود', example: 'CAT-001', note: 'كود فريد للتصنيف' },
   { field: 'name', header: 'الاسم', required: true, example: 'غرف نوم' },
   { field: 'nameEn', header: 'الاسم بالإنجليزية', example: 'Bedrooms' },
   { field: 'parentCode', header: 'كود التصنيف الأب', example: '', note: 'اتركه فارغاً للتصنيف الرئيسي. يجب أن يظهر صف الأب قبل أبنائه.' },
@@ -64,7 +64,7 @@ export class ProductCategoryService {
     const seen = new Set<string>();
     return this.excel.runImport(this.dataSource, parsed, async (v, manager) => {
       const repo = manager.getRepository(ProductCategory);
-      const code = str(v.code, 'الكود');
+      const code = await this.codeSettings.resolveCode('product_category', optStr(v.code), manager);
       const key = code.toLowerCase();
       if (seen.has(key)) throw new Error(`الكود «${code}» مكرر داخل الملف`);
       seen.add(key);
