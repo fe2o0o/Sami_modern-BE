@@ -7,13 +7,28 @@ import {
   Post,
   Put,
   Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
+import {
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { OpeningBalanceService } from './opening-balance.service';
 import { CreateOpeningBalanceDto } from './dto/create-opening-balance.dto';
 import { UpdateOpeningBalanceDto } from './dto/update-opening-balance.dto';
+import { ImportInventoryDto } from './dto/import-inventory.dto';
 import { ReverseOpeningBalanceDto } from './dto/reverse-opening-balance.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
+import { sendXlsx } from '../../common/excel/excel-download.util';
+import { EXCEL_UPLOAD_OPTIONS } from '../../common/excel/excel-upload.options';
+import type { UploadedExcel } from '../../common/excel/excel.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
@@ -33,6 +48,27 @@ export class OpeningBalanceController {
     @CurrentUser('userId') actorId: string,
   ) {
     return this.service.create(dto, actorId);
+  }
+
+  @Get('inventory-template')
+  @RequirePermissions('opening_balances.create')
+  @ApiOperation({ summary: 'تنزيل نموذج استيراد الأرصدة الافتتاحية للمخزون' })
+  async inventoryTemplate(@Res() res: Response) {
+    sendXlsx(res, await this.service.inventoryTemplate(), 'opening-inventory-template');
+  }
+
+  @Post('import-inventory')
+  @RequirePermissions('opening_balances.create')
+  @ResponseMessage('تم إنشاء الرصيد الافتتاحي (مسودة) من الملف')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'استيراد أرصدة افتتاحية للمخزون من Excel (تنشئ مسودة)' })
+  @UseInterceptors(FileInterceptor('file', EXCEL_UPLOAD_OPTIONS))
+  importInventory(
+    @UploadedFile() file: UploadedExcel,
+    @Body() header: ImportInventoryDto,
+    @CurrentUser('userId') actorId: string,
+  ) {
+    return this.service.importInventory(file, header, actorId);
   }
 
   @Get()

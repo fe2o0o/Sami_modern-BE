@@ -8,6 +8,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { BranchScope, isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { DataSource, In, Not, Repository } from 'typeorm';
+import { ExcelService } from '../../common/excel/excel.service';
+import { ImportColumn, UploadedExcel } from '../../common/excel/excel.types';
 import { OpeningBalance } from './entities/opening-balance.entity';
 import { OpeningBalanceDetail } from './entities/opening-balance-detail.entity';
 import { CreateOpeningBalanceDto } from './dto/create-opening-balance.dto';
@@ -136,6 +138,14 @@ export interface ValidationResult {
 
 const BALANCE_TOLERANCE = 0.005;
 
+/** Columns for the inventory opening-balance Excel template/import. */
+const INVENTORY_IMPORT_COLUMNS: ImportColumn[] = [
+  { field: 'productCode', header: 'كود المنتج', required: true, example: 'P-001', note: 'كود منتج موجود' },
+  { field: 'warehouseCode', header: 'كود المخزن', required: true, example: 'WH-001', note: 'كود مخزن موجود' },
+  { field: 'quantity', header: 'الكمية', type: 'number', required: true, example: 10 },
+  { field: 'unitCost', header: 'تكلفة الوحدة', type: 'number', example: 500, note: 'تكلفة الوحدة (اختياري، افتراضي 0)' },
+];
+
 @Injectable()
 export class OpeningBalanceService {
   constructor(
@@ -167,6 +177,7 @@ export class OpeningBalanceService {
     private readonly treasuryRepository: Repository<Treasury>,
     @InjectRepository(BankAccount)
     private readonly bankAccountRepository: Repository<BankAccount>,
+    private readonly excel: ExcelService,
     private readonly journalEntryService: JournalEntryService,
     private readonly stockService: StockService,
     private readonly treasuryLedger: TreasuryLedgerService,
@@ -174,6 +185,75 @@ export class OpeningBalanceService {
     private readonly accountingBuilder: OpeningBalanceAccountingBuilder,
     private readonly dataSource: DataSource,
   ) {}
+
+  // =========================================================
+  // INVENTORY EXCEL IMPORT → creates a DRAFT opening balance
+  // =========================================================
+  /** Downloadable inventory opening-balance template. */
+  inventoryTemplate(): Promise<Buffer> {
+    return this.excel.buildTemplate(INVENTORY_IMPORT_COLUMNS, {
+      sheetName: 'أرصدة المخزون الافتتاحية',
+      title: 'استيراد الأرصدة الافتتاحية للمخزون',
+    });
+  }
+
+  /**
+   * Build a DRAFT opening balance from an inventory Excel file. Rows carry a
+   * product code, warehouse code, quantity and unit cost — resolved to INVENTORY
+   * lines. The draft is then reviewed/validated/posted through the normal flow.
+   */
+  async importInventory(
+    file: UploadedExcel,
+    header: { fiscalYearId: string; accountingPeriodId: string; openingDate: string; autoBalance?: boolean },
+    actorId?: string,
+  ): Promise<OpeningBalance> {
+    const parsed = await this.excel.parse(file, INVENTORY_IMPORT_COLUMNS);
+    if (parsed.errors.length) {
+      throw new BadRequestException(
+        parsed.errors.map((e) => `صف ${e.row}: ${e.message}`).join('؛ '),
+      );
+    }
+    if (!parsed.rows.length) {
+      throw new BadRequestException('الملف لا يحتوي على أي صفوف');
+    }
+
+    const productCodes = [...new Set(parsed.rows.map((r) => String(r.values.productCode).trim()))];
+    const warehouseCodes = [...new Set(parsed.rows.map((r) => String(r.values.warehouseCode).trim()))];
+    const products = await this.productRepository.find({ where: { code: In(productCodes) } });
+    const warehouses = await this.warehouseRepository.find({ where: { code: In(warehouseCodes) } });
+    const productByCode = new Map(products.map((p) => [p.code, p.id]));
+    const warehouseByCode = new Map(warehouses.map((w) => [w.code, w.id]));
+
+    const details: OpeningBalanceDetailDto[] = [];
+    const errors: string[] = [];
+    for (const row of parsed.rows) {
+      const pc = String(row.values.productCode).trim();
+      const wc = String(row.values.warehouseCode).trim();
+      const productId = productByCode.get(pc);
+      const warehouseId = warehouseByCode.get(wc);
+      if (!productId) { errors.push(`صف ${row.rowNumber}: المنتج بكود «${pc}» غير موجود`); continue; }
+      if (!warehouseId) { errors.push(`صف ${row.rowNumber}: المخزن بكود «${wc}» غير موجود`); continue; }
+      details.push({
+        referenceType: OpeningBalanceReferenceType.INVENTORY,
+        productId,
+        warehouseId,
+        quantity: Number(row.values.quantity) || 0,
+        unitCost: Number(row.values.unitCost) || 0,
+      });
+    }
+    if (errors.length) throw new BadRequestException(errors.join('؛ '));
+
+    return this.create(
+      {
+        fiscalYearId: header.fiscalYearId,
+        accountingPeriodId: header.accountingPeriodId,
+        openingDate: header.openingDate,
+        autoBalance: header.autoBalance ?? true,
+        details,
+      },
+      actorId,
+    );
+  }
 
   // =========================================================
   // CREATE
