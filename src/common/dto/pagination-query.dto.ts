@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { APP_CONSTANTS } from '../constants/app.constants';
 import { Order } from '../enums/order.enum';
 
@@ -19,13 +19,11 @@ export class PaginationQueryDto {
   @ApiPropertyOptional({
     default: APP_CONSTANTS.DEFAULT_PER_PAGE,
     minimum: 1,
-    maximum: APP_CONSTANTS.MAX_PER_PAGE,
   })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(APP_CONSTANTS.MAX_PER_PAGE)
   perPage: number = APP_CONSTANTS.DEFAULT_PER_PAGE;
 
   @ApiPropertyOptional({ description: 'Free-text search term' })

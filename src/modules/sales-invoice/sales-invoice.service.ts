@@ -46,7 +46,7 @@ export interface SalesInvoiceListItem {
   invoiceDate: string;
   customerId: string;
   customerName: string | null;
-  warehouseId: string;
+  warehouseId: string | null;
   warehouseName: string | null;
   taxableAmount: number;
   vatAmount: number;
@@ -105,8 +105,11 @@ export class SalesInvoiceService {
     actorId?: string,
     branchScope: BranchScope = null,
   ): Promise<SalesInvoice> {
-    await this.assertHeaderRefs(dto);
-    const items = await this.buildItems(dto.items, dto.warehouseId);
+    // Header warehouse is a representative = the first stock line's (null if the
+    // invoice is entirely made-to-order). Each line carries its own warehouse.
+    const headerWarehouseId = dto.warehouseId ?? this.pickHeaderWarehouse(dto.items);
+    await this.assertHeaderRefs({ ...dto, warehouseId: headerWarehouseId });
+    const items = await this.buildItems(dto.items, headerWarehouseId);
     const { totals } = computeInvoice(this.toLineInputs(dto.items));
     const commissions = await this.buildCommissions(dto.commissions ?? [], totals.taxableAmount);
     const commissionTotal = round2(commissions.reduce((s, c) => s + c.amount, 0));
@@ -117,7 +120,7 @@ export class SalesInvoiceService {
       customerId: dto.customerId,
       // A branch-restricted user picks among their branches (validated); one → auto.
       branchId: resolveWriteBranch(branchScope, dto.branchId),
-      warehouseId: dto.warehouseId,
+      warehouseId: headerWarehouseId,
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
       paymentType: dto.paymentType ?? SalesPaymentType.CREDIT,
@@ -155,7 +158,12 @@ export class SalesInvoiceService {
     } else if (dto.branchId !== undefined) {
       invoice.branchId = dto.branchId ?? null;
     }
-    if (dto.warehouseId) invoice.warehouseId = dto.warehouseId;
+    // When the lines change, re-derive the representative header warehouse from them.
+    if (dto.items) {
+      invoice.warehouseId = dto.warehouseId ?? this.pickHeaderWarehouse(dto.items);
+    } else if (dto.warehouseId) {
+      invoice.warehouseId = dto.warehouseId;
+    }
     if (dto.fiscalYearId) invoice.fiscalYearId = dto.fiscalYearId;
     if (dto.accountingPeriodId) invoice.accountingPeriodId = dto.accountingPeriodId;
     if (dto.paymentType) invoice.paymentType = dto.paymentType;
@@ -239,7 +247,7 @@ export class SalesInvoiceService {
     );
     const warehouseName = await this.nameMap(
       this.warehouseRepository,
-      items.map((i) => i.warehouseId),
+      items.map((i) => i.warehouseId).filter((v): v is string => !!v),
     );
 
     const rows: SalesInvoiceListItem[] = items.map((i) => ({
@@ -249,7 +257,7 @@ export class SalesInvoiceService {
       customerId: i.customerId,
       customerName: customerName.get(i.customerId) ?? null,
       warehouseId: i.warehouseId,
-      warehouseName: warehouseName.get(i.warehouseId) ?? null,
+      warehouseName: i.warehouseId ? warehouseName.get(i.warehouseId) ?? null : null,
       taxableAmount: i.taxableAmount,
       vatAmount: i.vatAmount,
       totalAmount: i.totalAmount,
@@ -277,7 +285,9 @@ export class SalesInvoiceService {
     const [customer, warehouse, branch, fiscalYear, period, users] =
       await Promise.all([
         this.customerRepository.findOne({ where: { id: invoice.customerId } }),
-        this.warehouseRepository.findOne({ where: { id: invoice.warehouseId } }),
+        invoice.warehouseId
+          ? this.warehouseRepository.findOne({ where: { id: invoice.warehouseId } })
+          : null,
         invoice.branchId
           ? this.branchRepository.findOne({ where: { id: invoice.branchId } })
           : null,
@@ -343,10 +353,18 @@ export class SalesInvoiceService {
     }));
   }
 
+  /** The representative header warehouse = the first stock line that has one. */
+  private pickHeaderWarehouse(items: SalesInvoiceItemDto[]): string | null {
+    const stock = items.find(
+      (i) => (i.lineType ?? SalesLineType.STOCK) !== SalesLineType.MANUFACTURING && i.warehouseId,
+    );
+    return stock?.warehouseId ?? null;
+  }
+
   /** Build persisted item rows with financial + product/unit snapshots. */
   private async buildItems(
     itemsDto: SalesInvoiceItemDto[],
-    warehouseId: string,
+    headerWarehouseId: string | null,
   ): Promise<SalesInvoiceItem[]> {
     const productIds = [...new Set(itemsDto.map((i) => i.productId))];
     const products = await this.productRepository.find({
@@ -379,9 +397,13 @@ export class SalesInvoiceService {
       const item = new SalesInvoiceItem();
       item.lineNumber = index + 1;
       item.productId = dto.productId;
-      item.warehouseId = warehouseId;
+      const lineType = (dto.lineType ?? SalesLineType.STOCK) as SalesInvoiceItem['lineType'];
+      // A stock line sells from its own warehouse (legacy fallback: the header).
+      // A manufacturing (made-to-order) line has no warehouse.
+      item.warehouseId =
+        lineType === SalesLineType.MANUFACTURING ? null : dto.warehouseId ?? headerWarehouseId;
       item.unitId = unitId ?? null;
-      item.lineType = (dto.lineType ?? SalesLineType.STOCK) as SalesInvoiceItem['lineType'];
+      item.lineType = lineType;
       item.deliveryDate = dto.deliveryDate ?? null;
       item.dimensions = dto.dimensions ?? null;
       item.color = dto.color ?? null;
@@ -442,7 +464,7 @@ export class SalesInvoiceService {
 
   private async assertHeaderRefs(dto: {
     customerId: string;
-    warehouseId: string;
+    warehouseId: string | null;
     fiscalYearId: string;
     accountingPeriodId: string;
   }): Promise<void> {
@@ -452,10 +474,13 @@ export class SalesInvoiceService {
     if (!customer) throw new NotFoundException('العميل غير موجود');
     if (!customer.isActive) throw new BadRequestException('العميل غير نشط');
 
-    const warehouse = await this.warehouseRepository.findOne({
-      where: { id: dto.warehouseId },
-    });
-    if (!warehouse) throw new NotFoundException('المخزن غير موجود');
+    // Warehouse is optional at the header (an all-manufacturing invoice has none).
+    if (dto.warehouseId) {
+      const warehouse = await this.warehouseRepository.findOne({
+        where: { id: dto.warehouseId },
+      });
+      if (!warehouse) throw new NotFoundException('المخزن غير موجود');
+    }
 
     const period = await this.periodRepository.findOne({
       where: { id: dto.accountingPeriodId },

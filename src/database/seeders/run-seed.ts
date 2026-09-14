@@ -9,6 +9,12 @@ import { PermissionSeeder } from './permission.seeder';
 import { ChartOfAccountSeeder } from './chart-of-account.seeder';
 import { AccountingSettingSeeder } from './accounting-setting.seeder';
 import { TreasuryBankSeeder } from './treasury-bank.seeder';
+import { UnitSeeder } from './unit.seeder';
+import { BrandSeeder } from './brand.seeder';
+import { CustomerSeeder } from './customer.seeder';
+import { ProductCategorySeeder } from './product-category.seeder';
+import { ProductSeeder } from './product.seeder';
+import { SupplierSeeder } from './supplier.seeder';
 // import { UnitSeeder } from './unit.seeder';
 // import { BrandSeeder } from './brand.seeder';
 // import { ProductCategorySeeder } from './product-category.seeder';
@@ -27,12 +33,12 @@ const seeders: Seeder[] = [
   new ChartOfAccountSeeder(),
   new AccountingSettingSeeder(),
   new TreasuryBankSeeder(),
-  // new UnitSeeder(),
-  // new BrandSeeder(),
-  // new ProductCategorySeeder(),
-  // new ProductSeeder(),
-  // new CustomerSeeder(),
-  // new SupplierSeeder(),
+  new UnitSeeder(),
+  new BrandSeeder(),
+  new ProductCategorySeeder(),
+  new ProductSeeder(),
+  new CustomerSeeder(),
+  new SupplierSeeder(),
 ];
 
 /**

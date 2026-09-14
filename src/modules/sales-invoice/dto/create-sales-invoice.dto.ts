@@ -29,9 +29,12 @@ export class CreateSalesInvoiceDto {
   @IsUUID()
   branchId?: string | null;
 
-  @ApiProperty({ format: 'uuid' })
+  /** Representative header warehouse. Optional — the server derives it from the
+   *  first stock line; each line carries its own warehouse. */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
   @IsUUID('4', { message: 'يجب اختيار المخزن' })
-  warehouseId!: string;
+  warehouseId?: string | null;
 
   @ApiProperty({ format: 'uuid' })
   @IsUUID('4', { message: 'يجب اختيار السنة المالية' })

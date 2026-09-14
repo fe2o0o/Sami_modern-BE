@@ -28,8 +28,9 @@ export class SalesInvoiceItem extends BaseEntity {
   @Column({ type: 'uuid' })
   productId!: string;
 
-  @Column({ type: 'uuid' })
-  warehouseId!: string;
+  /** Warehouse this line is issued from (null for MANUFACTURING/made-to-order). */
+  @Column({ type: 'uuid', nullable: true })
+  warehouseId!: string | null;
 
   @Column({ type: 'uuid', nullable: true })
   unitId!: string | null;

@@ -142,7 +142,7 @@ export class SalesReturnService {
       salesInvoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       customerId: invoice.customerId,
-      warehouseId: invoice.warehouseId,
+      warehouseId: items[0]?.warehouseId ?? invoice.warehouseId ?? undefined,
       // A branch-restricted user's documents are forced onto their own branch.
       branchId: resolveWriteBranch(branchScope, invoice.branchId),
       fiscalYearId: dto.fiscalYearId,
@@ -305,7 +305,12 @@ export class SalesReturnService {
       item.lineNumber = index + 1;
       item.salesInvoiceItemId = src.id;
       item.productId = src.productId;
-      item.warehouseId = invoice.warehouseId;
+      // Goods return to the warehouse the invoice line was sold from.
+      const lineWarehouse = src.warehouseId ?? invoice.warehouseId;
+      if (!lineWarehouse) {
+        throw new BadRequestException(`لا يمكن تحديد مخزن لمرتجع الصنف "${src.productName}"`);
+      }
+      item.warehouseId = lineWarehouse;
       item.unitId = src.unitId;
       item.lineType = src.lineType;
       item.productCode = src.productCode;

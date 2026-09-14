@@ -16,6 +16,12 @@ export class SalesInvoiceItemDto {
   @IsUUID('4', { message: 'يجب اختيار منتج' })
   productId!: string;
 
+  /** Warehouse this line is sold from (per-line). Falls back to the header. */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID('4', { message: 'يجب اختيار المخزن' })
+  warehouseId?: string | null;
+
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID()

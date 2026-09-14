@@ -101,7 +101,7 @@ export class SalesInvoicePostingService {
 
       if (stockItems.length) {
         const stockLines: StockLineInput[] = stockItems.map((i) => ({
-          warehouseId: invoice.warehouseId,
+          warehouseId: i.warehouseId!, // guaranteed by validateAccounts for stock lines
           productId: i.productId,
           productName: i.productName ?? products.get(i.productId)?.name,
           quantity: i.quantity,
@@ -268,7 +268,7 @@ export class SalesInvoicePostingService {
           (i) => i.lineType !== SalesLineType.MANUFACTURING && products.get(i.productId)?.trackInventory,
         )
         .map((i) => ({
-          warehouseId: invoice.warehouseId,
+          warehouseId: i.warehouseId!, // stock lines always carry a warehouse
           productId: i.productId,
           quantity: i.quantity,
         }));
@@ -432,6 +432,9 @@ export class SalesInvoicePostingService {
 
       // Made-to-order lines never touch inventory/COGS — skip those checks.
       if (item.lineType !== SalesLineType.MANUFACTURING && product!.trackInventory) {
+        if (!item.warehouseId) {
+          block(`لم يتم تحديد مخزن للصنف "${product!.name}".`);
+        }
         const cogs = product!.cogsAccountId ?? settings.costOfGoodsSoldAccountId;
         if (!cogs) block('حساب تكلفة البضاعة المباعة غير محدد في إعدادات المحاسبة.');
         if (!this.resolveInventoryAccount(product!, settings)) {

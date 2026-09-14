@@ -34,8 +34,9 @@ export class SalesInvoice extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   branchId!: string | null;
 
-  @Column({ type: 'uuid' })
-  warehouseId!: string;
+  /** Representative warehouse = first stock line's (null if all-manufacturing). */
+  @Column({ type: 'uuid', nullable: true })
+  warehouseId!: string | null;
 
   @Column({ type: 'uuid' })
   fiscalYearId!: string;

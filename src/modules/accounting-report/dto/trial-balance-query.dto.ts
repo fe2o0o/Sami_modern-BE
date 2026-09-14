@@ -19,8 +19,10 @@ export class TrialBalanceQueryDto {
   @IsUUID()
   branchId?: string;
 
-  /** Internal: branch access scope injected by the controller (not user input). */
-  branchScope?: string[] | null;
+  /** Internal: branch access scope injected by the service (not user input).
+   *  `declare` = type-only, emits no runtime field so the ValidationPipe's
+   *  forbidNonWhitelisted never sees it. */
+  declare branchScope?: string[] | null;
 
   @ApiPropertyOptional({ format: 'date' })
   @IsOptional()

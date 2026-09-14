@@ -302,7 +302,12 @@ export class SalesDeliveryService {
       item.lineNumber = index + 1;
       item.salesInvoiceItemId = src.id;
       item.productId = src.productId;
-      item.warehouseId = invoice.warehouseId;
+      // Ship each line from the warehouse chosen on its invoice line (a stock
+      // line always has one — manufacturing lines were rejected above).
+      if (!src.warehouseId) {
+        throw new BadRequestException(`الصنف "${src.productName}" بدون مخزن ولا يمكن تسليمه`);
+      }
+      item.warehouseId = src.warehouseId;
       item.unitId = src.unitId;
       item.productCode = src.productCode;
       item.productName = src.productName;
@@ -318,7 +323,8 @@ export class SalesDeliveryService {
       salesInvoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       customerId: invoice.customerId,
-      warehouseId: invoice.warehouseId,
+      // Representative header warehouse = the first delivered line's.
+      warehouseId: items[0]?.warehouseId ?? invoice.warehouseId ?? undefined,
       branchId: invoice.branchId,
       items,
     };
