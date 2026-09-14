@@ -46,6 +46,7 @@ import { CustomerModule } from './modules/customer/customer.module';
 import { SupplierModule } from './modules/supplier/supplier.module';
 import { StockModule } from './modules/stock/stock.module';
 import { LookupsModule } from './modules/lookups/lookups.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { ExcelModule } from './common/excel/excel.module';
 
 @Module({
@@ -93,6 +94,7 @@ import { ExcelModule } from './common/excel/excel.module';
     SupplierModule,
     StockModule,
     LookupsModule,
+    DashboardModule,
     ExcelModule,
   ],
   controllers: [AppController],
