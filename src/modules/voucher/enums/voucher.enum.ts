@@ -15,6 +15,19 @@ export enum VoucherPaymentMethod {
 }
 
 /**
+ * Who/what the cash moves against:
+ * CUSTOMER → a customer subledger (receipt only).
+ * SUPPLIER → a supplier subledger (payment only).
+ * ACCOUNT  → a GL account directly (e.g. an expense like electricity/commissions,
+ *            or other income) — no party subledger movement.
+ */
+export enum VoucherPartyType {
+  CUSTOMER = 'customer',
+  SUPPLIER = 'supplier',
+  ACCOUNT = 'account',
+}
+
+/**
  * DRAFT   → editable, ZERO accounting/subledger effect.
  * POSTED  → immutable; journal + party subledger + treasury/bank subledger created.
  * REVERSED→ immutable; undone by opposite effects (history kept).

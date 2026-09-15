@@ -2,6 +2,7 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
 import {
+  VoucherPartyType,
   VoucherPaymentMethod,
   VoucherStatus,
   VoucherType,
@@ -29,10 +30,18 @@ export class Voucher extends BaseEntity {
   @Column({ type: 'date' })
   voucherDate!: string;
 
-  /** Customer (RECEIPT) or supplier (PAYMENT) id. */
+  /** What the cash moves against: a customer/supplier subledger, or a GL account. */
+  @Column({ type: 'enum', enum: VoucherPartyType, default: VoucherPartyType.SUPPLIER })
+  partyType!: VoucherPartyType;
+
+  /** Customer (RECEIPT) or supplier (PAYMENT) id — null when partyType = ACCOUNT. */
   @Index()
-  @Column({ type: 'uuid' })
-  partyId!: string;
+  @Column({ type: 'uuid', nullable: true })
+  partyId!: string | null;
+
+  /** The GL account hit directly when partyType = ACCOUNT (e.g. an expense). */
+  @Column({ type: 'uuid', nullable: true })
+  accountId!: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   partyName!: string | null;

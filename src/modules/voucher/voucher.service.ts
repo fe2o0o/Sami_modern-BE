@@ -8,6 +8,7 @@ import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch 
 import { Brackets, In, Repository } from 'typeorm';
 import { Voucher } from './entities/voucher.entity';
 import {
+  VoucherPartyType,
   VoucherPaymentMethod,
   VoucherStatus,
   VoucherType,
@@ -23,6 +24,7 @@ import { Branch } from '../branch/entities/branch.entity';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { User } from '../user/entities/user.entity';
+import { ChartOfAccount } from '../chart-of-account/entities/chart-of-account.entity';
 import { paginate } from '../../common/utils/pagination.util';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
 
@@ -31,7 +33,7 @@ export interface VoucherListItem {
   voucherNumber: string | null;
   type: VoucherType;
   voucherDate: string;
-  partyId: string;
+  partyId: string | null;
   partyName: string | null;
   paymentMethod: VoucherPaymentMethod;
   accountName: string | null;
@@ -60,6 +62,8 @@ export class VoucherService {
     private readonly fiscalYearRepository: Repository<FiscalYear>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(ChartOfAccount)
+    private readonly accountRepository: Repository<ChartOfAccount>,
   ) {}
 
   // =========================================================
@@ -70,7 +74,7 @@ export class VoucherService {
     actorId?: string,
     branchScope: BranchScope = null,
   ): Promise<Voucher> {
-    const partyName = await this.assertParty(dto.type, dto.partyId);
+    const ref = await this.resolvePartyRef(dto.type, dto);
     await this.assertMethod(dto.paymentMethod, dto.treasuryId ?? null, dto.bankAccountId ?? null);
     await this.assertPeriod(dto.fiscalYearId, dto.accountingPeriodId);
 
@@ -78,8 +82,10 @@ export class VoucherService {
       voucherNumber: null,
       type: dto.type,
       voucherDate: dto.voucherDate,
-      partyId: dto.partyId,
-      partyName,
+      partyType: ref.partyType,
+      partyId: ref.partyId,
+      accountId: ref.accountId,
+      partyName: ref.partyName,
       paymentMethod: dto.paymentMethod,
       treasuryId: dto.paymentMethod === VoucherPaymentMethod.TREASURY ? dto.treasuryId ?? null : null,
       bankAccountId: dto.paymentMethod === VoucherPaymentMethod.BANK ? dto.bankAccountId ?? null : null,
@@ -104,8 +110,17 @@ export class VoucherService {
   ): Promise<Voucher> {
     const voucher = await this.getEditableDraft(id, branchScope);
 
-    if (dto.partyId) voucher.partyName = await this.assertParty(voucher.type, dto.partyId);
-    if (dto.partyId) voucher.partyId = dto.partyId;
+    if (dto.partyType !== undefined || dto.partyId !== undefined || dto.accountId !== undefined) {
+      const ref = await this.resolvePartyRef(voucher.type, {
+        partyType: dto.partyType ?? voucher.partyType,
+        partyId: dto.partyId ?? voucher.partyId,
+        accountId: dto.accountId ?? voucher.accountId,
+      });
+      voucher.partyType = ref.partyType;
+      voucher.partyId = ref.partyId;
+      voucher.accountId = ref.accountId;
+      voucher.partyName = ref.partyName;
+    }
     if (dto.voucherDate) voucher.voucherDate = dto.voucherDate;
     if (dto.amount !== undefined) voucher.amount = dto.amount;
     if (dto.fiscalYearId) voucher.fiscalYearId = dto.fiscalYearId;
@@ -228,6 +243,40 @@ export class VoucherService {
       throw new BadRequestException('لا يمكن تعديل أو حذف سند مُرحّل — استخدم العكس');
     }
     return voucher;
+  }
+
+  /**
+   * Resolve + validate the voucher's counterpart. Defaults partyType from the
+   * voucher type (receipt→customer, payment→supplier). For ACCOUNT it validates
+   * a postable GL account; for CUSTOMER/SUPPLIER it validates the party matches
+   * the voucher type.
+   */
+  private async resolvePartyRef(
+    type: VoucherType,
+    dto: { partyType?: VoucherPartyType | null; partyId?: string | null; accountId?: string | null },
+  ): Promise<{ partyType: VoucherPartyType; partyId: string | null; accountId: string | null; partyName: string }> {
+    const partyType =
+      dto.partyType ?? (type === VoucherType.RECEIPT ? VoucherPartyType.CUSTOMER : VoucherPartyType.SUPPLIER);
+
+    if (partyType === VoucherPartyType.ACCOUNT) {
+      if (!dto.accountId) throw new BadRequestException('يجب اختيار الحساب');
+      const acc = await this.accountRepository.findOne({ where: { id: dto.accountId } });
+      if (!acc) throw new NotFoundException('الحساب غير موجود');
+      if (!acc.allowPosting || !acc.isActive) {
+        throw new BadRequestException('الحساب غير قابل للترحيل عليه أو غير نشط');
+      }
+      return { partyType, partyId: null, accountId: acc.id, partyName: `${acc.accountCode} - ${acc.accountNameAr}` };
+    }
+
+    if (partyType === VoucherPartyType.CUSTOMER && type !== VoucherType.RECEIPT) {
+      throw new BadRequestException('العميل يُستخدم في سند القبض فقط');
+    }
+    if (partyType === VoucherPartyType.SUPPLIER && type !== VoucherType.PAYMENT) {
+      throw new BadRequestException('المورّد يُستخدم في سند الصرف فقط');
+    }
+    if (!dto.partyId) throw new BadRequestException('يجب اختيار الطرف');
+    const partyName = await this.assertParty(type, dto.partyId);
+    return { partyType, partyId: dto.partyId, accountId: null, partyName };
   }
 
   /** Validate the party exists for the voucher type; return its name. */

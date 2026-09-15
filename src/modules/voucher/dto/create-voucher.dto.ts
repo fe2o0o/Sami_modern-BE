@@ -9,7 +9,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
-import { VoucherPaymentMethod, VoucherType } from '../enums/voucher.enum';
+import { VoucherPartyType, VoucherPaymentMethod, VoucherType } from '../enums/voucher.enum';
 
 /** Create a receipt/payment voucher (always starts DRAFT — no accounting effect). */
 export class CreateVoucherDto {
@@ -21,9 +21,20 @@ export class CreateVoucherDto {
   @IsDateString({}, { message: 'تاريخ السند غير صحيح' })
   voucherDate!: string;
 
-  @ApiProperty({ format: 'uuid', description: 'العميل (قبض) أو المورّد (صرف)' })
+  @ApiPropertyOptional({ enum: VoucherPartyType, default: VoucherPartyType.SUPPLIER })
+  @IsOptional()
+  @IsEnum(VoucherPartyType, { message: 'نوع الطرف غير صحيح' })
+  partyType?: VoucherPartyType;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'العميل (قبض) أو المورّد (صرف) — عند اختيار طرف' })
+  @ValidateIf((o) => o.partyType !== VoucherPartyType.ACCOUNT)
   @IsUUID('4', { message: 'يجب اختيار الطرف' })
-  partyId!: string;
+  partyId?: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'الحساب المحاسبي (مصروف/إيراد) — عند اختيار حساب' })
+  @ValidateIf((o) => o.partyType === VoucherPartyType.ACCOUNT)
+  @IsUUID('4', { message: 'يجب اختيار الحساب' })
+  accountId?: string | null;
 
   @ApiProperty({ enum: VoucherPaymentMethod })
   @IsEnum(VoucherPaymentMethod, { message: 'طريقة الدفع غير صحيحة' })

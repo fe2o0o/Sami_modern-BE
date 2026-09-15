@@ -8,6 +8,7 @@ import { DataSource, EntityManager } from 'typeorm';
 import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { Voucher } from './entities/voucher.entity';
 import {
+  VoucherPartyType,
   VoucherPaymentMethod,
   VoucherStatus,
   VoucherType,
@@ -120,11 +121,11 @@ export class VoucherPostingService {
         manager,
       );
 
-      // Party subledger.
-      if (voucher.type === VoucherType.RECEIPT) {
+      // Party subledger (skipped for an ACCOUNT voucher — it has no party).
+      if (voucher.partyType === VoucherPartyType.CUSTOMER) {
         await this.customerLedger.record(
           {
-            customerId: voucher.partyId,
+            customerId: voucher.partyId!,
             transactionDate: voucher.voucherDate,
             type: CustomerTransactionType.RECEIPT,
             sourceType,
@@ -137,10 +138,10 @@ export class VoucherPostingService {
           },
           manager,
         );
-      } else {
+      } else if (voucher.partyType === VoucherPartyType.SUPPLIER) {
         await this.supplierLedger.record(
           {
-            supplierId: voucher.partyId,
+            supplierId: voucher.partyId!,
             transactionDate: voucher.voucherDate,
             type: SupplierTransactionType.PAYMENT,
             sourceType,
@@ -236,11 +237,11 @@ export class VoucherPostingService {
       await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
 
       const desc = `عكس ${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucher.voucherNumber ?? ''}`;
-      // Reverse the party subledger.
-      if (voucher.type === VoucherType.RECEIPT) {
+      // Reverse the party subledger (none for an ACCOUNT voucher).
+      if (voucher.partyType === VoucherPartyType.CUSTOMER) {
         await this.customerLedger.record(
           {
-            customerId: voucher.partyId,
+            customerId: voucher.partyId!,
             transactionDate: dto.reversalDate,
             type: CustomerTransactionType.REVERSAL,
             sourceType: JournalSourceType.RECEIPT_VOUCHER,
@@ -253,10 +254,10 @@ export class VoucherPostingService {
           },
           manager,
         );
-      } else {
+      } else if (voucher.partyType === VoucherPartyType.SUPPLIER) {
         await this.supplierLedger.record(
           {
-            supplierId: voucher.partyId,
+            supplierId: voucher.partyId!,
             transactionDate: dto.reversalDate,
             type: SupplierTransactionType.REVERSAL,
             sourceType: JournalSourceType.PAYMENT_VOUCHER,
@@ -302,6 +303,11 @@ export class VoucherPostingService {
   // HELPERS
   // =========================================================
   private resolveControlAccount(voucher: Voucher, settings: AccountingSetting): string {
+    // An ACCOUNT voucher hits the chosen GL account directly (expense/income).
+    if (voucher.partyType === VoucherPartyType.ACCOUNT) {
+      if (!voucher.accountId) throw new BadRequestException('حساب السند غير محدد');
+      return voucher.accountId;
+    }
     if (voucher.type === VoucherType.RECEIPT) {
       if (!settings.customerControlAccountId) {
         throw new BadRequestException('حساب مراقبة العملاء غير محدد في إعدادات المحاسبة');

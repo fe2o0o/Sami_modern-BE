@@ -13,6 +13,7 @@ import { AccountingPeriod } from '../accounting-period/entities/accounting-perio
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
 import { User } from '../user/entities/user.entity';
+import { ChartOfAccount } from '../chart-of-account/entities/chart-of-account.entity';
 import { SequenceModule } from '../sequence/sequence.module';
 import { JournalEntryModule } from '../journal-entry/journal-entry.module';
 import { CustomerModule } from '../customer/customer.module';
@@ -38,6 +39,7 @@ import { BankAccountModule } from '../bank-account/bank-account.module';
       FiscalYear,
       AccountingSetting,
       User,
+      ChartOfAccount,
     ]),
     SequenceModule,
     JournalEntryModule,
