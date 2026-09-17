@@ -224,7 +224,10 @@ export class ProductService {
   }
 
   async update(id: string, dto: UpdateProductDto): Promise<Product> {
-    const product = await this.findOne(id);
+    // Load WITHOUT relations: a stale loaded `category`/`brand`/`unit` object
+    // would override the changed FK (categoryId/brandId/unitId) on save.
+    const product = await this.productRepository.findOne({ where: { id } });
+    if (!product) throw new NotFoundException('لم يتم العثور على المنتج');
     if (dto.code && dto.code !== product.code) {
       await this.ensureUnique('code', dto.code, id, 'كود المنتج مستخدم بالفعل');
     }
