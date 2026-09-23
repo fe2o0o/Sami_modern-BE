@@ -23,6 +23,7 @@ import { CustomerModule } from '../customer/customer.module';
 import { ManufacturingModule } from '../manufacturing/manufacturing.module';
 import { JournalEntryModule } from '../journal-entry/journal-entry.module';
 import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
+import { SalesDeliveryModule } from '../sales-delivery/sales-delivery.module';
 
 /**
  * Sales Invoices. Posting/reversal reuse the shared engines — StockService,
@@ -53,6 +54,7 @@ import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
     ManufacturingModule,
     JournalEntryModule,
     CashSubledgerModule,
+    SalesDeliveryModule,
   ],
   controllers: [SalesInvoiceController],
   providers: [SalesInvoiceService, SalesInvoicePostingService],

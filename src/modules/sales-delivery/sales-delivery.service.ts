@@ -8,7 +8,11 @@ import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch 
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import { SalesDelivery } from './entities/sales-delivery.entity';
 import { SalesDeliveryItem } from './entities/sales-delivery-item.entity';
-import { SalesDeliverySource, SalesDeliveryStatus } from './enums/sales-delivery.enum';
+import {
+  SalesDeliveryProgress,
+  SalesDeliverySource,
+  SalesDeliveryStatus,
+} from './enums/sales-delivery.enum';
 import { CreateSalesDeliveryDto, SalesDeliveryItemDto } from './dto/create-sales-delivery.dto';
 import { UpdateSalesDeliveryDto } from './dto/update-sales-delivery.dto';
 import { SalesDeliveryQueryDto } from './dto/sales-delivery-query.dto';
@@ -37,6 +41,7 @@ export interface SalesDeliveryListItem {
   itemsCount: number;
   totalCost: number;
   status: SalesDeliveryStatus;
+  deliveryProgress: SalesDeliveryProgress;
 }
 
 /** A deliverable invoice line: ordered vs already-delivered vs remaining. */
@@ -122,6 +127,61 @@ export class SalesDeliveryService {
       },
       lines,
     };
+  }
+
+  /**
+   * Auto-create ONE draft delivery note for a just-posted invoice's stock lines,
+   * pre-filled with the full ordered quantity. No-op if the invoice has no stock
+   * lines or a delivery note already exists for it. A DRAFT has no stock/accounting
+   * effect — the user sets the actual delivery date and per-line quantities, then posts.
+   */
+  async autoCreateForInvoice(invoiceId: string, actorId?: string): Promise<SalesDelivery | null> {
+    const invoice = await this.invoiceRepository.findOne({
+      where: { id: invoiceId },
+      relations: { items: true },
+      order: { items: { lineNumber: 'ASC' } },
+    });
+    if (!invoice || invoice.status !== SalesInvoiceStatus.POSTED) return null;
+    // Don't duplicate if an order already exists for this invoice.
+    if (await this.repository.count({ where: { salesInvoiceId: invoiceId } })) return null;
+    // Stock lines are deliverable now; manufacturing lines join after production (Phase 2).
+    const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.MANUFACTURING);
+    if (!stockItems.length) return null;
+
+    const delivery = this.repository.create({
+      deliveryNumber: null,
+      deliveryDate: invoice.invoiceDate,
+      expectedDeliveryDate: null,
+      deliveryProgress: SalesDeliveryProgress.PENDING,
+      source: SalesDeliverySource.INVOICE,
+      salesInvoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      customerId: invoice.customerId,
+      warehouseId: invoice.warehouseId ?? stockItems[0].warehouseId!,
+      branchId: invoice.branchId,
+      fiscalYearId: invoice.fiscalYearId,
+      accountingPeriodId: invoice.accountingPeriodId,
+      status: SalesDeliveryStatus.DRAFT,
+      createdBy: actorId ?? null,
+      items: stockItems.map((it, idx) => ({
+        lineNumber: idx + 1,
+        salesInvoiceItemId: it.id,
+        productId: it.productId,
+        warehouseId: it.warehouseId ?? invoice.warehouseId!,
+        unitId: it.unitId,
+        productCode: it.productCode,
+        productName: it.productName,
+        unitName: it.unitName,
+        lineType: it.lineType ?? SalesLineType.STOCK,
+        orderedQuantity: it.quantity,
+        deliveredQuantity: 0,
+        quantity: 0,
+        actualDeliveryDate: null,
+        unitCostAtPost: 0,
+        lineCost: 0,
+      })),
+    });
+    return this.repository.save(delivery);
   }
 
   // =========================================================
@@ -231,6 +291,7 @@ export class SalesDeliveryService {
       itemsCount: d.items?.length ?? 0,
       totalCost: d.totalCost,
       status: d.status,
+      deliveryProgress: d.deliveryProgress,
     }));
     return paginate(rows, total, query.page, query.perPage);
   }
@@ -245,6 +306,19 @@ export class SalesDeliveryService {
       throw new NotFoundException('لم يتم العثور على إذن التسليم');
     }
     return d;
+  }
+
+  /** Set the planned/expected delivery date of an order. */
+  async setExpectedDate(
+    id: string,
+    expectedDeliveryDate: string,
+    actorId?: string,
+    branchScope: BranchScope = null,
+  ): Promise<SalesDelivery> {
+    const d = await this.findOne(id, branchScope);
+    d.expectedDeliveryDate = expectedDeliveryDate;
+    d.updatedBy = actorId ?? null;
+    return this.repository.save(d);
   }
 
   async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {

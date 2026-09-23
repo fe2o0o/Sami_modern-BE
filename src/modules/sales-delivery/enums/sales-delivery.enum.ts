@@ -18,6 +18,26 @@ export const SALES_DELIVERY_STATUS_LABELS: Record<SalesDeliveryStatus, string> =
   [SalesDeliveryStatus.REVERSED]: 'معكوس',
 };
 
+/**
+ * Fulfilment progress of a delivery ORDER (one per invoice). Independent of the
+ * document lifecycle (`status`): lines are confirmed one-by-one, and this rolls
+ * up their progress.
+ */
+export enum SalesDeliveryProgress {
+  /** No line delivered yet. */
+  PENDING = 'pending',
+  /** Some quantity delivered, but not all. */
+  PARTIAL = 'partial',
+  /** Every stock line fully delivered. */
+  DELIVERED = 'delivered',
+}
+
+export const SALES_DELIVERY_PROGRESS_LABELS: Record<SalesDeliveryProgress, string> = {
+  [SalesDeliveryProgress.PENDING]: 'غير مسلّم',
+  [SalesDeliveryProgress.PARTIAL]: 'مسلّم جزئياً',
+  [SalesDeliveryProgress.DELIVERED]: 'تم التسليم',
+};
+
 /** Where a delivery note's lines come from. */
 export enum SalesDeliverySource {
   /** Fulfils a posted sales invoice (releases its reservation). */

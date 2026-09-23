@@ -1,7 +1,11 @@
 import { Column, Entity, Index, OneToMany } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
-import { SalesDeliverySource, SalesDeliveryStatus } from '../enums/sales-delivery.enum';
+import {
+  SalesDeliveryProgress,
+  SalesDeliverySource,
+  SalesDeliveryStatus,
+} from '../enums/sales-delivery.enum';
 import { SalesDeliveryItem } from './sales-delivery-item.entity';
 
 /**
@@ -15,8 +19,17 @@ export class SalesDelivery extends BaseEntity {
   @Column({ type: 'varchar', length: 50, nullable: true })
   deliveryNumber!: string | null;
 
+  /** Document date of the order. */
   @Column({ type: 'date' })
   deliveryDate!: string;
+
+  /** Planned/expected delivery date entered by the user (required at app level). */
+  @Column({ type: 'date', nullable: true })
+  expectedDeliveryDate!: string | null;
+
+  /** Roll-up fulfilment progress of the order's lines. */
+  @Column({ type: 'enum', enum: SalesDeliveryProgress, default: SalesDeliveryProgress.PENDING })
+  deliveryProgress!: SalesDeliveryProgress;
 
   @Column({ type: 'enum', enum: SalesDeliverySource, default: SalesDeliverySource.INVOICE })
   source!: SalesDeliverySource;

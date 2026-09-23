@@ -7,7 +7,12 @@ import {
 import { DataSource, EntityManager, In } from 'typeorm';
 import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { SalesDelivery } from './entities/sales-delivery.entity';
-import { SalesDeliverySource, SalesDeliveryStatus } from './enums/sales-delivery.enum';
+import { SalesDeliveryItem } from './entities/sales-delivery-item.entity';
+import {
+  SalesDeliveryProgress,
+  SalesDeliverySource,
+  SalesDeliveryStatus,
+} from './enums/sales-delivery.enum';
 import { ReverseSalesDeliveryDto } from './dto/reverse-sales-delivery.dto';
 import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
@@ -199,6 +204,245 @@ export class SalesDeliveryPostingService {
       await manager.getRepository(SalesDelivery).save(delivery);
       return this.reload(manager, id);
     });
+  }
+
+  // =========================================================
+  // PER-LINE CONFIRMATION (living delivery order)
+  // =========================================================
+  /**
+   * Confirm delivery of ONE line for a quantity (default: the full remaining),
+   * on the ACTUAL delivery date. Issues the stock at weighted-average cost,
+   * releases the invoice reservation, books DR COGS / CR inventory dated on the
+   * actual date, and advances the order + invoice progress.
+   */
+  async confirmLine(
+    deliveryId: string,
+    itemId: string,
+    quantity: number | undefined,
+    actualDate: string,
+    actorId?: string,
+    branchScope: string[] | null = null,
+  ): Promise<SalesDelivery> {
+    return this.dataSource.transaction(async (manager) => {
+      const delivery = await this.lock(manager, deliveryId);
+      if (!isWithinBranchScope(delivery.branchId, branchScope)) {
+        throw new NotFoundException('لم يتم العثور على إذن التسليم');
+      }
+      const item = delivery.items.find((i) => i.id === itemId);
+      if (!item) throw new NotFoundException('السطر غير موجود في إذن التسليم');
+      if (item.lineType === SalesLineType.MANUFACTURING) {
+        throw new BadRequestException('صنف تصنيع — بانتظار الإنتاج، لا يمكن تسليمه بعد');
+      }
+      const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0));
+      const qty = round3(quantity ?? remaining);
+      if (qty <= 0) throw new BadRequestException('لا توجد كمية متبقية للتسليم');
+      if (qty - remaining > 1e-6) throw new BadRequestException(`الكمية تتجاوز المتبقي (${remaining})`);
+
+      const { fiscalYear, period } = await this.resolvePostingContext(actualDate, manager);
+      const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+      if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
+      const product = (await this.loadProducts([item.productId], manager)).get(item.productId);
+      if (!product) throw new BadRequestException('المنتج غير موجود');
+      if (!product.trackInventory) throw new BadRequestException(`المنتج "${product.name}" ليس صنفاً مخزنياً`);
+      const cogsAcc = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId;
+      const invAcc = this.resolveInventoryAccount(product, settings);
+      if (!cogsAcc) throw new BadRequestException('حساب تكلفة المبيعات غير محدد في إعدادات المحاسبة');
+      if (!invAcc) throw new BadRequestException('حساب المخزون غير محدد في إعدادات المحاسبة');
+
+      const number = delivery.deliveryNumber ?? (await this.sequenceService.nextDocumentNumber('DN', fiscalYear, manager));
+      const stockLine: StockLineInput[] = [
+        { warehouseId: item.warehouseId, productId: item.productId, productName: item.productName ?? undefined, quantity: qty },
+      ];
+      const issued = await this.stockService.issue(stockLine, manager, {
+        movementType: StockMovementType.SALE,
+        sourceType: JournalSourceType.SALES_DELIVERY,
+        sourceId: delivery.id,
+        sourceNumber: number,
+        movementDate: actualDate,
+        actorId,
+        allowNegative: true,
+      });
+      const unitCost = issued[0].unitCost;
+      const lineCost = round2(qty * unitCost);
+
+      if (delivery.salesInvoiceId && item.salesInvoiceItemId) {
+        await this.stockService.releaseReservation(stockLine, manager);
+      }
+
+      await this.journalService.createSystemJournalEntry(
+        {
+          sourceType: JournalSourceType.SALES_DELIVERY,
+          sourceId: delivery.id,
+          sourceNumber: number,
+          entryDate: actualDate,
+          fiscalYearId: fiscalYear.id,
+          accountingPeriodId: period.id,
+          branchId: delivery.branchId,
+          description: `تسليم ${product.name ?? ''} (${qty}) — ${number}`,
+          lines: [
+            { accountId: cogsAcc, debit: lineCost, credit: 0 },
+            { accountId: invAcc, debit: 0, credit: lineCost },
+          ],
+          actorId,
+        },
+        manager,
+      );
+
+      item.deliveredQuantity = round3((item.deliveredQuantity ?? 0) + qty);
+      item.quantity = item.deliveredQuantity; // keep legacy field in sync
+      item.lineCost = round2((item.lineCost ?? 0) + lineCost);
+      item.unitCostAtPost = unitCost;
+      item.actualDeliveryDate = actualDate;
+
+      if (delivery.salesInvoiceId && item.salesInvoiceItemId) {
+        await this.applyInvoiceLineDelivery(manager, delivery.salesInvoiceId, item.salesInvoiceItemId, qty);
+      }
+
+      delivery.deliveryNumber = number;
+      delivery.totalCost = round2(delivery.items.reduce((s, i) => s + (i.lineCost ?? 0), 0));
+      delivery.deliveryProgress = this.computeProgress(delivery.items);
+      delivery.updatedBy = actorId ?? null;
+      await manager.getRepository(SalesDelivery).save(delivery);
+      return this.reload(manager, deliveryId);
+    });
+  }
+
+  /** Undo a confirmed line: receive the goods back, re-reserve, reverse its COGS. */
+  async reverseLine(
+    deliveryId: string,
+    itemId: string,
+    reversalDate: string,
+    actorId?: string,
+    branchScope: string[] | null = null,
+  ): Promise<SalesDelivery> {
+    return this.dataSource.transaction(async (manager) => {
+      const delivery = await this.lock(manager, deliveryId);
+      if (!isWithinBranchScope(delivery.branchId, branchScope)) {
+        throw new NotFoundException('لم يتم العثور على إذن التسليم');
+      }
+      const item = delivery.items.find((i) => i.id === itemId);
+      if (!item) throw new NotFoundException('السطر غير موجود في إذن التسليم');
+      const qty = round3(item.deliveredQuantity ?? 0);
+      if (qty <= 0) throw new BadRequestException('السطر غير مُسلّم');
+      const cost = round2(item.lineCost ?? 0);
+      const { fiscalYear, period } = await this.resolvePostingContext(reversalDate, manager);
+
+      await this.stockService.receive(
+        [{ warehouseId: item.warehouseId, productId: item.productId, quantity: qty, unitCost: item.unitCostAtPost }],
+        manager,
+        {
+          movementType: StockMovementType.SALE_REVERSAL,
+          sourceType: JournalSourceType.SALES_DELIVERY,
+          sourceId: delivery.id,
+          sourceNumber: delivery.deliveryNumber,
+          movementDate: reversalDate,
+          actorId,
+        },
+      );
+      if (delivery.salesInvoiceId && item.salesInvoiceItemId) {
+        await this.stockService.reserve(
+          [{ warehouseId: item.warehouseId, productId: item.productId, quantity: qty }],
+          manager,
+        );
+        await this.applyInvoiceLineDelivery(manager, delivery.salesInvoiceId, item.salesInvoiceItemId, -qty);
+      }
+      if (cost > 0) {
+        const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+        const product = (await this.loadProducts([item.productId], manager)).get(item.productId)!;
+        const cogsAcc = product.cogsAccountId ?? settings!.costOfGoodsSoldAccountId!;
+        const invAcc = this.resolveInventoryAccount(product, settings!)!;
+        await this.journalService.createSystemJournalEntry(
+          {
+            sourceType: JournalSourceType.SALES_DELIVERY,
+            sourceId: delivery.id,
+            sourceNumber: delivery.deliveryNumber,
+            entryDate: reversalDate,
+            fiscalYearId: fiscalYear.id,
+            accountingPeriodId: period.id,
+            branchId: delivery.branchId,
+            description: `عكس تسليم ${product.name ?? ''} — ${delivery.deliveryNumber ?? ''}`,
+            lines: [
+              { accountId: invAcc, debit: cost, credit: 0 },
+              { accountId: cogsAcc, debit: 0, credit: cost },
+            ],
+            actorId,
+          },
+          manager,
+        );
+      }
+
+      item.deliveredQuantity = 0;
+      item.quantity = 0;
+      item.lineCost = 0;
+      item.actualDeliveryDate = null;
+      delivery.totalCost = round2(delivery.items.reduce((s, i) => s + (i.lineCost ?? 0), 0));
+      delivery.deliveryProgress = this.computeProgress(delivery.items);
+      delivery.updatedBy = actorId ?? null;
+      await manager.getRepository(SalesDelivery).save(delivery);
+      return this.reload(manager, deliveryId);
+    });
+  }
+
+  /** Order progress from its stock lines' delivered vs ordered quantities. */
+  private computeProgress(items: SalesDeliveryItem[]): SalesDeliveryProgress {
+    const stock = items.filter((i) => i.lineType !== SalesLineType.MANUFACTURING);
+    if (!stock.length) return SalesDeliveryProgress.PENDING;
+    const anyDelivered = stock.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
+    const allDelivered = stock.every((i) => (i.deliveredQuantity ?? 0) + 1e-6 >= (i.orderedQuantity ?? 0));
+    return allDelivered
+      ? SalesDeliveryProgress.DELIVERED
+      : anyDelivered
+        ? SalesDeliveryProgress.PARTIAL
+        : SalesDeliveryProgress.PENDING;
+  }
+
+  /** Bump one invoice line's delivered quantity and recompute the invoice's status. */
+  private async applyInvoiceLineDelivery(
+    manager: EntityManager,
+    invoiceId: string,
+    salesInvoiceItemId: string,
+    deltaQty: number,
+  ): Promise<void> {
+    const invoice = await manager.getRepository(SalesInvoice).findOne({
+      where: { id: invoiceId },
+      relations: { items: true },
+    });
+    if (!invoice) return;
+    const inv = invoice.items.find((i) => i.id === salesInvoiceItemId);
+    if (inv) {
+      inv.deliveredQuantity = round3(Math.max(0, (inv.deliveredQuantity ?? 0) + deltaQty));
+      await manager.getRepository(SalesInvoiceItem).save(inv);
+    }
+    const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.MANUFACTURING);
+    const anyDelivered = stockItems.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
+    const allDelivered =
+      stockItems.length > 0 && stockItems.every((i) => (i.deliveredQuantity ?? 0) + 1e-6 >= i.quantity);
+    invoice.deliveryStatus = !stockItems.length
+      ? InvoiceDeliveryStatus.NOT_APPLICABLE
+      : allDelivered
+        ? InvoiceDeliveryStatus.DELIVERED
+        : anyDelivered
+          ? InvoiceDeliveryStatus.PARTIAL
+          : InvoiceDeliveryStatus.PENDING;
+    await manager.getRepository(SalesInvoice).save(invoice);
+  }
+
+  /** Find the open accounting period + fiscal year that contains a date. */
+  private async resolvePostingContext(
+    date: string,
+    manager: EntityManager,
+  ): Promise<{ fiscalYear: FiscalYear; period: AccountingPeriod }> {
+    const period = await manager
+      .getRepository(AccountingPeriod)
+      .createQueryBuilder('p')
+      .where('p.startDate <= :d AND p.endDate >= :d', { d: date })
+      .andWhere('p.isClosed = false')
+      .getOne();
+    if (!period) throw new BadRequestException('لا توجد فترة محاسبية مفتوحة تشمل تاريخ التسليم');
+    const fiscalYear = await manager.getRepository(FiscalYear).findOne({ where: { id: period.fiscalYearId } });
+    if (!fiscalYear) throw new NotFoundException('السنة المالية غير موجودة');
+    if (fiscalYear.isClosed) throw new BadRequestException('السنة المالية مغلقة');
+    return { fiscalYear, period };
   }
 
   // =========================================================

@@ -29,6 +29,7 @@ import {
   JournalLineInput,
 } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { SalesDeliveryService } from '../sales-delivery/sales-delivery.service';
 
 /**
  * Owns the accounting/inventory side-effects of a sales invoice. Posting and
@@ -47,6 +48,7 @@ export class SalesInvoicePostingService {
     private readonly cashSubledger: CashSubledgerService,
     private readonly manufacturingService: ManufacturingService,
     private readonly journalService: JournalEntryService,
+    private readonly salesDeliveryService: SalesDeliveryService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -54,7 +56,7 @@ export class SalesInvoicePostingService {
   // POST
   // =========================================================
   async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<SalesInvoice> {
-    return this.dataSource.transaction(async (manager) => {
+    const invoice = await this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(manager, id);
       if (!isWithinBranchScope(invoice.branchId, branchScope)) {
         throw new NotFoundException('لم يتم العثور على فاتورة المبيعات');
@@ -217,6 +219,15 @@ export class SalesInvoicePostingService {
 
       return this.reload(manager, id);
     });
+
+    // Auto-create a DRAFT delivery note for the invoice's stock lines (best-effort:
+    // a draft has no financial/stock effect, so a failure here never fails posting).
+    try {
+      await this.salesDeliveryService.autoCreateForInvoice(id, actorId);
+    } catch {
+      /* non-fatal — a draft has no effect; the user can still create it manually */
+    }
+    return invoice;
   }
 
   // =========================================================

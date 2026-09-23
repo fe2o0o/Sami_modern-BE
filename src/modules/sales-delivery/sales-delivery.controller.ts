@@ -5,10 +5,12 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
 } from '@nestjs/common';
+import { IsDateString } from 'class-validator';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SalesDeliveryService } from './sales-delivery.service';
 import { SalesDeliveryPostingService } from './sales-delivery-posting.service';
@@ -16,10 +18,16 @@ import { CreateSalesDeliveryDto } from './dto/create-sales-delivery.dto';
 import { UpdateSalesDeliveryDto } from './dto/update-sales-delivery.dto';
 import { SalesDeliveryQueryDto } from './dto/sales-delivery-query.dto';
 import { ReverseSalesDeliveryDto } from './dto/reverse-sales-delivery.dto';
+import { ConfirmLineDto, ReverseLineDto } from './dto/confirm-line.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
+
+class ExpectedDateDto {
+  @IsDateString({}, { message: 'تاريخ التسليم المتوقّع غير صحيح' })
+  expectedDeliveryDate!: string;
+}
 
 @ApiTags('Sales Deliveries')
 @ApiBearerAuth('access-token')
@@ -89,6 +97,47 @@ export class SalesDeliveryController {
     @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.post(id, actorId, branchScope);
+  }
+
+  @Patch(':id/expected-date')
+  @RequirePermissions('sales_deliveries.edit')
+  @ResponseMessage('تم تحديث تاريخ التسليم المتوقّع')
+  @ApiOperation({ summary: 'تحديد تاريخ التسليم المتوقّع للإذن' })
+  setExpectedDate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ExpectedDateDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.service.setExpectedDate(id, dto.expectedDeliveryDate, actorId, branchScope);
+  }
+
+  @Post(':id/items/:itemId/confirm')
+  @RequirePermissions('sales_deliveries.post')
+  @ResponseMessage('تم تأكيد تسليم الصنف بنجاح')
+  @ApiOperation({ summary: 'تأكيد تسليم سطر (صرف مخزون + تكلفة بتاريخ التسليم الفعلي)' })
+  confirmLine(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Body() dto: ConfirmLineDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.posting.confirmLine(id, itemId, dto.quantity, dto.actualDeliveryDate, actorId, branchScope);
+  }
+
+  @Post(':id/items/:itemId/reverse')
+  @RequirePermissions('sales_deliveries.reverse')
+  @ResponseMessage('تم عكس تسليم الصنف بنجاح')
+  @ApiOperation({ summary: 'عكس تسليم سطر' })
+  reverseLine(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Body() dto: ReverseLineDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.posting.reverseLine(id, itemId, dto.reversalDate, actorId, branchScope);
   }
 
   @Post(':id/reverse')

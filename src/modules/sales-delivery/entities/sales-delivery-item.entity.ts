@@ -1,6 +1,7 @@
 import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
+import { SalesLineType } from '../../sales-invoice/enums/sales-invoice.enum';
 import { SalesDelivery } from './sales-delivery.entity';
 
 /** One delivered line: the quantity of a product issued out of a warehouse. */
@@ -38,8 +39,26 @@ export class SalesDeliveryItem extends BaseEntity {
   @Column({ type: 'varchar', length: 100, nullable: true })
   unitName!: string | null;
 
+  /** Delivered quantity of THIS record (legacy note model). */
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   quantity!: number;
+
+  // ── Living-order model (per-line confirmation) ──
+  /** Total quantity to deliver for this line (from the invoice). */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  orderedQuantity!: number;
+
+  /** Quantity confirmed/delivered so far (accumulates across confirmations). */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  deliveredQuantity!: number;
+
+  /** Actual delivery date of the last confirmation on this line. */
+  @Column({ type: 'date', nullable: true })
+  actualDeliveryDate!: string | null;
+
+  /** STOCK lines deliver from inventory; MANUFACTURING lines wait for production. */
+  @Column({ type: 'enum', enum: SalesLineType, default: SalesLineType.STOCK })
+  lineType!: SalesLineType;
 
   /** Weighted-average unit cost the goods were issued at (COGS basis). */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
