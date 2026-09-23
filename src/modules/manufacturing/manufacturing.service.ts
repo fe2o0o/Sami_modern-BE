@@ -7,11 +7,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { ManufacturingOrder } from './entities/manufacturing-order.entity';
+import { ManufacturingOrderComponent } from './entities/manufacturing-order-component.entity';
 import { ManufacturingOrderStatus } from './enums/manufacturing.enum';
 import { CreateManufacturingOrderDto } from './dto/create-manufacturing-order.dto';
 import { UpdateManufacturingOrderDto } from './dto/update-manufacturing-order.dto';
+import { ManufacturingComponentDto } from './dto/manufacturing-component.dto';
 import { ManufacturingOrderQueryDto } from './dto/manufacturing-order-query.dto';
 import { Product } from '../product/entities/product.entity';
+import { ProductComponent } from '../product/entities/product-component.entity';
 import { Customer } from '../customer/entities/customer.entity';
 import { Branch } from '../branch/entities/branch.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
@@ -51,6 +54,9 @@ export interface ManufacturingFromInvoiceInput {
   sourceType: string;
   sourceId: string;
   sourceNumber: string | null;
+  /** The exact invoice line this order fulfils (for the delivery back-link). */
+  salesInvoiceItemId?: string | null;
+  accountingPeriodId?: string | null;
   actorId?: string | null;
 }
 
@@ -61,6 +67,8 @@ export class ManufacturingService {
     private readonly orderRepository: Repository<ManufacturingOrder>,
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
+    @InjectRepository(ProductComponent)
+    private readonly productComponentRepository: Repository<ProductComponent>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(Branch)
@@ -91,6 +99,8 @@ export class ManufacturingService {
     return this.dataSource.transaction(async (manager) => {
       const orderNumber = await this.sequenceService.nextDocumentNumber('MO', fiscalYear, manager);
       const repo = manager.getRepository(ManufacturingOrder);
+      // Components: explicit lines if given, otherwise the product's default BOM.
+      const components = await this.buildOrderComponents(dto.productId, dto.quantity, dto.components, manager);
       return repo.save(
         repo.create({
           orderNumber,
@@ -109,7 +119,10 @@ export class ManufacturingService {
           // A branch-restricted user's documents are forced onto their own branch.
           branchId: resolveWriteBranch(branchScope, dto.branchId),
           fiscalYearId: fiscalYear.id,
+          manufacturingFee: dto.manufacturingFee ?? 0,
+          factorySupplierId: dto.factorySupplierId ?? null,
           notes: dto.notes ?? null,
+          components,
           createdBy: actorId ?? null,
         }),
       );
@@ -143,13 +156,35 @@ export class ManufacturingService {
     if (dto.color !== undefined) order.color = dto.color ?? null;
     if (dto.material !== undefined) order.material = dto.material ?? null;
     if (dto.specifications !== undefined) order.specifications = dto.specifications ?? null;
+    if (dto.manufacturingFee !== undefined) order.manufacturingFee = dto.manufacturingFee ?? 0;
+    if (dto.factorySupplierId !== undefined) order.factorySupplierId = dto.factorySupplierId ?? null;
     // A branch-restricted user cannot move a document to another branch.
     if (branchScope !== null) order.branchId = resolveWriteBranch(branchScope, order.branchId);
     else if (dto.branchId !== undefined) order.branchId = dto.branchId ?? null;
     if (dto.notes !== undefined) order.notes = dto.notes ?? null;
     order.updatedBy = actorId ?? null;
 
-    return this.orderRepository.save(order);
+    const saved = await this.orderRepository.save(order);
+    // Replace the component list when provided (editable per order).
+    if (dto.components) {
+      await this.replaceComponents(order.id, order.productId, order.quantity, dto.components);
+    }
+    return saved;
+  }
+
+  /** Replace an order's component lines transactionally. */
+  private async replaceComponents(
+    orderId: string,
+    productId: string,
+    orderQuantity: number,
+    components: ManufacturingComponentDto[],
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(ManufacturingOrderComponent).delete({ manufacturingOrderId: orderId });
+      const comps = await this.buildOrderComponents(productId, orderQuantity, components, manager);
+      comps.forEach((c) => (c.manufacturingOrderId = orderId));
+      if (comps.length) await manager.getRepository(ManufacturingOrderComponent).save(comps);
+    });
   }
 
   async setStatus(
@@ -240,16 +275,20 @@ export class ManufacturingService {
 
   async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const order = await this.findOne(id, branchScope);
-    const [branch, fiscalYear, users] = await Promise.all([
+    const [branch, fiscalYear, users, components] = await Promise.all([
       order.branchId ? this.branchRepository.findOne({ where: { id: order.branchId } }) : null,
       order.fiscalYearId ? this.fiscalYearRepository.findOne({ where: { id: order.fiscalYearId } }) : null,
       this.userNames([order.createdBy, order.updatedBy]),
+      this.orderRepository.manager
+        .getRepository(ManufacturingOrderComponent)
+        .find({ where: { manufacturingOrderId: id }, order: { lineNumber: 'ASC' } }),
     ]);
     return {
       ...order,
       branchName: branch?.name ?? null,
       fiscalYearName: fiscalYear?.name ?? null,
       createdByName: users.get(order.createdBy ?? '') ?? null,
+      components,
     };
   }
 
@@ -259,10 +298,11 @@ export class ManufacturingService {
   private async getEditable(id: string, branchScope: BranchScope = null): Promise<ManufacturingOrder> {
     const order = await this.findOne(id, branchScope);
     if (
+      order.status === ManufacturingOrderStatus.PRODUCED ||
       order.status === ManufacturingOrderStatus.DONE ||
       order.status === ManufacturingOrderStatus.CANCELLED
     ) {
-      throw new BadRequestException('لا يمكن تعديل أمر منتهٍ أو ملغى');
+      throw new BadRequestException('لا يمكن تعديل أمر تم إنتاجه أو منتهٍ أو ملغى');
     }
     return order;
   }
@@ -299,6 +339,8 @@ export class ManufacturingService {
     const fiscalYear = await this.resolveFiscalYearIn(input.fiscalYearId, manager);
     const orderNumber = await this.sequenceService.nextDocumentNumber('MO', fiscalYear, manager);
     const repo = manager.getRepository(ManufacturingOrder);
+    // Copy the product's Bill of Materials (per-unit × order quantity).
+    const components = await this.buildOrderComponents(input.productId, input.quantity, undefined, manager);
     return repo.save(
       repo.create({
         orderNumber,
@@ -316,10 +358,54 @@ export class ManufacturingService {
         status: ManufacturingOrderStatus.NEW,
         branchId: input.branchId,
         fiscalYearId: fiscalYear.id,
+        accountingPeriodId: input.accountingPeriodId ?? null,
         sourceType: input.sourceType,
         sourceId: input.sourceId,
         sourceNumber: input.sourceNumber,
+        salesInvoiceItemId: input.salesInvoiceItemId ?? null,
+        components,
         createdBy: input.actorId ?? null,
+      }),
+    );
+  }
+
+  /**
+   * Build a manufacturing order's component lines. Uses the explicit lines when
+   * provided (total quantity as entered), otherwise copies the product's default
+   * BOM scaled by the order quantity (BOM is per-unit).
+   */
+  private async buildOrderComponents(
+    productId: string,
+    orderQuantity: number,
+    explicit: ManufacturingComponentDto[] | undefined,
+    manager: EntityManager,
+  ): Promise<ManufacturingOrderComponent[]> {
+    const compRepo = manager.getRepository(ManufacturingOrderComponent);
+    let source: { componentProductId: string; quantity: number }[];
+    if (explicit?.length) {
+      source = explicit.map((c) => ({ componentProductId: c.componentProductId, quantity: c.quantity }));
+    } else {
+      const bom = await manager
+        .getRepository(ProductComponent)
+        .find({ where: { parentProductId: productId } });
+      source = bom.map((b) => ({
+        componentProductId: b.componentProductId,
+        quantity: round3(b.quantity * orderQuantity),
+      }));
+    }
+    if (!source.length) return [];
+    const products = await manager.getRepository(Product).find({
+      where: { id: In(source.map((s) => s.componentProductId)) },
+      relations: { unit: true },
+    });
+    const pMap = new Map(products.map((p): [string, Product] => [p.id, p]));
+    return source.map((s, i) =>
+      compRepo.create({
+        lineNumber: i + 1,
+        componentProductId: s.componentProductId,
+        componentProductName: pMap.get(s.componentProductId)?.name ?? null,
+        unitName: pMap.get(s.componentProductId)?.unit?.name ?? null,
+        quantity: s.quantity,
       }),
     );
   }
@@ -337,4 +423,8 @@ export class ManufacturingService {
     if (!latest) throw new BadRequestException('لا توجد سنة مالية');
     return latest;
   }
+}
+
+function round3(v: number): number {
+  return Math.round((v + Number.EPSILON) * 1000) / 1000;
 }

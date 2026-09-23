@@ -13,6 +13,7 @@ import { ProductCategory } from '../../product-category/entities/product-categor
 import { Brand } from '../../brand/entities/brand.entity';
 import { Unit } from '../../unit/entities/unit.entity';
 import { ProductImage } from './product-image.entity';
+import { ProductComponent } from './product-component.entity';
 
 /**
  * Central product master used by inventory, purchasing, sales and
@@ -113,4 +114,8 @@ export class Product extends BaseEntity {
   // ── Images ──
   @OneToMany(() => ProductImage, (image) => image.product, { cascade: true })
   images!: ProductImage[];
+
+  // ── Bill of Materials (for manufactured products) ──
+  @OneToMany(() => ProductComponent, (c) => c.parentProduct, { cascade: true })
+  components!: ProductComponent[];
 }

@@ -54,7 +54,7 @@ export class CodeSettingService {
       s = await this.repository.save(
         this.repository.create({
           entityKey,
-          autoGenerate: false,
+          autoGenerate: true, // auto-generation is the default for every module
           prefix: def.prefix,
           padding: 4,
           nextNumber: 1,
@@ -110,7 +110,7 @@ export class CodeSettingService {
         const def = CODE_ENTITIES.find((e) => e.key === entityKey);
         if (!def) throw new NotFoundException('كيان غير معروف لإعداد الأكواد');
         await repo.save(
-          repo.create({ entityKey, autoGenerate: false, prefix: def.prefix, padding: 4, nextNumber: 1 }),
+          repo.create({ entityKey, autoGenerate: true, prefix: def.prefix, padding: 4, nextNumber: 1 }),
         );
         s = await repo.findOne({ where: { entityKey }, lock: { mode: 'pessimistic_write' } });
       }

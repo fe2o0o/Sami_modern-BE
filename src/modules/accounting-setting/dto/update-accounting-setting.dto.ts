@@ -38,6 +38,9 @@ export class UpdateAccountingSettingDto {
   @AccountId()
   inventoryAdjustmentAccountId?: string | null;
 
+  @AccountId()
+  manufacturingFeeAccountId?: string | null;
+
   // ── Customers & Suppliers ──
   @AccountId()
   customerControlAccountId?: string | null;

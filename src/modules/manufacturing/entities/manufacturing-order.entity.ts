@@ -1,7 +1,8 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Column, Entity, Index, OneToMany } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
 import { ManufacturingOrderStatus } from '../enums/manufacturing.enum';
+import { ManufacturingOrderComponent } from './manufacturing-order-component.entity';
 
 /**
  * A manufacturing (production) order — a made-to-order production request that
@@ -66,8 +67,42 @@ export class ManufacturingOrder extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   fiscalYearId!: string | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  accountingPeriodId!: string | null;
+
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
+
+  // ── Production inputs ──
+  /** Warehouse the components are consumed from and the finished good produced into. */
+  @Column({ type: 'uuid', nullable: true })
+  warehouseId!: string | null;
+
+  /** Manufacturing fee (labour/overhead, or the factory's charge). */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  manufacturingFee!: number;
+
+  /** External factory (a supplier) when production is outsourced; null = in-house. */
+  @Column({ type: 'uuid', nullable: true })
+  factorySupplierId!: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  factorySupplierName!: string | null;
+
+  // ── Production result ──
+  /** Total cost capitalised into the finished product = components + fee. */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  totalCost!: number;
+
+  @Column({ type: 'uuid', nullable: true })
+  journalEntryId!: string | null;
+
+  @Column({ type: 'datetime', nullable: true })
+  producedAt!: Date | null;
+
+  // ── Bill of materials (copied from the product, editable) ──
+  @OneToMany(() => ManufacturingOrderComponent, (c) => c.manufacturingOrder, { cascade: true })
+  components!: ManufacturingOrderComponent[];
 
   // ── Source link (the sales invoice that requested this order) ──
   @Column({ type: 'varchar', length: 50, nullable: true })
@@ -78,6 +113,10 @@ export class ManufacturingOrder extends BaseEntity {
 
   @Column({ type: 'varchar', length: 100, nullable: true })
   sourceNumber!: string | null;
+
+  /** The exact sales invoice LINE this order fulfils (for delivery back-link). */
+  @Column({ type: 'uuid', nullable: true })
+  salesInvoiceItemId!: string | null;
 
   // ── Status timestamps ──
   @Column({ type: 'datetime', nullable: true })

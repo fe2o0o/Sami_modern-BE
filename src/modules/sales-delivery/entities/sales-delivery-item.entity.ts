@@ -24,8 +24,10 @@ export class SalesDeliveryItem extends BaseEntity {
   @Column({ type: 'uuid' })
   productId!: string;
 
-  @Column({ type: 'uuid' })
-  warehouseId!: string;
+  /** The warehouse to issue from. Null on a MANUFACTURING line until production
+   *  assigns the produced-into warehouse (before that the line just waits). */
+  @Column({ type: 'uuid', nullable: true })
+  warehouseId!: string | null;
 
   @Column({ type: 'uuid', nullable: true })
   unitId!: string | null;
@@ -59,6 +61,11 @@ export class SalesDeliveryItem extends BaseEntity {
   /** STOCK lines deliver from inventory; MANUFACTURING lines wait for production. */
   @Column({ type: 'enum', enum: SalesLineType, default: SalesLineType.STOCK })
   lineType!: SalesLineType;
+
+  /** For a MANUFACTURING line: the production order that must finish before this
+   *  line can be delivered (set null for stock/service lines). */
+  @Column({ type: 'uuid', nullable: true })
+  manufacturingOrderId!: string | null;
 
   /** Weighted-average unit cost the goods were issued at (COGS basis). */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })

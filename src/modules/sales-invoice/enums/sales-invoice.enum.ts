@@ -48,15 +48,19 @@ export enum SalesDiscountType {
  * MANUFACTURING→ made-to-order: no stock/COGS effect; posting the invoice
  *                creates a linked manufacturing (production) order with the
  *                customer's specification.
+ * SERVICE      → a non-physical service (e.g. a cash-withdrawal fee). Revenue
+ *                only: no stock, no reservation, no COGS, and no delivery line.
  */
 export enum SalesLineType {
   STOCK = 'stock',
   MANUFACTURING = 'manufacturing',
+  SERVICE = 'service',
 }
 
 export const SALES_LINE_TYPE_LABELS: Record<SalesLineType, string> = {
   [SalesLineType.STOCK]: 'من المخزن',
   [SalesLineType.MANUFACTURING]: 'تصنيع',
+  [SalesLineType.SERVICE]: 'خدمة',
 };
 
 /** How an employee's sales commission on an invoice is calculated. */

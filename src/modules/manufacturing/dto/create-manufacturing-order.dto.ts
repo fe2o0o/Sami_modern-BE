@@ -1,12 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsDateString,
   IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { ManufacturingComponentDto } from './manufacturing-component.dto';
 
 /**
  * Create a manufacturing (production) request. No components/costs — it captures
@@ -70,4 +74,24 @@ export class CreateManufacturingOrderDto {
   @IsOptional()
   @IsString()
   notes?: string | null;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'رسوم التصنيع الافتراضية' })
+  @IsOptional()
+  @IsNumber({}, { message: 'رسوم التصنيع يجب أن تكون رقماً' })
+  @Min(0, { message: 'رسوم التصنيع لا يمكن أن تكون سالبة' })
+  manufacturingFee?: number | null;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'مصنع (مورّد) خارجي' })
+  @IsOptional()
+  @IsUUID()
+  factorySupplierId?: string | null;
+
+  /** BOM component lines (total quantity for the whole order). When omitted on a
+   *  manual create, the product's default BOM is copied automatically. */
+  @ApiPropertyOptional({ type: [ManufacturingComponentDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ManufacturingComponentDto)
+  components?: ManufacturingComponentDto[];
 }

@@ -32,6 +32,12 @@ export class AccountingSetting extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   inventoryAdjustmentAccountId!: string | null;
 
+  /** Credit account for the manufacturing fee on in-house production (labour /
+   *  overhead / applied-manufacturing). For a factory order the fee credits the
+   *  supplier control account instead. */
+  @Column({ type: 'uuid', nullable: true })
+  manufacturingFeeAccountId!: string | null;
+
   // ── Customers & Suppliers ──────────────────────────────
   @Column({ type: 'uuid', nullable: true })
   customerControlAccountId!: string | null;

@@ -10,6 +10,7 @@ export enum SupplierTransactionType {
   PAYMENT = 'payment',
   ADJUSTMENT = 'adjustment',
   REVERSAL = 'reversal',
+  MANUFACTURING_FEE = 'manufacturing_fee',
 }
 
 export const SUPPLIER_TRANSACTION_TYPE_LABELS: Record<
@@ -22,4 +23,5 @@ export const SUPPLIER_TRANSACTION_TYPE_LABELS: Record<
   [SupplierTransactionType.PAYMENT]: 'سند صرف',
   [SupplierTransactionType.ADJUSTMENT]: 'تسوية',
   [SupplierTransactionType.REVERSAL]: 'عكس قيد',
+  [SupplierTransactionType.MANUFACTURING_FEE]: 'رسوم تصنيع',
 };

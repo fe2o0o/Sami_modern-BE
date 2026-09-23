@@ -34,6 +34,7 @@ export enum JournalSourceType {
   CASH_TRANSFER = 'cash_transfer',
   BANK_TRANSFER = 'bank_transfer',
   INVENTORY_ADJUSTMENT = 'inventory_adjustment',
+  MANUFACTURING = 'manufacturing',
   PAYROLL = 'payroll',
 }
 
@@ -57,6 +58,7 @@ export const JOURNAL_SOURCE_TYPE_LABELS: Record<JournalSourceType, string> = {
   [JournalSourceType.CASH_TRANSFER]: 'تحويل نقدي',
   [JournalSourceType.BANK_TRANSFER]: 'تحويل بنكي',
   [JournalSourceType.INVENTORY_ADJUSTMENT]: 'تسوية مخزون',
+  [JournalSourceType.MANUFACTURING]: 'أمر تصنيع',
   [JournalSourceType.PAYROLL]: 'رواتب',
 };
 

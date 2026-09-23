@@ -1,11 +1,13 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { GeneralLedgerService } from './general-ledger.service';
 import { TrialBalanceService } from './trial-balance.service';
 import { FinancialStatementsService } from './financial-statements.service';
+import { TreasuryCashReportService, CashAccountKind } from './treasury-cash-report.service';
 import { GeneralLedgerQueryDto } from './dto/general-ledger-query.dto';
 import { TrialBalanceQueryDto } from './dto/trial-balance-query.dto';
 import { FinancialStatementQueryDto } from './dto/financial-statement-query.dto';
+import { CashAccountsReportQueryDto } from './dto/cash-accounts-report-query.dto';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 
@@ -23,6 +25,7 @@ export class AccountingReportController {
     private readonly generalLedger: GeneralLedgerService,
     private readonly trialBalance: TrialBalanceService,
     private readonly financialStatements: FinancialStatementsService,
+    private readonly treasuryCashReport: TreasuryCashReportService,
   ) {}
 
   @Get('general-ledger')
@@ -51,5 +54,27 @@ export class AccountingReportController {
   @ApiOperation({ summary: 'الميزانية — الأصول والخصوم وحقوق الملكية حتى تاريخ' })
   getBalanceSheet(@Query() query: FinancialStatementQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.financialStatements.balanceSheet(query, branchScope);
+  }
+
+  @Get('cash-accounts')
+  @RequirePermissions('accounting_reports.view')
+  @ApiOperation({ summary: 'تقرير الخزائن — أرصدة وحركة الخزائن والحسابات البنكية' })
+  getCashAccounts(@Query() query: CashAccountsReportQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.treasuryCashReport.summary(query, branchScope);
+  }
+
+  @Get('cash-accounts/:kind/:id/statement')
+  @RequirePermissions('accounting_reports.view')
+  @ApiOperation({ summary: 'كشف حركة خزينة/حساب بنكي معيّن' })
+  getCashAccountStatement(
+    @Param('kind') kind: string,
+    @Param('id') id: string,
+    @Query() query: CashAccountsReportQueryDto,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    if (kind !== 'treasury' && kind !== 'bank') {
+      throw new BadRequestException('نوع الحساب غير صالح');
+    }
+    return this.treasuryCashReport.statement(kind as CashAccountKind, id, query, branchScope);
   }
 }

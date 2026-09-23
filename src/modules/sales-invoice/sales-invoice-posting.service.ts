@@ -97,7 +97,7 @@ export class SalesInvoicePostingService {
       // the COGS entry happen later on the delivery note. MANUFACTURING lines are
       // made-to-order: they touch no stock and get a linked production order.
       const stockItems = items.filter(
-        (i) => i.lineType !== SalesLineType.MANUFACTURING && products.get(i.productId)?.trackInventory,
+        (i) => i.lineType === SalesLineType.STOCK && products.get(i.productId)?.trackInventory,
       );
       const manufacturingItems = items.filter((i) => i.lineType === SalesLineType.MANUFACTURING);
 
@@ -168,16 +168,51 @@ export class SalesInvoicePostingService {
           },
           manager,
         );
+        // Also mirror the sale into the customer subledger as an invoice debit plus
+        // an immediate receipt credit, so a cash sale still appears on the customer
+        // statement. Net balance impact is zero (paid on the spot).
+        await this.customerLedger.record(
+          {
+            customerId: invoice.customerId,
+            transactionDate: invoice.invoiceDate,
+            type: CustomerTransactionType.SALES_INVOICE,
+            sourceType: JournalSourceType.SALES_INVOICE,
+            sourceId: invoice.id,
+            sourceNumber: invoiceNumber,
+            debit: invoice.totalAmount,
+            credit: 0,
+            description: `فاتورة مبيعات نقدية ${invoiceNumber}`,
+            actorId,
+          },
+          manager,
+        );
+        await this.customerLedger.record(
+          {
+            customerId: invoice.customerId,
+            transactionDate: invoice.invoiceDate,
+            type: CustomerTransactionType.RECEIPT,
+            sourceType: JournalSourceType.SALES_INVOICE,
+            sourceId: invoice.id,
+            sourceNumber: invoiceNumber,
+            debit: 0,
+            credit: invoice.totalAmount,
+            description: `تحصيل فاتورة نقدية ${invoiceNumber}`,
+            actorId,
+          },
+          manager,
+        );
         invoice.paidAmount = invoice.totalAmount;
         invoice.remainingAmount = 0;
       }
 
       invoice.invoiceNumber = invoiceNumber;
       invoice.status = SalesInvoiceStatus.POSTED;
-      // Stock lines start awaiting delivery; a manufacturing-only invoice never ships.
-      invoice.deliveryStatus = stockItems.length
-        ? SalesDeliveryStatus.PENDING
-        : SalesDeliveryStatus.NOT_APPLICABLE;
+      // Stock + manufacturing lines both ship (manufacturing after production);
+      // an invoice with neither (service-only) is not applicable for delivery.
+      invoice.deliveryStatus =
+        stockItems.length || manufacturingItems.length
+          ? SalesDeliveryStatus.PENDING
+          : SalesDeliveryStatus.NOT_APPLICABLE;
       invoice.journalEntryId = journalEntry.id;
       invoice.postedAt = new Date();
       invoice.postedBy = actorId ?? null;
@@ -210,6 +245,8 @@ export class SalesInvoicePostingService {
               sourceType: JournalSourceType.SALES_INVOICE,
               sourceId: invoice.id,
               sourceNumber: invoiceNumber,
+              salesInvoiceItemId: item.id,
+              accountingPeriodId: invoice.accountingPeriodId,
               actorId,
             },
             manager,
@@ -276,7 +313,7 @@ export class SalesInvoicePostingService {
       const products = await this.loadProducts(invoice.items.map((i) => i.productId), manager);
       const stockLines: StockLineInput[] = invoice.items
         .filter(
-          (i) => i.lineType !== SalesLineType.MANUFACTURING && products.get(i.productId)?.trackInventory,
+          (i) => i.lineType === SalesLineType.STOCK && products.get(i.productId)?.trackInventory,
         )
         .map((i) => ({
           warehouseId: i.warehouseId!, // stock lines always carry a warehouse
@@ -343,6 +380,38 @@ export class SalesInvoicePostingService {
             sourceNumber: invoice.invoiceNumber,
             journalEntryId: reversalEntry.id,
             description: `عكس فاتورة مبيعات نقدية ${invoice.invoiceNumber ?? ''}`,
+            actorId,
+          },
+          manager,
+        );
+        // Undo the two customer-subledger mirror lines posted for the cash sale
+        // (invoice debit + receipt credit), keeping the statement auditable.
+        await this.customerLedger.record(
+          {
+            customerId: invoice.customerId,
+            transactionDate: dto.reversalDate,
+            type: CustomerTransactionType.REVERSAL,
+            sourceType: JournalSourceType.SALES_INVOICE,
+            sourceId: invoice.id,
+            sourceNumber: invoice.invoiceNumber,
+            debit: 0,
+            credit: invoice.totalAmount,
+            description: `عكس فاتورة مبيعات نقدية ${invoice.invoiceNumber ?? ''}`,
+            actorId,
+          },
+          manager,
+        );
+        await this.customerLedger.record(
+          {
+            customerId: invoice.customerId,
+            transactionDate: dto.reversalDate,
+            type: CustomerTransactionType.REVERSAL,
+            sourceType: JournalSourceType.SALES_INVOICE,
+            sourceId: invoice.id,
+            sourceNumber: invoice.invoiceNumber,
+            debit: invoice.totalAmount,
+            credit: 0,
+            description: `عكس تحصيل فاتورة نقدية ${invoice.invoiceNumber ?? ''}`,
             actorId,
           },
           manager,
@@ -441,8 +510,8 @@ export class SalesInvoicePostingService {
       const revenue = product!.salesAccountId ?? settings.salesRevenueAccountId;
       if (!revenue) block('حساب إيرادات المبيعات غير محدد في إعدادات المحاسبة.');
 
-      // Made-to-order lines never touch inventory/COGS — skip those checks.
-      if (item.lineType !== SalesLineType.MANUFACTURING && product!.trackInventory) {
+      // Only STOCK lines touch inventory/COGS — manufacturing & service skip these.
+      if (item.lineType === SalesLineType.STOCK && product!.trackInventory) {
         if (!item.warehouseId) {
           block(`لم يتم تحديد مخزن للصنف "${product!.name}".`);
         }

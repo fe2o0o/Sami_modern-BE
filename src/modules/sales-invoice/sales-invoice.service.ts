@@ -60,6 +60,7 @@ export interface SaleProductOption {
   id: string;
   code: string;
   name: string;
+  productType: string;
   unitId: string | null;
   unitName: string | null;
   sellingPrice: number;
@@ -332,6 +333,7 @@ export class SalesInvoiceService {
       id: p.id,
       code: p.code,
       name: p.name,
+      productType: p.productType,
       unitId: p.unitId,
       unitName: p.unit?.name ?? null,
       sellingPrice: p.sellingPrice,
@@ -356,7 +358,7 @@ export class SalesInvoiceService {
   /** The representative header warehouse = the first stock line that has one. */
   private pickHeaderWarehouse(items: SalesInvoiceItemDto[]): string | null {
     const stock = items.find(
-      (i) => (i.lineType ?? SalesLineType.STOCK) !== SalesLineType.MANUFACTURING && i.warehouseId,
+      (i) => (i.lineType ?? SalesLineType.STOCK) === SalesLineType.STOCK && i.warehouseId,
     );
     return stock?.warehouseId ?? null;
   }
@@ -398,10 +400,10 @@ export class SalesInvoiceService {
       item.lineNumber = index + 1;
       item.productId = dto.productId;
       const lineType = (dto.lineType ?? SalesLineType.STOCK) as SalesInvoiceItem['lineType'];
-      // A stock line sells from its own warehouse (legacy fallback: the header).
-      // A manufacturing (made-to-order) line has no warehouse.
+      // Only a STOCK line sells from a warehouse; manufacturing and service
+      // lines have none.
       item.warehouseId =
-        lineType === SalesLineType.MANUFACTURING ? null : dto.warehouseId ?? headerWarehouseId;
+        lineType === SalesLineType.STOCK ? dto.warehouseId ?? headerWarehouseId : null;
       item.unitId = unitId ?? null;
       item.lineType = lineType;
       item.deliveryDate = dto.deliveryDate ?? null;

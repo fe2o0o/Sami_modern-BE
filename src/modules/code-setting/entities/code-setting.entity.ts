@@ -15,7 +15,7 @@ export class CodeSetting {
   @Column({ type: 'varchar', length: 50 })
   entityKey!: string;
 
-  @Column({ type: 'boolean', default: false })
+  @Column({ type: 'boolean', default: true })
   autoGenerate!: boolean;
 
   @Column({ type: 'varchar', length: 20, default: '' })

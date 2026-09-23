@@ -22,6 +22,8 @@ import {
 } from '../sales-invoice/enums/sales-invoice.enum';
 import { Product } from '../product/entities/product.entity';
 import { ProductType } from '../product/enums/product-type.enum';
+import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
+import { ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
 import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
@@ -71,7 +73,7 @@ export class SalesDeliveryPostingService {
       // Physically issue the goods at weighted-average cost. allowNegative keeps
       // the flexible "sell then procure" flow working.
       const stockLines: StockLineInput[] = delivery.items.map((i) => ({
-        warehouseId: i.warehouseId,
+        warehouseId: i.warehouseId!,
         productId: i.productId,
         productName: i.productName ?? undefined,
         quantity: i.quantity,
@@ -143,7 +145,7 @@ export class SalesDeliveryPostingService {
 
       // Receive the goods back at their original issue cost.
       await this.stockService.receive(
-        delivery.items.map((i) => ({ warehouseId: i.warehouseId, productId: i.productId, quantity: i.quantity, unitCost: i.unitCostAtPost })),
+        delivery.items.map((i) => ({ warehouseId: i.warehouseId!, productId: i.productId, quantity: i.quantity, unitCost: i.unitCostAtPost })),
         manager,
         {
           movementType: StockMovementType.SALE_REVERSAL,
@@ -158,7 +160,7 @@ export class SalesDeliveryPostingService {
       // Invoice-linked: re-hold the reservation and roll delivery progress back.
       if (delivery.source === SalesDeliverySource.INVOICE && delivery.salesInvoiceId) {
         await this.stockService.reserve(
-          delivery.items.map((i) => ({ warehouseId: i.warehouseId, productId: i.productId, quantity: i.quantity })),
+          delivery.items.map((i) => ({ warehouseId: i.warehouseId!, productId: i.productId, quantity: i.quantity })),
           manager,
         );
         await this.applyInvoiceDelivery(manager, delivery, -1);
@@ -230,9 +232,22 @@ export class SalesDeliveryPostingService {
       }
       const item = delivery.items.find((i) => i.id === itemId);
       if (!item) throw new NotFoundException('السطر غير موجود في إذن التسليم');
-      if (item.lineType === SalesLineType.MANUFACTURING) {
-        throw new BadRequestException('صنف تصنيع — بانتظار الإنتاج، لا يمكن تسليمه بعد');
+      if (item.lineType === SalesLineType.SERVICE) {
+        throw new BadRequestException('سطر خدمة لا يُسلَّم');
       }
+      // A manufacturing line is deliverable only once its production order is
+      // produced (the finished goods are then in the warehouse assigned to it).
+      if (item.lineType === SalesLineType.MANUFACTURING) {
+        const mo = item.manufacturingOrderId
+          ? await manager.getRepository(ManufacturingOrder).findOne({ where: { id: item.manufacturingOrderId } })
+          : null;
+        const produced =
+          mo && (mo.status === ManufacturingOrderStatus.PRODUCED || mo.status === ManufacturingOrderStatus.DONE);
+        if (!produced || !item.warehouseId) {
+          throw new BadRequestException('صنف تصنيع — بانتظار الإنتاج، لا يمكن تسليمه بعد');
+        }
+      }
+      if (!item.warehouseId) throw new BadRequestException('لم يُحدَّد مخزن لهذا السطر');
       const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0));
       const qty = round3(quantity ?? remaining);
       if (qty <= 0) throw new BadRequestException('لا توجد كمية متبقية للتسليم');
@@ -251,7 +266,7 @@ export class SalesDeliveryPostingService {
 
       const number = delivery.deliveryNumber ?? (await this.sequenceService.nextDocumentNumber('DN', fiscalYear, manager));
       const stockLine: StockLineInput[] = [
-        { warehouseId: item.warehouseId, productId: item.productId, productName: item.productName ?? undefined, quantity: qty },
+        { warehouseId: item.warehouseId!, productId: item.productId, productName: item.productName ?? undefined, quantity: qty },
       ];
       const issued = await this.stockService.issue(stockLine, manager, {
         movementType: StockMovementType.SALE,
@@ -328,7 +343,7 @@ export class SalesDeliveryPostingService {
       const { fiscalYear, period } = await this.resolvePostingContext(reversalDate, manager);
 
       await this.stockService.receive(
-        [{ warehouseId: item.warehouseId, productId: item.productId, quantity: qty, unitCost: item.unitCostAtPost }],
+        [{ warehouseId: item.warehouseId!, productId: item.productId, quantity: qty, unitCost: item.unitCostAtPost }],
         manager,
         {
           movementType: StockMovementType.SALE_REVERSAL,
@@ -341,7 +356,7 @@ export class SalesDeliveryPostingService {
       );
       if (delivery.salesInvoiceId && item.salesInvoiceItemId) {
         await this.stockService.reserve(
-          [{ warehouseId: item.warehouseId, productId: item.productId, quantity: qty }],
+          [{ warehouseId: item.warehouseId!, productId: item.productId, quantity: qty }],
           manager,
         );
         await this.applyInvoiceLineDelivery(manager, delivery.salesInvoiceId, item.salesInvoiceItemId, -qty);
@@ -385,7 +400,8 @@ export class SalesDeliveryPostingService {
 
   /** Order progress from its stock lines' delivered vs ordered quantities. */
   private computeProgress(items: SalesDeliveryItem[]): SalesDeliveryProgress {
-    const stock = items.filter((i) => i.lineType !== SalesLineType.MANUFACTURING);
+    // Deliverable goods = stock + manufacturing lines (service lines don't ship).
+    const stock = items.filter((i) => i.lineType !== SalesLineType.SERVICE);
     if (!stock.length) return SalesDeliveryProgress.PENDING;
     const anyDelivered = stock.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
     const allDelivered = stock.every((i) => (i.deliveredQuantity ?? 0) + 1e-6 >= (i.orderedQuantity ?? 0));
@@ -413,7 +429,7 @@ export class SalesDeliveryPostingService {
       inv.deliveredQuantity = round3(Math.max(0, (inv.deliveredQuantity ?? 0) + deltaQty));
       await manager.getRepository(SalesInvoiceItem).save(inv);
     }
-    const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.MANUFACTURING);
+    const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
     const anyDelivered = stockItems.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
     const allDelivered =
       stockItems.length > 0 && stockItems.every((i) => (i.deliveredQuantity ?? 0) + 1e-6 >= i.quantity);
@@ -464,7 +480,7 @@ export class SalesDeliveryPostingService {
     }
     await manager.getRepository(SalesInvoiceItem).save(invoice.items);
 
-    const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.MANUFACTURING);
+    const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
     const anyDelivered = stockItems.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
     const allDelivered =
       stockItems.length > 0 && stockItems.every((i) => (i.deliveredQuantity ?? 0) + 1e-6 >= i.quantity);

@@ -415,6 +415,7 @@ export class StockService {
     const qb = this.stockRepository
       .createQueryBuilder('stock')
       .leftJoinAndSelect('stock.product', 'product')
+      .leftJoinAndSelect('product.unit', 'unit')
       .leftJoinAndSelect('stock.warehouse', 'warehouse');
 
     // Branch-restricted users only see stock in their own branch's warehouses.

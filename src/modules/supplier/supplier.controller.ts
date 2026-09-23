@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SupplierService } from './supplier.service';
+import { SupplierLedgerService } from './supplier-ledger.service';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { StatusQueryDto } from '../../common/dto/status-query.dto';
@@ -22,7 +23,17 @@ import { RequirePermissions } from '../permissions/decorators/require-permission
 @ApiBearerAuth('access-token')
 @Controller('suppliers')
 export class SupplierController {
-  constructor(private readonly supplierService: SupplierService) {}
+  constructor(
+    private readonly supplierService: SupplierService,
+    private readonly ledgerService: SupplierLedgerService,
+  ) {}
+
+  @Get(':id/statement')
+  @RequirePermissions('suppliers.view')
+  @ApiOperation({ summary: 'كشف حساب مورد (الرصيد + الحركات)' })
+  statement(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ledgerService.statement(id);
+  }
 
   @Post()
   @RequirePermissions('suppliers.create')

@@ -43,8 +43,10 @@ export class SalesDelivery extends BaseEntity {
   @Column({ type: 'uuid' })
   customerId!: string;
 
-  @Column({ type: 'uuid' })
-  warehouseId!: string;
+  /** Header warehouse. Null for a manufacturing-only order (each line carries its
+   *  own warehouse, assigned to a manufacturing line at production time). */
+  @Column({ type: 'uuid', nullable: true })
+  warehouseId!: string | null;
 
   @Column({ type: 'uuid', nullable: true })
   branchId!: string | null;

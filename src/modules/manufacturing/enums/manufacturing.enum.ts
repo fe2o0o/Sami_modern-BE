@@ -12,6 +12,7 @@
 export enum ManufacturingOrderStatus {
   NEW = 'new',
   IN_PROGRESS = 'in_progress',
+  PRODUCED = 'produced',
   DONE = 'done',
   CANCELLED = 'cancelled',
 }
@@ -22,6 +23,7 @@ export const MANUFACTURING_ORDER_STATUS_LABELS: Record<
 > = {
   [ManufacturingOrderStatus.NEW]: 'جديد',
   [ManufacturingOrderStatus.IN_PROGRESS]: 'قيد التنفيذ',
+  [ManufacturingOrderStatus.PRODUCED]: 'تم الإنتاج',
   [ManufacturingOrderStatus.DONE]: 'تم التنفيذ',
   [ManufacturingOrderStatus.CANCELLED]: 'ملغى',
 };

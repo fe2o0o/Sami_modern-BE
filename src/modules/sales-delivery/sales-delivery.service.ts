@@ -25,6 +25,7 @@ import { Branch } from '../branch/entities/branch.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
 import { Product } from '../product/entities/product.entity';
+import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
 import { User } from '../user/entities/user.entity';
 import { paginate } from '../../common/utils/pagination.util';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
@@ -101,7 +102,7 @@ export class SalesDeliveryService {
       throw new BadRequestException('لا يمكن التسليم إلا من فاتورة مُرحّلة');
     }
     // Only stock lines are deliverable (manufacturing lines never touch stock).
-    const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.MANUFACTURING);
+    const stockItems = invoice.items.filter((i) => i.lineType === SalesLineType.STOCK);
     const delivered = await this.deliveredQtyByItem(stockItems.map((i) => i.id));
     const lines: DeliverableLine[] = stockItems.map((it) => {
       const deliveredQty = delivered.get(it.id) ?? 0;
@@ -144,9 +145,26 @@ export class SalesDeliveryService {
     if (!invoice || invoice.status !== SalesInvoiceStatus.POSTED) return null;
     // Don't duplicate if an order already exists for this invoice.
     if (await this.repository.count({ where: { salesInvoiceId: invoiceId } })) return null;
-    // Stock lines are deliverable now; manufacturing lines join after production (Phase 2).
-    const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.MANUFACTURING);
-    if (!stockItems.length) return null;
+    // Deliverable lines = stock (now) + manufacturing (wait for production). Service
+    // lines never ship. Manufacturing lines sit with no warehouse until produced.
+    const deliverable = invoice.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
+    if (!deliverable.length) return null;
+
+    // Link each manufacturing line to the production order spawned for it.
+    const mfgItemIds = deliverable
+      .filter((i) => i.lineType === SalesLineType.MANUFACTURING)
+      .map((i) => i.id);
+    const orders = mfgItemIds.length
+      ? await this.repository.manager.getRepository(ManufacturingOrder).find({
+          where: { salesInvoiceItemId: In(mfgItemIds) },
+        })
+      : [];
+    const moByItem = new Map(orders.map((o): [string, string] => [o.salesInvoiceItemId!, o.id]));
+
+    const headerWarehouse =
+      invoice.warehouseId ??
+      deliverable.find((i) => i.lineType === SalesLineType.STOCK)?.warehouseId ??
+      null;
 
     const delivery = this.repository.create({
       deliveryNumber: null,
@@ -157,29 +175,34 @@ export class SalesDeliveryService {
       salesInvoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       customerId: invoice.customerId,
-      warehouseId: invoice.warehouseId ?? stockItems[0].warehouseId!,
+      warehouseId: headerWarehouse,
       branchId: invoice.branchId,
       fiscalYearId: invoice.fiscalYearId,
       accountingPeriodId: invoice.accountingPeriodId,
       status: SalesDeliveryStatus.DRAFT,
       createdBy: actorId ?? null,
-      items: stockItems.map((it, idx) => ({
-        lineNumber: idx + 1,
-        salesInvoiceItemId: it.id,
-        productId: it.productId,
-        warehouseId: it.warehouseId ?? invoice.warehouseId!,
-        unitId: it.unitId,
-        productCode: it.productCode,
-        productName: it.productName,
-        unitName: it.unitName,
-        lineType: it.lineType ?? SalesLineType.STOCK,
-        orderedQuantity: it.quantity,
-        deliveredQuantity: 0,
-        quantity: 0,
-        actualDeliveryDate: null,
-        unitCostAtPost: 0,
-        lineCost: 0,
-      })),
+      items: deliverable.map((it, idx) => {
+        const isMfg = it.lineType === SalesLineType.MANUFACTURING;
+        return {
+          lineNumber: idx + 1,
+          salesInvoiceItemId: it.id,
+          productId: it.productId,
+          // A manufacturing line gets its warehouse at production time.
+          warehouseId: isMfg ? null : it.warehouseId ?? invoice.warehouseId ?? null,
+          manufacturingOrderId: isMfg ? moByItem.get(it.id) ?? null : null,
+          unitId: it.unitId,
+          productCode: it.productCode,
+          productName: it.productName,
+          unitName: it.unitName,
+          lineType: it.lineType ?? SalesLineType.STOCK,
+          orderedQuantity: it.quantity,
+          deliveredQuantity: 0,
+          quantity: 0,
+          actualDeliveryDate: null,
+          unitCostAtPost: 0,
+          lineCost: 0,
+        };
+      }),
     });
     return this.repository.save(delivery);
   }
@@ -287,7 +310,7 @@ export class SalesDeliveryService {
       invoiceNumber: d.invoiceNumber,
       customerId: d.customerId,
       customerName: customerNames.get(d.customerId) ?? null,
-      warehouseName: warehouseNames.get(d.warehouseId) ?? null,
+      warehouseName: d.warehouseId ? warehouseNames.get(d.warehouseId) ?? null : null,
       itemsCount: d.items?.length ?? 0,
       totalCost: d.totalCost,
       status: d.status,
@@ -325,7 +348,7 @@ export class SalesDeliveryService {
     const d = await this.findOne(id, branchScope);
     const [customer, warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.customerRepository.findOne({ where: { id: d.customerId } }),
-      this.warehouseRepository.findOne({ where: { id: d.warehouseId } }),
+      d.warehouseId ? this.warehouseRepository.findOne({ where: { id: d.warehouseId } }) : null,
       d.branchId ? this.branchRepository.findOne({ where: { id: d.branchId } }) : null,
       this.fiscalYearRepository.findOne({ where: { id: d.fiscalYearId } }),
       this.periodRepository.findOne({ where: { id: d.accountingPeriodId } }),
@@ -365,7 +388,7 @@ export class SalesDeliveryService {
     const items = dto.items.map((d, index) => {
       const src = itemById.get(d.salesInvoiceItemId!);
       if (!src) throw new BadRequestException('أحد السطور لا يخص هذه الفاتورة');
-      if (src.lineType === SalesLineType.MANUFACTURING) {
+      if (src.lineType !== SalesLineType.STOCK) {
         throw new BadRequestException(`الصنف "${src.productName}" تصنيع ولا يُسلّم من المخزن`);
       }
       const remaining = round3(src.quantity - (alreadyDelivered.get(src.id) ?? 0));
@@ -494,7 +517,7 @@ export class SalesDeliveryService {
 
   private async nameMap<T extends { id: string; name: string }>(
     repo: Repository<T>,
-    ids: string[],
+    ids: (string | null)[],
   ): Promise<Map<string, string>> {
     const unique = [...new Set(ids.filter(Boolean))];
     if (!unique.length) return new Map();

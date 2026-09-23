@@ -12,11 +12,13 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ManufacturingService } from './manufacturing.service';
+import { ManufacturingProductionService } from './manufacturing-production.service';
 import { CreateManufacturingOrderDto } from './dto/create-manufacturing-order.dto';
 import {
   UpdateManufacturingOrderDto,
   UpdateManufacturingStatusDto,
 } from './dto/update-manufacturing-order.dto';
+import { ProduceManufacturingOrderDto } from './dto/produce-manufacturing-order.dto';
 import { ManufacturingOrderQueryDto } from './dto/manufacturing-order-query.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -27,7 +29,10 @@ import { RequirePermissions } from '../permissions/decorators/require-permission
 @ApiBearerAuth('access-token')
 @Controller('manufacturing/orders')
 export class ManufacturingController {
-  constructor(private readonly service: ManufacturingService) {}
+  constructor(
+    private readonly service: ManufacturingService,
+    private readonly production: ManufacturingProductionService,
+  ) {}
 
   @Get()
   @RequirePermissions('manufacturing.view')
@@ -78,6 +83,19 @@ export class ManufacturingController {
     @CurrentUser('userId') actorId: string,
   ) {
     return this.service.setStatus(id, dto.status, actorId);
+  }
+
+  @Post(':id/produce')
+  @RequirePermissions('manufacturing.edit')
+  @ResponseMessage('تم تنفيذ الإنتاج بنجاح')
+  @ApiOperation({ summary: 'تنفيذ الإنتاج: استهلاك المكوّنات وإنتاج المنتج في المخزون' })
+  produce(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ProduceManufacturingOrderDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.production.produce(id, dto, actorId, branchScope);
   }
 
   @Delete(':id')
