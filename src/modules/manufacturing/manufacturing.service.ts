@@ -15,6 +15,7 @@ import { ManufacturingComponentDto } from './dto/manufacturing-component.dto';
 import { ManufacturingOrderQueryDto } from './dto/manufacturing-order-query.dto';
 import { Product } from '../product/entities/product.entity';
 import { ProductComponent } from '../product/entities/product-component.entity';
+import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
 import { Customer } from '../customer/entities/customer.entity';
 import { Branch } from '../branch/entities/branch.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
@@ -57,6 +58,9 @@ export interface ManufacturingFromInvoiceInput {
   /** The exact invoice line this order fulfils (for the delivery back-link). */
   salesInvoiceItemId?: string | null;
   accountingPeriodId?: string | null;
+  /** Per-order BOM from the invoice line (TOTAL quantities). When empty the
+   *  product's default BOM is copied instead. */
+  components?: { componentProductId: string; quantity: number; warehouseId?: string | null }[];
   actorId?: string | null;
 }
 
@@ -275,13 +279,19 @@ export class ManufacturingService {
 
   async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const order = await this.findOne(id, branchScope);
-    const [branch, fiscalYear, users, components] = await Promise.all([
+    const [branch, fiscalYear, users, components, invoiceLine] = await Promise.all([
       order.branchId ? this.branchRepository.findOne({ where: { id: order.branchId } }) : null,
       order.fiscalYearId ? this.fiscalYearRepository.findOne({ where: { id: order.fiscalYearId } }) : null,
       this.userNames([order.createdBy, order.updatedBy]),
       this.orderRepository.manager
         .getRepository(ManufacturingOrderComponent)
         .find({ where: { manufacturingOrderId: id }, order: { lineNumber: 'ASC' } }),
+      // The linked sales-invoice line carries the selling price → drives profit.
+      order.salesInvoiceItemId
+        ? this.orderRepository.manager
+            .getRepository(SalesInvoiceItem)
+            .findOne({ where: { id: order.salesInvoiceItemId } })
+        : null,
     ]);
     return {
       ...order,
@@ -289,6 +299,9 @@ export class ManufacturingService {
       fiscalYearName: fiscalYear?.name ?? null,
       createdByName: users.get(order.createdBy ?? '') ?? null,
       components,
+      // Selling side (from the sales invoice) for the profit view.
+      sellingUnitPrice: invoiceLine?.unitPrice ?? null,
+      sellingNet: invoiceLine?.netBeforeTax ?? null,
     };
   }
 
@@ -339,8 +352,14 @@ export class ManufacturingService {
     const fiscalYear = await this.resolveFiscalYearIn(input.fiscalYearId, manager);
     const orderNumber = await this.sequenceService.nextDocumentNumber('MO', fiscalYear, manager);
     const repo = manager.getRepository(ManufacturingOrder);
-    // Copy the product's Bill of Materials (per-unit × order quantity).
-    const components = await this.buildOrderComponents(input.productId, input.quantity, undefined, manager);
+    // Use the invoice line's per-order BOM when provided (already TOTAL quantities),
+    // otherwise copy the product's default BOM (per-unit × order quantity).
+    const components = await this.buildOrderComponents(
+      input.productId,
+      input.quantity,
+      input.components?.length ? input.components : undefined,
+      manager,
+    );
     return repo.save(
       repo.create({
         orderNumber,
@@ -381,9 +400,13 @@ export class ManufacturingService {
     manager: EntityManager,
   ): Promise<ManufacturingOrderComponent[]> {
     const compRepo = manager.getRepository(ManufacturingOrderComponent);
-    let source: { componentProductId: string; quantity: number }[];
+    let source: { componentProductId: string; quantity: number; warehouseId: string | null }[];
     if (explicit?.length) {
-      source = explicit.map((c) => ({ componentProductId: c.componentProductId, quantity: c.quantity }));
+      source = explicit.map((c) => ({
+        componentProductId: c.componentProductId,
+        quantity: c.quantity,
+        warehouseId: c.warehouseId ?? null,
+      }));
     } else {
       const bom = await manager
         .getRepository(ProductComponent)
@@ -391,6 +414,7 @@ export class ManufacturingService {
       source = bom.map((b) => ({
         componentProductId: b.componentProductId,
         quantity: round3(b.quantity * orderQuantity),
+        warehouseId: null,
       }));
     }
     if (!source.length) return [];
@@ -406,6 +430,7 @@ export class ManufacturingService {
         componentProductName: pMap.get(s.componentProductId)?.name ?? null,
         unitName: pMap.get(s.componentProductId)?.unit?.name ?? null,
         quantity: s.quantity,
+        warehouseId: s.warehouseId,
       }),
     );
   }

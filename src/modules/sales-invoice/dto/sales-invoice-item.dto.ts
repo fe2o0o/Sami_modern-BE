@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsDateString,
   IsEnum,
   IsNumber,
@@ -7,8 +9,26 @@ import {
   IsString,
   IsUUID,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { SalesDiscountType, SalesLineType } from '../enums/sales-invoice.enum';
+
+/** One BOM component on a manufacturing line (quantity is PER UNIT of the product). */
+export class SalesInvoiceItemComponentDto {
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID('4', { message: 'يجب اختيار منتج المكوّن' })
+  componentProductId!: string;
+
+  @ApiProperty({ minimum: 0.0001 })
+  @IsNumber({}, { message: 'الكمية يجب أن تكون رقماً' })
+  @Min(0.0001, { message: 'كمية المكوّن يجب أن تكون أكبر من صفر' })
+  quantity!: number;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  warehouseId?: string | null;
+}
 
 /** One sales-invoice line as sent from the client (money is recomputed server-side). */
 export class SalesInvoiceItemDto {
@@ -84,4 +104,12 @@ export class SalesInvoiceItemDto {
   @IsNumber()
   @Min(0)
   vatRate?: number;
+
+  /** Per-order BOM for a MANUFACTURING line (does not change the product master). */
+  @ApiPropertyOptional({ type: [SalesInvoiceItemComponentDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SalesInvoiceItemComponentDto)
+  components?: SalesInvoiceItemComponentDto[];
 }

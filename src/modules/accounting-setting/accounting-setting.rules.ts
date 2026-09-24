@@ -74,6 +74,16 @@ export const SETTING_ACCOUNT_RULES: SettingAccountRule[] = [
     subTypes: [AccountSubType.INVENTORY_ADJUSTMENT],
   },
   {
+    key: 'manufacturingFeeAccountId',
+    label: 'حساب رسوم التصنيع (داخلي)',
+    accountType: AccountType.EXPENSE,
+    subTypes: [
+      AccountSubType.MANUFACTURING_EXPENSE,
+      AccountSubType.OPERATING_EXPENSE,
+      AccountSubType.OTHER_EXPENSE,
+    ],
+  },
+  {
     key: 'defaultCashAccountId',
     label: 'حساب النقدية الافتراضي',
     accountType: AccountType.ASSET,

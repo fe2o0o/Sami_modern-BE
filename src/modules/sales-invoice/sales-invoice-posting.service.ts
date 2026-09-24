@@ -8,9 +8,12 @@ import { DataSource, EntityManager, In } from 'typeorm';
 import { isWithinBranchScope } from '../../common/utils/branch-scope.util';
 import { SalesInvoice } from './entities/sales-invoice.entity';
 import { SalesInvoiceItem } from './entities/sales-invoice-item.entity';
+import { SalesInvoiceItemComponent } from './entities/sales-invoice-item-component.entity';
 import { SalesDeliveryStatus, SalesInvoiceStatus, SalesLineType, SalesPaymentType } from './enums/sales-invoice.enum';
 import { ReverseSalesInvoiceDto } from './dto/reverse-sales-invoice.dto';
 import { round2 } from './sales-math';
+
+function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
 import { Product } from '../product/entities/product.entity';
 import { Customer } from '../customer/entities/customer.entity';
 import { ProductType } from '../product/enums/product-type.enum';
@@ -227,6 +230,15 @@ export class SalesInvoicePostingService {
           .getRepository(Customer)
           .findOne({ where: { id: invoice.customerId } });
         for (const item of manufacturingItems) {
+          // Per-order BOM entered on the invoice line (per-unit) → total for the order.
+          const lineComponents = await manager
+            .getRepository(SalesInvoiceItemComponent)
+            .find({ where: { salesInvoiceItemId: item.id }, order: { lineNumber: 'ASC' } });
+          const components = lineComponents.map((c) => ({
+            componentProductId: c.componentProductId,
+            quantity: round3(c.quantity * item.quantity),
+            warehouseId: c.warehouseId ?? null,
+          }));
           await this.manufacturingService.createFromInvoiceLine(
             {
               productId: item.productId,
@@ -247,6 +259,7 @@ export class SalesInvoicePostingService {
               sourceNumber: invoiceNumber,
               salesInvoiceItemId: item.id,
               accountingPeriodId: invoice.accountingPeriodId,
+              components,
               actorId,
             },
             manager,

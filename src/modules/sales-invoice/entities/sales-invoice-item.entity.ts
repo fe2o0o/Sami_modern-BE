@@ -1,8 +1,9 @@
-import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
 import { SalesDiscountType, SalesLineType } from '../enums/sales-invoice.enum';
 import { SalesInvoice } from './sales-invoice.entity';
+import { SalesInvoiceItemComponent } from './sales-invoice-item-component.entity';
 
 /**
  * One line of a sales invoice. Financial figures and the product/unit names are
@@ -100,4 +101,8 @@ export class SalesInvoiceItem extends BaseEntity {
   /** How much of this line has been shipped via delivery notes (≤ quantity). */
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   deliveredQuantity!: number;
+
+  /** Per-order BOM for a MANUFACTURING line (does not touch the product master). */
+  @OneToMany(() => SalesInvoiceItemComponent, (c) => c.salesInvoiceItem, { cascade: true })
+  components!: SalesInvoiceItemComponent[];
 }

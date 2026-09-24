@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SalesInvoice } from './entities/sales-invoice.entity';
 import { SalesInvoiceItem } from './entities/sales-invoice-item.entity';
+import { SalesInvoiceItemComponent } from './entities/sales-invoice-item-component.entity';
 import { SalesInvoiceCommission } from './entities/sales-invoice-commission.entity';
 import { Employee } from '../employee/entities/employee.entity';
 import { SalesInvoiceService } from './sales-invoice.service';
@@ -35,6 +36,7 @@ import { SalesDeliveryModule } from '../sales-delivery/sales-delivery.module';
     TypeOrmModule.forFeature([
       SalesInvoice,
       SalesInvoiceItem,
+      SalesInvoiceItemComponent,
       SalesInvoiceCommission,
       Employee,
       Product,

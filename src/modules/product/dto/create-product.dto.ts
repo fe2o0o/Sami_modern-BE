@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsNumber,
@@ -8,8 +10,10 @@ import {
   IsUUID,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { ProductType } from '../enums/product-type.enum';
+import { ProductComponentDto } from './product-component.dto';
 
 export class CreateProductDto {
   // ── Basic ──
@@ -125,4 +129,12 @@ export class CreateProductDto {
   @IsOptional()
   @IsBoolean({ message: 'الحالة يجب أن تكون قيمة منطقية' })
   isActive?: boolean;
+
+  /** Bill of Materials for a manufactured product (component stock products). */
+  @ApiPropertyOptional({ type: [ProductComponentDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ProductComponentDto)
+  components?: ProductComponentDto[];
 }

@@ -13,6 +13,7 @@ import {
 } from '../../common/utils/branch-scope.util';
 import { SalesInvoice } from './entities/sales-invoice.entity';
 import { SalesInvoiceItem } from './entities/sales-invoice-item.entity';
+import { SalesInvoiceItemComponent } from './entities/sales-invoice-item-component.entity';
 import { SalesInvoiceCommission } from './entities/sales-invoice-commission.entity';
 import {
   SalesCommissionType,
@@ -179,6 +180,16 @@ export class SalesInvoiceService {
 
     return this.dataSource.transaction(async (manager) => {
       if (dto.items) {
+        // Remove each old line's per-order BOM first (no DB FK cascade), then the lines.
+        const oldItems = await manager.find(SalesInvoiceItem, {
+          where: { salesInvoiceId: id },
+          select: { id: true },
+        });
+        if (oldItems.length) {
+          await manager.delete(SalesInvoiceItemComponent, {
+            salesInvoiceItemId: In(oldItems.map((i) => i.id)),
+          });
+        }
         await manager.delete(SalesInvoiceItem, { salesInvoiceId: id });
         const items = await this.buildItems(dto.items, invoice.warehouseId);
         const { totals } = computeInvoice(this.toLineInputs(dto.items));
@@ -272,7 +283,7 @@ export class SalesInvoiceService {
   async findOne(id: string, branchScope: BranchScope = null): Promise<SalesInvoice> {
     const invoice = await this.invoiceRepository.findOne({
       where: { id },
-      relations: { items: true, commissions: true },
+      relations: { items: { components: true }, commissions: true },
       order: { items: { lineNumber: 'ASC' }, commissions: { lineNumber: 'ASC' } },
     });
     if (!invoice || !isWithinBranchScope(invoice.branchId, branchScope)) {
@@ -386,6 +397,15 @@ export class SalesInvoiceService {
       : [];
     const unitById = new Map(units.map((u): [string, Unit] => [u.id, u]));
 
+    // Load component products (with unit) for per-line BOM snapshots.
+    const componentIds = [
+      ...new Set(itemsDto.flatMap((i) => (i.components ?? []).map((c) => c.componentProductId))),
+    ];
+    const componentProducts = componentIds.length
+      ? await this.productRepository.find({ where: { id: In(componentIds) }, relations: { unit: true } })
+      : [];
+    const componentById = new Map(componentProducts.map((p): [string, Product] => [p.id, p]));
+
     const computed = computeInvoice(this.toLineInputs(itemsDto)).lines;
 
     return itemsDto.map((dto, index) => {
@@ -424,6 +444,20 @@ export class SalesInvoiceService {
       item.vatAmount = line.vatAmount;
       item.lineTotal = line.lineTotal;
       item.costAtPost = 0;
+      // Per-order BOM (manufacturing lines only): snapshot component name/unit.
+      if (lineType === SalesLineType.MANUFACTURING && dto.components?.length) {
+        item.components = dto.components.map((c, ci) => {
+          const cp = componentById.get(c.componentProductId);
+          const comp = new SalesInvoiceItemComponent();
+          comp.lineNumber = ci + 1;
+          comp.componentProductId = c.componentProductId;
+          comp.componentProductName = cp?.name ?? null;
+          comp.unitName = cp?.unit?.name ?? null;
+          comp.warehouseId = c.warehouseId ?? null;
+          comp.quantity = c.quantity;
+          return comp;
+        });
+      }
       return item;
     });
   }

@@ -11,6 +11,7 @@ import { join, extname } from 'path';
 import { randomUUID } from 'crypto';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
+import { ProductComponent } from './entities/product-component.entity';
 import { ProductCategory } from '../product-category/entities/product-category.entity';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 import { Brand } from '../brand/entities/brand.entity';
@@ -70,6 +71,8 @@ export class ProductService {
     private readonly productRepository: Repository<Product>,
     @InjectRepository(ProductImage)
     private readonly imageRepository: Repository<ProductImage>,
+    @InjectRepository(ProductComponent)
+    private readonly componentRepository: Repository<ProductComponent>,
     private readonly excel: ExcelService,
     private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
@@ -172,7 +175,28 @@ export class ProductService {
     if (dto.barcode) {
       await this.ensureUnique('barcode', dto.barcode, undefined, 'الباركود مستخدم بالفعل');
     }
-    return this.productRepository.save(this.productRepository.create({ ...dto, code }));
+    const { components, ...rest } = dto;
+    const saved = await this.productRepository.save(this.productRepository.create({ ...rest, code }));
+    if (components?.length) await this.replaceComponents(saved.id, components);
+    return this.findOne(saved.id);
+  }
+
+  /** Replace a product's Bill of Materials with the given component lines. */
+  private async replaceComponents(
+    productId: string,
+    components: { componentProductId: string; quantity: number }[],
+  ): Promise<void> {
+    await this.componentRepository.delete({ parentProductId: productId });
+    if (!components.length) return;
+    await this.componentRepository.save(
+      components.map((c) =>
+        this.componentRepository.create({
+          parentProductId: productId,
+          componentProductId: c.componentProductId,
+          quantity: c.quantity,
+        }),
+      ),
+    );
   }
 
   async findAll(query: QueryProductDto): Promise<PaginatedResult<Product>> {
@@ -214,7 +238,7 @@ export class ProductService {
   async findOne(id: string): Promise<Product> {
     const product = await this.productRepository.findOne({
       where: { id },
-      relations: { category: true, brand: true, unit: true, images: true },
+      relations: { category: true, brand: true, unit: true, images: true, components: true },
       order: { images: { displayOrder: 'ASC' } },
     });
     if (!product) {
@@ -234,8 +258,12 @@ export class ProductService {
     if (dto.barcode && dto.barcode !== product.barcode) {
       await this.ensureUnique('barcode', dto.barcode, id, 'الباركود مستخدم بالفعل');
     }
-    Object.assign(product, dto);
-    return this.productRepository.save(product);
+    const { components, ...rest } = dto;
+    Object.assign(product, rest);
+    await this.productRepository.save(product);
+    // Replace the BOM only when the caller sent a components array.
+    if (components !== undefined) await this.replaceComponents(id, components);
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {

@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNumber, IsUUID, Min } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNumber, IsOptional, IsUUID, Min } from 'class-validator';
 
 /** One BOM component line on a manufacturing order (total quantity for the order). */
 export class ManufacturingComponentDto {
@@ -11,4 +11,10 @@ export class ManufacturingComponentDto {
   @IsNumber({}, { message: 'الكمية يجب أن تكون رقماً' })
   @Min(0.0001, { message: 'كمية المكوّن يجب أن تكون أكبر من صفر' })
   quantity!: number;
+
+  /** Warehouse the component is consumed from (optional; falls back at production). */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  warehouseId?: string | null;
 }

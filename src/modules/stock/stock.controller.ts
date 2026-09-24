@@ -1,7 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { StockService } from './stock.service';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { StockQueryDto } from './dto/stock-query.dto';
 import { StockMovementQueryDto } from './dto/stock-movement-query.dto';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
@@ -14,14 +14,9 @@ export class StockController {
 
   @Get()
   @RequirePermissions('stock.view')
-  @ApiQuery({ name: 'warehouseId', required: false })
   @ApiOperation({ summary: 'عرض أرصدة المخزون الحالية' })
-  findAll(
-    @Query() query: PaginationQueryDto,
-    @BranchScope() branchScope: string[] | null,
-    @Query('warehouseId') warehouseId?: string,
-  ) {
-    return this.stockService.findAll(query, warehouseId, branchScope);
+  findAll(@Query() query: StockQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.stockService.findAll(query, query.warehouseId, branchScope);
   }
 
   @Get('movements')
@@ -29,5 +24,18 @@ export class StockController {
   @ApiOperation({ summary: 'سجل حركات المخزون مع الفلاتر' })
   findMovements(@Query() query: StockMovementQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.stockService.findMovements(query, branchScope);
+  }
+
+  @Get('costs')
+  @RequirePermissions('stock.view')
+  @ApiQuery({ name: 'warehouseId', required: true })
+  @ApiQuery({ name: 'productType', required: false })
+  @ApiOperation({ summary: 'متوسط تكلفة والرصيد لكل منتج في مخزن (للتصنيع)' })
+  costs(
+    @Query('warehouseId') warehouseId: string,
+    @BranchScope() branchScope: string[] | null,
+    @Query('productType') productType?: string,
+  ) {
+    return this.stockService.costs(warehouseId, branchScope, productType);
   }
 }

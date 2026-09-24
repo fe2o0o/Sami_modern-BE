@@ -65,12 +65,14 @@ export class ManufacturingProductionService {
       const components = dto.components?.length
         ? await this.rebuildComponents(order, dto.components, manager)
         : order.components;
-      if (!components.length) throw new BadRequestException('لا توجد مكوّنات لهذا الأمر — أضف مكوّنات التصنيع أولاً');
-
       const date = dto.productionDate;
       const warehouseId = dto.warehouseId;
       const fee = round2(dto.manufacturingFee ?? order.manufacturingFee ?? 0);
       const factoryId = dto.factorySupplierId ?? order.factorySupplierId ?? null;
+      // A production must have something to it: at least components OR a fee.
+      if (!components.length && fee <= 0) {
+        throw new BadRequestException('لا يمكن التصنيع بدون مكوّنات وبدون رسوم — أضف مكوّنات أو رسوم تصنيع');
+      }
 
       const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
       const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
@@ -99,9 +101,9 @@ export class ManufacturingProductionService {
         );
       }
 
-      // 1) Consume the components out of the warehouse.
+      // 1) Consume each component out of ITS OWN warehouse (fallback: the output warehouse).
       const stockLines: StockLineInput[] = components.map((c) => ({
-        warehouseId,
+        warehouseId: c.warehouseId ?? warehouseId,
         productId: c.componentProductId,
         productName: c.componentProductName ?? undefined,
         quantity: c.quantity,
@@ -119,6 +121,8 @@ export class ManufacturingProductionService {
         c.lineCost = round2(c.quantity * issued[i].unitCost);
       });
       const componentCost = round2(components.reduce((s, c) => s + c.lineCost, 0));
+      // Cost = consumed components + manufacturing fee. The manufactured product's
+      // own master cost price is NOT used — its value is what goes into it here.
       const totalCost = round2(componentCost + fee);
       const unitCost = round2(totalCost / order.quantity);
 
@@ -136,7 +140,9 @@ export class ManufacturingProductionService {
         },
       );
 
-      // 3) Book the production journal.
+      // 3) Book the production journal — DR finished-goods inventory (total cost);
+      //    CR raw-material inventory (components); CR the fee (supplier control for a
+      //    factory, else the manufacturing-fee account).
       const lines: JournalLineInput[] = [
         { accountId: finishedAcc, debit: totalCost, credit: 0, productId: order.productId, warehouseId },
       ];
@@ -221,6 +227,7 @@ export class ManufacturingProductionService {
         componentProductName: pMap.get(c.componentProductId)?.name ?? null,
         unitName: pMap.get(c.componentProductId)?.unit?.name ?? null,
         quantity: round3(c.quantity),
+        warehouseId: c.warehouseId ?? null,
       }),
     );
     return compRepo.save(rows);

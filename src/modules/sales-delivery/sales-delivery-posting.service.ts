@@ -309,6 +309,9 @@ export class SalesDeliveryPostingService {
       item.unitCostAtPost = unitCost;
       item.actualDeliveryDate = actualDate;
 
+      // A fully-delivered manufacturing line closes its production order.
+      await this.syncManufacturingDone(manager, item, actorId);
+
       if (delivery.salesInvoiceId && item.salesInvoiceItemId) {
         await this.applyInvoiceLineDelivery(manager, delivery.salesInvoiceId, item.salesInvoiceItemId, qty);
       }
@@ -390,12 +393,39 @@ export class SalesDeliveryPostingService {
       item.quantity = 0;
       item.lineCost = 0;
       item.actualDeliveryDate = null;
+      // A reversed manufacturing line is no longer fully delivered → reopen its order.
+      await this.syncManufacturingDone(manager, item, actorId);
       delivery.totalCost = round2(delivery.items.reduce((s, i) => s + (i.lineCost ?? 0), 0));
       delivery.deliveryProgress = this.computeProgress(delivery.items);
       delivery.updatedBy = actorId ?? null;
       await manager.getRepository(SalesDelivery).save(delivery);
       return this.reload(manager, deliveryId);
     });
+  }
+
+  /** Auto-close (or re-open) a manufacturing line's production order to match its
+   *  delivery: fully delivered → DONE, otherwise back to PRODUCED. */
+  private async syncManufacturingDone(
+    manager: EntityManager,
+    item: SalesDeliveryItem,
+    actorId?: string,
+  ): Promise<void> {
+    if (item.lineType !== SalesLineType.MANUFACTURING || !item.manufacturingOrderId) return;
+    const repo = manager.getRepository(ManufacturingOrder);
+    const mo = await repo.findOne({ where: { id: item.manufacturingOrderId } });
+    if (!mo) return;
+    const fullyDelivered = (item.deliveredQuantity ?? 0) + 1e-6 >= (item.orderedQuantity ?? 0);
+    if (fullyDelivered && mo.status === ManufacturingOrderStatus.PRODUCED) {
+      mo.status = ManufacturingOrderStatus.DONE;
+      mo.doneAt = new Date();
+      mo.updatedBy = actorId ?? null;
+      await repo.save(mo);
+    } else if (!fullyDelivered && mo.status === ManufacturingOrderStatus.DONE) {
+      mo.status = ManufacturingOrderStatus.PRODUCED;
+      mo.doneAt = null;
+      mo.updatedBy = actorId ?? null;
+      await repo.save(mo);
+    }
   }
 
   /** Order progress from its stock lines' delivered vs ordered quantities. */

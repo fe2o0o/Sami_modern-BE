@@ -435,6 +435,49 @@ export class StockService {
     const [items, total] = await qb.getManyAndCount();
     return paginate(items, total, query.page, query.perPage);
   }
+
+  /** Products present in one warehouse with their on-hand quantity + weighted-avg
+   *  cost. Powers the manufacturing BOM editor: pick the warehouse first, then the
+   *  component from what's actually available there. */
+  async costs(
+    warehouseId: string,
+    branchScope: BranchScope = null,
+    productType?: string,
+  ): Promise<
+    { productId: string; productCode: string | null; productName: string | null; unitName: string | null; avgCost: number; quantity: number }[]
+  > {
+    const qb = this.stockRepository
+      .createQueryBuilder('stock')
+      .leftJoin('stock.warehouse', 'warehouse')
+      .leftJoin('stock.product', 'product')
+      .leftJoin('product.unit', 'unit')
+      .select('stock.productId', 'productId')
+      .addSelect('product.code', 'productCode')
+      .addSelect('product.name', 'productName')
+      .addSelect('unit.name', 'unitName')
+      .addSelect('stock.avgCost', 'avgCost')
+      .addSelect('stock.quantity', 'quantity')
+      .where('stock.warehouseId = :warehouseId', { warehouseId })
+      .orderBy('product.name', 'ASC');
+    if (productType) qb.andWhere('product.productType = :productType', { productType });
+    applyBranchScope(qb, 'warehouse.branchId', branchScope);
+    const rows = await qb.getRawMany<{
+      productId: string;
+      productCode: string | null;
+      productName: string | null;
+      unitName: string | null;
+      avgCost: string;
+      quantity: string;
+    }>();
+    return rows.map((r) => ({
+      productId: r.productId,
+      productCode: r.productCode ?? null,
+      productName: r.productName ?? null,
+      unitName: r.unitName ?? null,
+      avgCost: Number(r.avgCost ?? 0),
+      quantity: Number(r.quantity ?? 0),
+    }));
+  }
 }
 
 function round2(value: number): number {

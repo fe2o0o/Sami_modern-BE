@@ -31,6 +31,11 @@ export class ManufacturingOrderComponent extends BaseEntity {
   @Column({ type: 'varchar', length: 100, nullable: true })
   unitName!: string | null;
 
+  /** Warehouse this component is consumed from (falls back to the order's output
+   *  warehouse at production if null). */
+  @Column({ type: 'uuid', nullable: true })
+  warehouseId!: string | null;
+
   /** Total quantity consumed for the whole order. */
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   quantity!: number;
