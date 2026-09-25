@@ -34,5 +34,6 @@ import { LookupsController } from './lookups.controller';
   ],
   controllers: [LookupsController],
   providers: [LookupsService],
+  exports: [LookupsService],
 })
 export class LookupsModule {}

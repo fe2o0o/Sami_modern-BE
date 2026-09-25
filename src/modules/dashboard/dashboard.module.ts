@@ -34,5 +34,6 @@ import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-orde
   ],
   controllers: [DashboardController],
   providers: [DashboardService],
+  exports: [DashboardService],
 })
 export class DashboardModule {}
