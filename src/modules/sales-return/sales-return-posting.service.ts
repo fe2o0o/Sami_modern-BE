@@ -28,6 +28,8 @@ import {
   JournalLineInput,
 } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
+import { Customer } from '../customer/entities/customer.entity';
 
 /**
  * Accounting/inventory side-effects of a sales return — the inverse of a sale
@@ -81,7 +83,9 @@ export class SalesReturnPostingService {
         });
       }
 
-      const lines = this.buildJournalLines(ret, products, settings);
+      const customer = await manager.getRepository(Customer).findOne({ where: { id: ret.customerId }, select: { id: true, name: true } });
+      const customerName = customer?.name ?? '';
+      const lines = this.buildJournalLines(ret, products, settings, number, customerName);
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.SALES_RETURN,
@@ -91,7 +95,7 @@ export class SalesReturnPostingService {
           fiscalYearId: ret.fiscalYearId,
           accountingPeriodId: ret.accountingPeriodId,
           branchId: ret.branchId,
-          description: `مردود مبيعات ${number} — فاتورة ${ret.invoiceNumber ?? ''}`,
+          description: `مردود مبيعات ${number} — فاتورة ${ret.invoiceNumber ?? ''} — العميل: ${customerName}`,
           lines,
           actorId,
         },
@@ -259,26 +263,25 @@ export class SalesReturnPostingService {
     ret: SalesReturn,
     products: Map<string, Product>,
     settings: AccountingSetting,
+    number: string,
+    customerName: string,
   ): JournalLineInput[] {
-    const acc = new Map<string, { debit: number; credit: number }>();
-    const add = (accountId: string, debit: number, credit: number): void => {
-      const e = acc.get(accountId) ?? { debit: 0, credit: 0 };
-      e.debit = round2(e.debit + debit);
-      e.credit = round2(e.credit + credit);
-      acc.set(accountId, e);
-    };
+    const b = new JournalLineBuilder();
+    const ref = `مردود مبيعات ${number}`;
 
-    // Credit receivable (credit sale) or refund cash/bank (cash sale).
-    const creditAccount =
-      ret.paymentType === SalesPaymentType.CREDIT ? settings.customerControlAccountId! : ret.cashAccountId!;
-    add(creditAccount, 0, ret.totalAmount);
+    // Credit receivable (credit sale, tagged with the customer) or refund cash/bank (cash sale).
+    if (ret.paymentType === SalesPaymentType.CREDIT) {
+      b.add(settings.customerControlAccountId!, 0, ret.totalAmount, `تخفيض مديونية العميل ${customerName} — ${ref}`, { customerId: ret.customerId });
+    } else {
+      b.add(ret.cashAccountId!, 0, ret.totalAmount, `رد نقدي للعميل ${customerName} — ${ref}`);
+    }
 
     // Debit revenue (reduce it) + debit output VAT.
     for (const item of ret.items) {
       const revenueAccount = products.get(item.productId)!.salesAccountId ?? settings.salesRevenueAccountId!;
-      add(revenueAccount, item.netBeforeTax, 0);
+      b.add(revenueAccount, item.netBeforeTax, 0, `عكس إيراد مبيعات — ${ref}`);
     }
-    if (ret.vatAmount > 0) add(settings.outputVatAccountId!, ret.vatAmount, 0);
+    if (ret.vatAmount > 0) b.add(settings.outputVatAccountId!, ret.vatAmount, 0, `عكس ضريبة القيمة المضافة (مخرجات) — ${ref}`);
 
     // Restore inventory + reverse COGS for returned stock lines.
     for (const item of ret.items) {
@@ -289,16 +292,11 @@ export class SalesReturnPostingService {
       if (cost <= 0) continue;
       const cogs = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId!;
       const inventory = this.resolveInventoryAccount(product, settings)!;
-      add(inventory, cost, 0);
-      add(cogs, 0, cost);
+      b.add(inventory, cost, 0, `إعادة بضاعة مرتجعة للمخزون — ${ref}`, { warehouseId: ret.warehouseId });
+      b.add(cogs, 0, cost, `عكس تكلفة البضاعة المباعة — ${ref}`);
     }
 
-    return [...acc.entries()]
-      .map(([accountId, e]) => {
-        const net = round2(e.debit - e.credit);
-        return net >= 0 ? { accountId, debit: net, credit: 0 } : { accountId, debit: 0, credit: round2(-net) };
-      })
-      .filter((l) => l.debit > 0 || l.credit > 0);
+    return b.build();
   }
 
   private validateAccounts(ret: SalesReturn, products: Map<string, Product>, settings: AccountingSetting): void {

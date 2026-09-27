@@ -12,6 +12,9 @@ import { Customer } from '../customer/entities/customer.entity';
 import { Supplier } from '../supplier/entities/supplier.entity';
 import { Employee } from '../employee/entities/employee.entity';
 import { Product } from '../product/entities/product.entity';
+import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
+import { Treasury } from '../treasury/entities/treasury.entity';
+import { BankAccount } from '../bank-account/entities/bank-account.entity';
 import { LookupsService } from './lookups.service';
 import { LookupsController } from './lookups.controller';
 
@@ -30,6 +33,9 @@ import { LookupsController } from './lookups.controller';
       Supplier,
       Employee,
       Product,
+      AccountingSetting,
+      Treasury,
+      BankAccount,
     ]),
   ],
   controllers: [LookupsController],

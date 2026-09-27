@@ -32,6 +32,8 @@ import { StockMovementType } from '../stock/enums/stock.enum';
 import { SequenceService } from '../sequence/sequence.service';
 import { JournalEntryService, JournalLineInput } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
+import { Customer } from '../customer/entities/customer.entity';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
@@ -100,8 +102,9 @@ export class SalesDeliveryPostingService {
       }
 
       // Book the cost of sales: DR COGS / CR inventory.
-      const lines = this.buildJournalLines(delivery, products, settings);
+      const lines = this.buildJournalLines(delivery, products, settings, number);
       if (lines.length) {
+        const customerName = await this.customerName(delivery.customerId, manager);
         const journalEntry = await this.journalService.createSystemJournalEntry(
           {
             sourceType: JournalSourceType.SALES_DELIVERY,
@@ -111,7 +114,7 @@ export class SalesDeliveryPostingService {
             fiscalYearId: delivery.fiscalYearId,
             accountingPeriodId: delivery.accountingPeriodId,
             branchId: delivery.branchId,
-            description: `إذن تسليم ${number}${delivery.invoiceNumber ? ` — فاتورة ${delivery.invoiceNumber}` : ''}`,
+            description: `تكلفة مبيعات — إذن تسليم ${number}${delivery.invoiceNumber ? ` — فاتورة ${delivery.invoiceNumber}` : ''} — العميل: ${customerName}`,
             lines,
             actorId,
           },
@@ -284,6 +287,8 @@ export class SalesDeliveryPostingService {
         await this.stockService.releaseReservation(stockLine, manager);
       }
 
+      const customerName = await this.customerName(delivery.customerId, manager);
+      const itemRef = `${product.name ?? ''} (${qty}) — إذن تسليم ${number}`;
       await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.SALES_DELIVERY,
@@ -293,10 +298,10 @@ export class SalesDeliveryPostingService {
           fiscalYearId: fiscalYear.id,
           accountingPeriodId: period.id,
           branchId: delivery.branchId,
-          description: `تسليم ${product.name ?? ''} (${qty}) — ${number}`,
+          description: `تسليم ${itemRef}${delivery.invoiceNumber ? ` — فاتورة ${delivery.invoiceNumber}` : ''} — العميل: ${customerName}`,
           lines: [
-            { accountId: cogsAcc, debit: lineCost, credit: 0 },
-            { accountId: invAcc, debit: 0, credit: lineCost },
+            { accountId: cogsAcc, debit: lineCost, credit: 0, description: `تكلفة تسليم ${itemRef}`, productId: item.productId, warehouseId: item.warehouseId },
+            { accountId: invAcc, debit: 0, credit: lineCost, description: `صرف من المخزن ${itemRef}`, productId: item.productId, warehouseId: item.warehouseId },
           ],
           actorId,
         },
@@ -527,30 +532,24 @@ export class SalesDeliveryPostingService {
   // =========================================================
   // ACCOUNTING
   // =========================================================
-  private buildJournalLines(delivery: SalesDelivery, products: Map<string, Product>, settings: AccountingSetting): JournalLineInput[] {
-    const acc = new Map<string, { debit: number; credit: number }>();
-    const add = (accountId: string, debit: number, credit: number): void => {
-      const e = acc.get(accountId) ?? { debit: 0, credit: 0 };
-      e.debit = round2(e.debit + debit);
-      e.credit = round2(e.credit + credit);
-      acc.set(accountId, e);
-    };
-
+  private buildJournalLines(delivery: SalesDelivery, products: Map<string, Product>, settings: AccountingSetting, number: string): JournalLineInput[] {
+    const b = new JournalLineBuilder();
+    const ref = `إذن تسليم ${number}`;
     for (const item of delivery.items) {
       if (item.lineCost <= 0) continue;
       const product = products.get(item.productId)!;
       const cogs = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId!;
       const inventory = this.resolveInventoryAccount(product, settings)!;
-      add(cogs, item.lineCost, 0);
-      add(inventory, 0, item.lineCost);
+      b.add(cogs, item.lineCost, 0, `تكلفة البضاعة المباعة — ${ref}`);
+      b.add(inventory, 0, item.lineCost, `صرف بضاعة من المخزن — ${ref}`, { warehouseId: item.warehouseId });
     }
+    return b.build();
+  }
 
-    return [...acc.entries()]
-      .map(([accountId, e]) => {
-        const net = round2(e.debit - e.credit);
-        return net >= 0 ? { accountId, debit: net, credit: 0 } : { accountId, debit: 0, credit: round2(-net) };
-      })
-      .filter((l) => l.debit > 0 || l.credit > 0);
+  private async customerName(customerId: string | null, manager: EntityManager): Promise<string> {
+    if (!customerId) return '';
+    const c = await manager.getRepository(Customer).findOne({ where: { id: customerId }, select: { id: true, name: true } });
+    return c?.name ?? '';
   }
 
   private validateAccounts(delivery: SalesDelivery, products: Map<string, Product>, settings: AccountingSetting): void {

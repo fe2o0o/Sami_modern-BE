@@ -36,6 +36,7 @@ import { CreateJournalEntryDto } from './dto/create-journal-entry.dto';
 import { UpdateJournalEntryDto } from './dto/update-journal-entry.dto';
 import { ReverseJournalEntryDto } from './dto/reverse-journal-entry.dto';
 import { JournalEntryQueryDto } from './dto/journal-entry-query.dto';
+import { JournalEntrySubledgerService, JournalPartyKind } from './journal-entry-subledger.service';
 
 export type { JournalLineInput } from './journal-entry.rules';
 
@@ -71,7 +72,7 @@ export interface JournalEntryListItem {
   totalCredit: number;
 }
 
-/** One journal line enriched with account code/name for display. */
+/** One journal line enriched with account code/name + party for display. */
 export interface DetailedLine {
   accountId: string;
   accountCode: string;
@@ -79,6 +80,12 @@ export interface DetailedLine {
   debit: number;
   credit: number;
   description: string | null;
+  customerId: string | null;
+  supplierId: string | null;
+  /** Subledger the line is mirrored on (customer/supplier/treasury/bank), if any. */
+  partyType: JournalPartyKind | null;
+  partyId: string | null;
+  partyName: string | null;
 }
 
 /** Full details view of a journal entry (header + enriched lines + links). */
@@ -140,6 +147,7 @@ export class JournalEntryService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly sequence: SequenceService,
+    private readonly subledger: JournalEntrySubledgerService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -316,9 +324,10 @@ export class JournalEntryService {
       throw new NotFoundException('لم يتم العثور على القيد المحاسبي');
     }
 
-    const accountInfo = await this.loadAccountInfo(
-      entry.lines.map((l) => l.accountId),
-    );
+    const [accountInfo, parties] = await Promise.all([
+      this.loadAccountInfo(entry.lines.map((l) => l.accountId)),
+      this.subledger.describe(entry.lines, this.entryRepository.manager),
+    ]);
 
     const [fiscalYear, period, branch, users, reversalEntry, reversalOfEntry] =
       await Promise.all([
@@ -360,13 +369,16 @@ export class JournalEntryService {
       branchName: branch?.name ?? null,
       totalDebit: entry.totalDebit,
       totalCredit: entry.totalCredit,
-      lines: entry.lines.map((l) => ({
+      lines: entry.lines.map((l, i) => ({
         accountId: l.accountId,
         accountCode: accountInfo.get(l.accountId)?.code ?? '',
         accountName: accountInfo.get(l.accountId)?.name ?? l.accountId,
         debit: l.debit,
         credit: l.credit,
         description: l.description,
+        customerId: l.customerId ?? null,
+        supplierId: l.supplierId ?? null,
+        ...parties[i],
       })),
       createdAt: entry.createdAt,
       createdByName: users.get(entry.createdBy ?? '') ?? null,
@@ -394,6 +406,8 @@ export class JournalEntryService {
   ): Promise<JournalEntry> {
     await this.assertPeriodBelongsToYear(dto.fiscalYearId, dto.accountingPeriodId);
     const lines = this.toLineInputs(dto.lines);
+    // Party ↔ account consistency only; a draft may still lack the party itself.
+    await this.subledger.validate(lines, this.entryRepository.manager, { requireParty: false });
     const { totalDebit, totalCredit } = computeTotals(lines);
 
     return this.persistEntry(this.entryRepository.manager, {
@@ -443,6 +457,7 @@ export class JournalEntryService {
       if (dto.lines) {
         await manager.delete(JournalEntryLine, { journalEntryId: id });
         const lines = this.toLineInputs(dto.lines);
+        await this.subledger.validate(lines, manager, { requireParty: false });
         const totals = computeTotals(lines);
         entry.totalDebit = totals.totalDebit;
         entry.totalCredit = totals.totalCredit;
@@ -500,6 +515,8 @@ export class JournalEntryService {
         manager,
       );
       validateAccounts(lines, accounts);
+      // A control-account line must name its customer/supplier before it posts.
+      await this.subledger.validate(lines, manager, { requireParty: true });
 
       const { totalDebit, totalCredit } = computeTotals(lines);
       assertPostable(totalDebit, totalCredit);
@@ -513,7 +530,10 @@ export class JournalEntryService {
       entry.postedBy = actorId ?? null;
       entry.updatedBy = actorId ?? null;
 
-      return manager.getRepository(JournalEntry).save(entry);
+      const saved = await manager.getRepository(JournalEntry).save(entry);
+      // Mirror party / cash lines into their subledgers (customer statement, cashbox…).
+      await this.subledger.record(saved, lines, manager, { reversal: false, actorId });
+      return saved;
     });
   }
 
@@ -570,6 +590,8 @@ export class JournalEntryService {
         },
         manager,
       );
+      // Undo the subledger rows the original post wrote (sides already swapped).
+      await this.subledger.record(reversal, reversalLines, manager, { reversal: true, actorId });
 
       await this.markEntryReversed(original.id, reversal.id, dto.reason, actorId, manager);
 
@@ -694,6 +716,7 @@ export class JournalEntryService {
       debit: Number(l.debit) || 0,
       credit: Number(l.credit) || 0,
       description: l.description ?? null,
+      branchId: l.branchId ?? null,
       customerId: l.customerId ?? null,
       supplierId: l.supplierId ?? null,
       warehouseId: l.warehouseId ?? null,

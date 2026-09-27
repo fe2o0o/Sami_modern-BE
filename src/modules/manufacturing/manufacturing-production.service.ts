@@ -95,8 +95,8 @@ export class ManufacturingProductionService {
           branchId: order.branchId,
           description,
           lines: [
-            { accountId: settings.manufacturingFeeAccountId, debit: fee, credit: 0 },
-            { accountId: settings.supplierControlAccountId, debit: 0, credit: fee, supplierId: order.factorySupplierId },
+            { accountId: settings.manufacturingFeeAccountId, debit: fee, credit: 0, description: `رسوم تصنيع — أمر ${order.orderNumber ?? ''} — ${order.productName ?? ''}` },
+            { accountId: settings.supplierControlAccountId, debit: 0, credit: fee, supplierId: order.factorySupplierId, description },
           ],
           actorId,
         },
@@ -307,11 +307,20 @@ export class ManufacturingProductionService {
 
       // 3) Production journal — DR finished goods (total); CR raw materials
       //    (components); CR the fee (clearing account when booked at start).
+      const orderRef = `أمر تصنيع ${order.orderNumber ?? ''}`;
       const lines: JournalLineInput[] = [
-        { accountId: finishedAcc, debit: totalCost, credit: 0, productId: order.productId, warehouseId },
+        { accountId: finishedAcc, debit: totalCost, credit: 0, productId: order.productId, warehouseId, description: `إنتاج ${order.productName ?? ''} (${order.quantity}) — ${orderRef}` },
       ];
-      if (componentCost > 0) lines.push({ accountId: rawAcc, debit: 0, credit: componentCost, warehouseId });
-      if (fee > 0) lines.push({ accountId: feeAcc!, debit: 0, credit: fee, supplierId: bookNow ? factoryId! : undefined });
+      if (componentCost > 0) lines.push({ accountId: rawAcc, debit: 0, credit: componentCost, warehouseId, description: `صرف خامات للإنتاج — ${orderRef}` });
+      if (fee > 0) {
+        lines.push({
+          accountId: feeAcc!,
+          debit: 0,
+          credit: fee,
+          supplierId: bookNow ? factoryId! : undefined,
+          description: bookNow ? `رسوم تصنيع مستحقة للمورد — ${orderRef}` : `تحميل رسوم التصنيع على المنتج — ${orderRef}`,
+        });
+      }
       const journal = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.MANUFACTURING,

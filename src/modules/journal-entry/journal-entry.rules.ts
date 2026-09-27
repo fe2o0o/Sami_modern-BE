@@ -130,6 +130,7 @@ export function buildReversalLines(
     debit: line.credit,
     credit: line.debit,
     description: line.description ? `عكس: ${line.description}` : 'عكس قيد',
+    branchId: line.branchId ?? null,
     customerId: line.customerId ?? null,
     supplierId: line.supplierId ?? null,
     warehouseId: line.warehouseId ?? null,

@@ -13,6 +13,9 @@ import { Customer } from '../customer/entities/customer.entity';
 import { Supplier } from '../supplier/entities/supplier.entity';
 import { Employee } from '../employee/entities/employee.entity';
 import { Product } from '../product/entities/product.entity';
+import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
+import { Treasury } from '../treasury/entities/treasury.entity';
+import { BankAccount } from '../bank-account/entities/bank-account.entity';
 import {
   WAREHOUSE_TYPE_LABELS,
   WarehouseType,
@@ -39,6 +42,23 @@ export interface EmployeeLookupItem extends LookupItem {
 export interface WarehouseTypeLookupItem {
   value: WarehouseType;
   name: string;
+}
+
+/** A treasury / bank account together with the GL account it posts through. */
+export interface CashEntityLookupItem extends LookupItem {
+  accountId: string;
+}
+
+/**
+ * Which GL accounts carry a subledger — the journal editor uses this to ask for
+ * a customer/supplier on the control accounts and to show which treasury/bank a
+ * cash line lands in.
+ */
+export interface SubledgerAccountsLookup {
+  customerControlAccountId: string | null;
+  supplierControlAccountId: string | null;
+  treasuries: CashEntityLookupItem[];
+  bankAccounts: CashEntityLookupItem[];
 }
 
 @Injectable()
@@ -68,7 +88,27 @@ export class LookupsService {
     private readonly employeeRepository: Repository<Employee>,
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
+    @InjectRepository(AccountingSetting)
+    private readonly settingsRepository: Repository<AccountingSetting>,
+    @InjectRepository(Treasury)
+    private readonly treasuryRepository: Repository<Treasury>,
+    @InjectRepository(BankAccount)
+    private readonly bankAccountRepository: Repository<BankAccount>,
   ) {}
+
+  async subledgerAccounts(): Promise<SubledgerAccountsLookup> {
+    const [settings, treasuries, banks] = await Promise.all([
+      this.settingsRepository.findOne({ where: {} }),
+      this.treasuryRepository.find({ where: { isActive: true }, select: { id: true, name: true, accountId: true }, order: { name: 'ASC' } }),
+      this.bankAccountRepository.find({ where: { isActive: true }, select: { id: true, bankName: true, accountName: true, accountId: true }, order: { bankName: 'ASC' } }),
+    ]);
+    return {
+      customerControlAccountId: settings?.customerControlAccountId ?? null,
+      supplierControlAccountId: settings?.supplierControlAccountId ?? null,
+      treasuries: treasuries.map((t) => ({ id: t.id, name: t.name, accountId: t.accountId })),
+      bankAccounts: banks.map((b) => ({ id: b.id, name: `${b.bankName} - ${b.accountName}`, accountId: b.accountId })),
+    };
+  }
 
   /**
    * Active employees with their default commission rate (for invoice pickers).
