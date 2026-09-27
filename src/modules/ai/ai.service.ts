@@ -110,7 +110,8 @@ export class AiService implements OnModuleInit {
 
     const toolsUsed: string[] = [];
     const tokens = { prompt: 0, completion: 0, total: 0 };
-    let structured: { type: AiPresentationType; data: unknown } | null = null;
+    /** Every structured tool result of this turn (a repeated tool replaces its earlier result). */
+    const structured: { tool: string; type: AiPresentationType; data: unknown }[] = [];
     let finalText = '';
 
     try {
@@ -144,7 +145,10 @@ export class AiService implements OnModuleInit {
             toolsUsed.push(name);
             const result = await this.registry.execute(name, args, ctx);
             if (result.success && result.presentation && result.presentation !== 'text') {
-              structured = { type: result.presentation, data: result.data };
+              const idx = structured.findIndex((s) => s.tool === name);
+              const entry = { tool: name, type: result.presentation, data: result.data };
+              if (idx >= 0) structured[idx] = entry;
+              else structured.push(entry);
             }
             messages.push({
               role: 'tool',
@@ -163,10 +167,12 @@ export class AiService implements OnModuleInit {
         finalText = 'تم تنفيذ الطلب. إن احتجت تفاصيل إضافية أخبرني.';
       }
 
+      // One structured result → as is. Several → bundle them so the UI renders each.
+      const single = structured.length === 1 ? structured[0] : null;
       const result: AiChatResult = {
         message: finalText,
-        type: structured?.type ?? 'text',
-        data: structured?.data ?? null,
+        type: single ? single.type : structured.length > 1 ? 'report' : 'text',
+        data: single ? single.data : structured.length > 1 ? { __responses: structured } : null,
         conversationId: convId,
         meta: { model, toolsUsed, tokens, durationMs: Date.now() - started },
       };
