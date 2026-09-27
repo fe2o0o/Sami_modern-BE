@@ -21,16 +21,29 @@ import { SupplierTransactionType } from '../supplier/enums/supplier-transaction.
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
+function todayIso(): string {
+  const d = new Date();
+  const m = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
 
 /**
- * Executes production of a manufacturing order (ONE transaction):
- *  1. issue the BOM components out of the warehouse at weighted-average cost,
- *  2. produce the finished product INTO the warehouse at (components + fee) cost,
- *  3. book DR finished-goods inventory / CR raw-material inventory + CR the fee
- *     (supplier control for a factory order, else the manufacturing-fee account),
- *  4. for a factory order, record the fee as a payable to that supplier,
- *  5. assign the produced warehouse to the linked sales delivery line so it
- *     becomes confirmable.
+ * Manufacturing order lifecycle with its accounting:
+ *
+ *  START (NEW → IN_PROGRESS) — the factory's fee is booked to the supplier
+ *    right away: DR manufacturing-fee (clearing) / CR supplier control, plus a
+ *    supplier subledger credit whose description names the customer and the
+ *    sales invoice. Requires a supplier and a fee.
+ *
+ *  PRODUCE — issue the BOM components at weighted-average cost, receive the
+ *    finished product at (components + fee). Journal: DR finished goods /
+ *    CR raw materials / CR the fee. When the fee was booked at start, the fee
+ *    credit clears the manufacturing-fee account (net zero) and NO second
+ *    payable is recorded; legacy/in-house orders keep booking the fee here.
+ *
+ *  CANCEL — an order whose fee was booked gets a reversing entry and a
+ *    supplier subledger debit before it is cancelled.
  */
 @Injectable()
 export class ManufacturingProductionService {
@@ -41,6 +54,146 @@ export class ManufacturingProductionService {
     private readonly dataSource: DataSource,
   ) {}
 
+  /** Subledger/journal narration: order · product · customer · invoice. */
+  private feeDescription(order: ManufacturingOrder): string {
+    return `رسوم تصنيع أمر ${order.orderNumber ?? ''} — ${order.productName ?? ''} — العميل: ${order.customerName ?? '—'} — فاتورة: ${order.sourceNumber ?? '—'}`;
+  }
+
+  // =========================================================
+  // START EXECUTION — books the fee to the factory (supplier)
+  // =========================================================
+  async start(orderId: string, actorId?: string, branchScope: string[] | null = null): Promise<ManufacturingOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const order = await manager.findOne(ManufacturingOrder, { where: { id: orderId }, lock: { mode: 'pessimistic_write' } });
+      if (!order || !isWithinBranchScope(order.branchId, branchScope)) throw new NotFoundException('لم يتم العثور على أمر التصنيع');
+      if (order.status !== ManufacturingOrderStatus.NEW) throw new BadRequestException('يمكن بدء التنفيذ لأمر جديد فقط');
+      if (!order.factorySupplierId) throw new BadRequestException('حدد المورّد (المصنع) قبل بدء التنفيذ');
+      const fee = round2(order.manufacturingFee ?? 0);
+      if (fee <= 0) throw new BadRequestException('حدد رسوم التصنيع قبل بدء التنفيذ — تُرحَّل على المورّد عند البدء');
+
+      const supplier = await manager.getRepository(Supplier).findOne({ where: { id: order.factorySupplierId } });
+      if (!supplier) throw new BadRequestException('المصنع (المورّد) غير موجود');
+
+      const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+      if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
+      if (!settings.supplierControlAccountId) throw new BadRequestException('حساب مراقبة الموردين غير محدد في إعدادات المحاسبة');
+      if (!settings.manufacturingFeeAccountId) throw new BadRequestException('حساب رسوم التصنيع غير محدد في إعدادات المحاسبة');
+
+      const date = todayIso();
+      const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
+      const description = this.feeDescription(order);
+
+      // DR manufacturing-fee (clearing, cleared into finished goods at production) / CR supplier control.
+      const journal = await this.journalService.createSystemJournalEntry(
+        {
+          sourceType: JournalSourceType.MANUFACTURING,
+          sourceId: order.id,
+          sourceNumber: order.orderNumber,
+          entryDate: date,
+          fiscalYearId: fiscalYear.id,
+          accountingPeriodId: period.id,
+          branchId: order.branchId,
+          description,
+          lines: [
+            { accountId: settings.manufacturingFeeAccountId, debit: fee, credit: 0 },
+            { accountId: settings.supplierControlAccountId, debit: 0, credit: fee, supplierId: order.factorySupplierId },
+          ],
+          actorId,
+        },
+        manager,
+      );
+      await this.supplierLedger.record(
+        {
+          supplierId: order.factorySupplierId,
+          transactionDate: date,
+          type: SupplierTransactionType.MANUFACTURING_FEE,
+          sourceType: JournalSourceType.MANUFACTURING,
+          sourceId: order.id,
+          sourceNumber: order.orderNumber,
+          debit: 0,
+          credit: fee,
+          description,
+          actorId,
+        },
+        manager,
+      );
+
+      order.status = ManufacturingOrderStatus.IN_PROGRESS;
+      order.startedAt = order.startedAt ?? new Date();
+      order.feeJournalEntryId = journal.id;
+      order.feeBookedAt = new Date();
+      order.factorySupplierName = supplier.name;
+      order.updatedBy = actorId ?? null;
+      return manager.getRepository(ManufacturingOrder).save(order);
+    });
+  }
+
+  // =========================================================
+  // CANCEL — reverses a booked fee first
+  // =========================================================
+  async cancel(orderId: string, actorId?: string, branchScope: string[] | null = null): Promise<ManufacturingOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const order = await manager.findOne(ManufacturingOrder, { where: { id: orderId }, lock: { mode: 'pessimistic_write' } });
+      if (!order || !isWithinBranchScope(order.branchId, branchScope)) throw new NotFoundException('لم يتم العثور على أمر التصنيع');
+      if (order.status === ManufacturingOrderStatus.CANCELLED) throw new BadRequestException('الأمر ملغى بالفعل');
+      if (order.status === ManufacturingOrderStatus.PRODUCED || order.status === ManufacturingOrderStatus.DONE) {
+        throw new BadRequestException('لا يمكن إلغاء أمر تم إنتاجه');
+      }
+
+      if (order.feeJournalEntryId && order.factorySupplierId) {
+        const fee = round2(order.manufacturingFee ?? 0);
+        const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+        if (!settings?.supplierControlAccountId || !settings.manufacturingFeeAccountId) {
+          throw new BadRequestException('إعدادات المحاسبة غير مكتملة لعكس رسوم التصنيع');
+        }
+        const date = todayIso();
+        const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
+        const description = `إلغاء ${this.feeDescription(order)}`;
+        await this.journalService.createSystemJournalEntry(
+          {
+            sourceType: JournalSourceType.MANUFACTURING,
+            sourceId: order.id,
+            sourceNumber: order.orderNumber,
+            entryDate: date,
+            fiscalYearId: fiscalYear.id,
+            accountingPeriodId: period.id,
+            branchId: order.branchId,
+            description,
+            lines: [
+              { accountId: settings.supplierControlAccountId, debit: fee, credit: 0, supplierId: order.factorySupplierId },
+              { accountId: settings.manufacturingFeeAccountId, debit: 0, credit: fee },
+            ],
+            actorId,
+            reversalOfJournalEntryId: order.feeJournalEntryId,
+          },
+          manager,
+        );
+        await this.supplierLedger.record(
+          {
+            supplierId: order.factorySupplierId,
+            transactionDate: date,
+            type: SupplierTransactionType.REVERSAL,
+            sourceType: JournalSourceType.MANUFACTURING,
+            sourceId: order.id,
+            sourceNumber: order.orderNumber,
+            debit: fee,
+            credit: 0,
+            description,
+            actorId,
+          },
+          manager,
+        );
+      }
+
+      order.status = ManufacturingOrderStatus.CANCELLED;
+      order.updatedBy = actorId ?? null;
+      return manager.getRepository(ManufacturingOrder).save(order);
+    });
+  }
+
+  // =========================================================
+  // PRODUCE
+  // =========================================================
   async produce(
     orderId: string,
     dto: ProduceManufacturingOrderDto,
@@ -67,8 +220,19 @@ export class ManufacturingProductionService {
         : order.components;
       const date = dto.productionDate;
       const warehouseId = dto.warehouseId;
-      const fee = round2(dto.manufacturingFee ?? order.manufacturingFee ?? 0);
-      const factoryId = dto.factorySupplierId ?? order.factorySupplierId ?? null;
+
+      // Fee/supplier: locked once booked at start; otherwise the production-time values.
+      const feeBooked = !!order.feeJournalEntryId;
+      const fee = feeBooked ? round2(order.manufacturingFee ?? 0) : round2(dto.manufacturingFee ?? order.manufacturingFee ?? 0);
+      const factoryId = feeBooked ? order.factorySupplierId : (dto.factorySupplierId ?? order.factorySupplierId ?? null);
+      if (feeBooked) {
+        if (dto.manufacturingFee !== undefined && round2(dto.manufacturingFee) !== fee) {
+          throw new BadRequestException('رسوم التصنيع مُرحّلة على المورّد عند بدء التنفيذ ولا يمكن تغييرها هنا');
+        }
+        if (dto.factorySupplierId !== undefined && (dto.factorySupplierId ?? null) !== factoryId) {
+          throw new BadRequestException('المورّد مُرحّلة عليه الرسوم عند بدء التنفيذ ولا يمكن تغييره هنا');
+        }
+      }
       // A production must have something to it: at least components OR a fee.
       if (!components.length && fee <= 0) {
         throw new BadRequestException('لا يمكن التصنيع بدون مكوّنات وبدون رسوم — أضف مكوّنات أو رسوم تصنيع');
@@ -92,12 +256,13 @@ export class ManufacturingProductionService {
         supplier = await manager.getRepository(Supplier).findOne({ where: { id: factoryId } });
         if (!supplier) throw new BadRequestException('المصنع (المورّد) غير موجود');
       }
-      const feeAcc = factoryId ? settings.supplierControlAccountId : settings.manufacturingFeeAccountId;
+      // Fee credit: booked-at-start → clear the manufacturing-fee account; factory
+      // not yet booked → supplier control; in-house → manufacturing-fee account.
+      const bookNow = !feeBooked && !!factoryId;
+      const feeAcc = bookNow ? settings.supplierControlAccountId : settings.manufacturingFeeAccountId;
       if (fee > 0 && !feeAcc) {
         throw new BadRequestException(
-          factoryId
-            ? 'حساب مراقبة الموردين غير محدد في إعدادات المحاسبة'
-            : 'حساب رسوم التصنيع غير محدد في إعدادات المحاسبة',
+          bookNow ? 'حساب مراقبة الموردين غير محدد في إعدادات المحاسبة' : 'حساب رسوم التصنيع غير محدد في إعدادات المحاسبة',
         );
       }
 
@@ -140,14 +305,13 @@ export class ManufacturingProductionService {
         },
       );
 
-      // 3) Book the production journal — DR finished-goods inventory (total cost);
-      //    CR raw-material inventory (components); CR the fee (supplier control for a
-      //    factory, else the manufacturing-fee account).
+      // 3) Production journal — DR finished goods (total); CR raw materials
+      //    (components); CR the fee (clearing account when booked at start).
       const lines: JournalLineInput[] = [
         { accountId: finishedAcc, debit: totalCost, credit: 0, productId: order.productId, warehouseId },
       ];
       if (componentCost > 0) lines.push({ accountId: rawAcc, debit: 0, credit: componentCost, warehouseId });
-      if (fee > 0) lines.push({ accountId: feeAcc!, debit: 0, credit: fee, supplierId: factoryId ?? undefined });
+      if (fee > 0) lines.push({ accountId: feeAcc!, debit: 0, credit: fee, supplierId: bookNow ? factoryId! : undefined });
       const journal = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.MANUFACTURING,
@@ -157,18 +321,18 @@ export class ManufacturingProductionService {
           fiscalYearId: fiscalYear.id,
           accountingPeriodId: period.id,
           branchId: order.branchId,
-          description: `أمر تصنيع ${order.orderNumber ?? ''} — إنتاج ${order.productName ?? ''}`,
+          description: `أمر تصنيع ${order.orderNumber ?? ''} — إنتاج ${order.productName ?? ''} — العميل: ${order.customerName ?? '—'} — فاتورة: ${order.sourceNumber ?? '—'}`,
           lines,
           actorId,
         },
         manager,
       );
 
-      // 4) Factory (supplier) payable for the fee.
-      if (factoryId && fee > 0) {
+      // 4) Factory payable — only when it was NOT already booked at start.
+      if (bookNow && fee > 0) {
         await this.supplierLedger.record(
           {
-            supplierId: factoryId,
+            supplierId: factoryId!,
             transactionDate: date,
             type: SupplierTransactionType.MANUFACTURING_FEE,
             sourceType: JournalSourceType.MANUFACTURING,
@@ -176,7 +340,7 @@ export class ManufacturingProductionService {
             sourceNumber: order.orderNumber,
             debit: 0,
             credit: fee,
-            description: `رسوم تصنيع أمر ${order.orderNumber ?? ''}`,
+            description: this.feeDescription(order),
             actorId,
           },
           manager,
@@ -189,7 +353,7 @@ export class ManufacturingProductionService {
       order.warehouseId = warehouseId;
       order.manufacturingFee = fee;
       order.factorySupplierId = factoryId;
-      order.factorySupplierName = supplier?.name ?? null;
+      order.factorySupplierName = supplier?.name ?? order.factorySupplierName ?? null;
       order.totalCost = totalCost;
       order.journalEntryId = journal.id;
       order.accountingPeriodId = period.id;
@@ -258,7 +422,7 @@ export class ManufacturingProductionService {
       .where('p.startDate <= :d AND p.endDate >= :d', { d: date })
       .andWhere('p.isClosed = false')
       .getOne();
-    if (!period) throw new BadRequestException('لا توجد فترة محاسبية مفتوحة تشمل تاريخ الإنتاج');
+    if (!period) throw new BadRequestException('لا توجد فترة محاسبية مفتوحة تشمل هذا التاريخ');
     const fiscalYear = await manager.getRepository(FiscalYear).findOne({ where: { id: period.fiscalYearId } });
     if (!fiscalYear) throw new NotFoundException('السنة المالية غير موجودة');
     if (fiscalYear.isClosed) throw new BadRequestException('السنة المالية مغلقة');

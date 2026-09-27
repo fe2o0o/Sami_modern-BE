@@ -8,6 +8,8 @@ import { GeneralLedgerQueryDto } from './dto/general-ledger-query.dto';
 import { TrialBalanceQueryDto } from './dto/trial-balance-query.dto';
 import { FinancialStatementQueryDto } from './dto/financial-statement-query.dto';
 import { CashAccountsReportQueryDto } from './dto/cash-accounts-report-query.dto';
+import { ProductIncomeReportService } from './product-income-report.service';
+import { ProductIncomeQueryDto } from './dto/product-income-query.dto';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 
@@ -26,7 +28,15 @@ export class AccountingReportController {
     private readonly trialBalance: TrialBalanceService,
     private readonly financialStatements: FinancialStatementsService,
     private readonly treasuryCashReport: TreasuryCashReportService,
+    private readonly productIncome: ProductIncomeReportService,
   ) {}
+
+  @Get('products/income-summary')
+  @RequirePermissions('accounting_reports.view')
+  @ApiOperation({ summary: 'دخل المنتجات — الإيراد والمرتجعات وتكلفة المبيعات والربح لكل منتج خلال فترة' })
+  getProductIncome(@Query() query: ProductIncomeQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.productIncome.summary(query, branchScope);
+  }
 
   @Get('general-ledger')
   @RequirePermissions('accounting_reports.view')
