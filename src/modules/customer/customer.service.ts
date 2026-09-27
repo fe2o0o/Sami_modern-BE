@@ -4,7 +4,9 @@ import { DataSource, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
-import { BaseCrudService } from '../../common/services/base-crud.service';
+import { BaseCrudService, ListQuery } from '../../common/services/base-crud.service';
+import { PaginatedResult } from '../../common/interfaces/api-response.interface';
+import { CustomerLedgerService } from './customer-ledger.service';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
@@ -41,6 +43,7 @@ export class CustomerService extends BaseCrudService<Customer> {
     private readonly excel: ExcelService,
     private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
+    private readonly ledger: CustomerLedgerService,
     imports: ImportRegistry,
   ) {
     super(customerRepository);
@@ -93,6 +96,19 @@ export class CustomerService extends BaseCrudService<Customer> {
         }),
       );
     });
+  }
+
+  /** List rows carry the live receivable balance (Σdebit − Σcredit of the subledger). */
+  override async findAll(query: ListQuery): Promise<PaginatedResult<Customer & { balance: number }>> {
+    const page = await super.findAll(query);
+    const balances = await this.ledger.balances(page.items.map((c) => c.id));
+    return { ...page, items: page.items.map((c) => ({ ...c, balance: balances.get(c.id) ?? 0 })) };
+  }
+
+  /** Current balance + credit limit — what an invoice screen needs about a customer. */
+  async balanceOf(id: string): Promise<{ id: string; name: string; balance: number; creditLimit: number }> {
+    const customer = await this.findOne(id);
+    return { id, name: customer.name, balance: await this.ledger.balance(id), creditLimit: Number(customer.creditLimit) || 0 };
   }
 
   async create(dto: CreateCustomerDto): Promise<Customer> {

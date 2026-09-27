@@ -69,6 +69,21 @@ export class SupplierLedgerService {
     return round2(Number(row?.c ?? 0) - Number(row?.d ?? 0));
   }
 
+  /** Current payable balances for many suppliers in one query (0 for those with no movements). */
+  async balances(supplierIds: string[]): Promise<Map<string, number>> {
+    const map = new Map<string, number>(supplierIds.map((id) => [id, 0]));
+    if (!supplierIds.length) return map;
+    const rows = await this.repository
+      .createQueryBuilder('t')
+      .select('t.supplierId', 'id')
+      .addSelect('COALESCE(SUM(t.credit - t.debit), 0)', 'b')
+      .where('t.supplierId IN (:...ids)', { ids: supplierIds })
+      .groupBy('t.supplierId')
+      .getRawMany<{ id: string; b: string }>();
+    for (const r of rows) map.set(r.id, round2(Number(r.b)));
+    return map;
+  }
+
   /** Full statement for a supplier, newest first, with the running balance. */
   async statement(supplierId: string): Promise<SupplierStatement> {
     const transactions = await this.repository.find({

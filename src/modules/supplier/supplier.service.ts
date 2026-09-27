@@ -4,7 +4,9 @@ import { DataSource, Repository } from 'typeorm';
 import { Supplier } from './entities/supplier.entity';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
-import { BaseCrudService } from '../../common/services/base-crud.service';
+import { BaseCrudService, ListQuery } from '../../common/services/base-crud.service';
+import { PaginatedResult } from '../../common/interfaces/api-response.interface';
+import { SupplierLedgerService } from './supplier-ledger.service';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
@@ -40,6 +42,7 @@ export class SupplierService extends BaseCrudService<Supplier> {
     private readonly excel: ExcelService,
     private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
+    private readonly ledger: SupplierLedgerService,
     imports: ImportRegistry,
   ) {
     super(supplierRepository);
@@ -91,6 +94,19 @@ export class SupplierService extends BaseCrudService<Supplier> {
         }),
       );
     });
+  }
+
+  /** List rows carry the live payable balance (Σcredit − Σdebit of the subledger). */
+  override async findAll(query: ListQuery): Promise<PaginatedResult<Supplier & { balance: number }>> {
+    const page = await super.findAll(query);
+    const balances = await this.ledger.balances(page.items.map((s) => s.id));
+    return { ...page, items: page.items.map((s) => ({ ...s, balance: balances.get(s.id) ?? 0 })) };
+  }
+
+  /** Current payable balance — what a purchase screen needs about a supplier. */
+  async balanceOf(id: string): Promise<{ id: string; name: string; balance: number }> {
+    const supplier = await this.findOne(id);
+    return { id, name: supplier.name, balance: await this.ledger.balance(id) };
   }
 
   async create(dto: CreateSupplierDto): Promise<Supplier> {

@@ -16,6 +16,7 @@ import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
 import { SalesInvoiceStatus, SalesLineType } from '../sales-invoice/enums/sales-invoice.enum';
 import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
+import { Product } from '../product/entities/product.entity';
 import { SalesDeliveryStatus } from '../sales-delivery/enums/sales-delivery.enum';
 import { round2 } from '../sales-invoice/sales-math';
 import { Customer } from '../customer/entities/customer.entity';
@@ -46,10 +47,17 @@ export interface ReturnableLine {
   productName: string | null;
   unitName: string | null;
   lineType: string;
+  /** Quantity on the invoice line. */
+  invoicedQuantity: number;
+  /** Quantity actually delivered (equals invoiced for lines that never ship through a delivery note). */
+  deliveredQuantity: number;
+  /** The returnable basis: delivered goods for stock lines, invoiced quantity otherwise. */
   soldQuantity: number;
   returnedQuantity: number;
   remainingQuantity: number;
   unitPrice: number;
+  /** Why nothing can be returned on this line right now (null = returnable). */
+  blockedReason: string | null;
 }
 
 @Injectable()
@@ -90,13 +98,20 @@ export class SalesReturnService {
       throw new BadRequestException('لا يمكن إنشاء مردود إلا من فاتورة مُرحّلة');
     }
     const returned = await this.returnedQtyByItem(invoice.items.map((i) => i.id));
-    // Only DELIVERED goods are returnable. Manufacturing lines never ship through
-    // a delivery note, so they fall back to the invoiced quantity.
+    // Only DELIVERED goods are returnable. Manufacturing, service and
+    // non-inventory lines never ship through a delivery note, so they fall back
+    // to the invoiced quantity (they were "delivered" at invoicing).
     const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
+    const ships = await this.shipsViaDeliveryByItem(invoice.items);
     const lines: ReturnableLine[] = invoice.items.map((it) => {
       const returnedQty = returned.get(it.id) ?? 0;
-      const basis =
-        it.lineType === SalesLineType.MANUFACTURING ? it.quantity : delivered.get(it.id)?.qty ?? 0;
+      const shipsViaDelivery = ships.get(it.id) ?? false;
+      const deliveredQty = shipsViaDelivery ? (delivered.get(it.id)?.qty ?? 0) : it.quantity;
+      const basis = deliveredQty;
+      const remaining = round3(basis - returnedQty);
+      let blockedReason: string | null = null;
+      if (shipsViaDelivery && deliveredQty <= 0) blockedReason = 'لم يُسلَّم بعد — المرتجع يُبنى على الكميات المُسلَّمة فقط';
+      else if (remaining <= 0) blockedReason = 'تم إرجاع الكمية بالكامل';
       return {
         salesInvoiceItemId: it.id,
         productId: it.productId,
@@ -104,10 +119,13 @@ export class SalesReturnService {
         productName: it.productName,
         unitName: it.unitName,
         lineType: it.lineType,
-        soldQuantity: basis,
+        invoicedQuantity: it.quantity,
+        deliveredQuantity: round3(deliveredQty),
+        soldQuantity: round3(basis),
         returnedQuantity: round3(returnedQty),
-        remainingQuantity: round3(basis - returnedQty),
+        remainingQuantity: remaining,
         unitPrice: it.unitPrice,
+        blockedReason,
       };
     });
     return {
@@ -282,6 +300,7 @@ export class SalesReturnService {
     const itemById = new Map(invoice.items.map((i): [string, SalesInvoiceItem] => [i.id, i]));
     const alreadyReturned = await this.returnedQtyByItem(invoice.items.map((i) => i.id), excludeReturnId);
     const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
+    const ships = await this.shipsViaDeliveryByItem(invoice.items);
 
     // Aggregate requested qty per invoice item to validate against remaining.
     const requested = new Map<string, number>();
@@ -290,8 +309,9 @@ export class SalesReturnService {
     return dtos.map((d, index) => {
       const src = itemById.get(d.salesInvoiceItemId);
       if (!src) throw new BadRequestException('أحد السطور لا يخص هذه الفاتورة');
-      const basis =
-        src.lineType === SalesLineType.MANUFACTURING ? src.quantity : delivered.get(src.id)?.qty ?? 0;
+      // Same rule as returnableItems(): stock goods → delivered qty; service /
+      // manufacturing / non-inventory lines → the invoiced qty.
+      const basis = ships.get(src.id) ? (delivered.get(src.id)?.qty ?? 0) : src.quantity;
       const remaining = round3(basis - (alreadyReturned.get(src.id) ?? 0));
       if (requested.get(src.id)! - remaining > 1e-6) {
         throw new BadRequestException(
@@ -327,10 +347,30 @@ export class SalesReturnService {
       item.lineTotal = round2(item.netBeforeTax + item.vatAmount);
       // Cost basis comes from the delivery note (COGS is booked at delivery, not
       // at invoicing). Manufacturing lines carry no inventory cost.
-      item.costAtPost =
-        src.lineType === SalesLineType.MANUFACTURING ? 0 : delivered.get(src.id)?.unitCost ?? 0;
+      item.costAtPost = ships.get(src.id) ? (delivered.get(src.id)?.unitCost ?? 0) : 0;
       return item;
     });
+  }
+
+  /**
+   * Which invoice lines physically ship through a delivery note (and are
+   * therefore returnable only once delivered): STOCK lines of inventory-tracked
+   * products. Service, manufacturing and non-inventory lines are "delivered" at
+   * invoicing, so their whole invoiced quantity is returnable.
+   */
+  private async shipsViaDeliveryByItem(items: SalesInvoiceItem[]): Promise<Map<string, boolean>> {
+    const productIds = [...new Set(items.map((i) => i.productId))];
+    const products = productIds.length
+      ? await this.dataSource.getRepository(Product).find({
+          where: { id: In(productIds) },
+          select: { id: true, trackInventory: true },
+          withDeleted: true,
+        })
+      : [];
+    const tracksInventory = new Map<string, boolean>(products.map((p) => [p.id, p.trackInventory]));
+    return new Map<string, boolean>(
+      items.map((i) => [i.id, i.lineType === SalesLineType.STOCK && (tracksInventory.get(i.productId) ?? true)]),
+    );
   }
 
   /** Net delivered qty + weighted-average unit cost per invoice item (POSTED deliveries only). */
