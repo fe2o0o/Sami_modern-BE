@@ -383,10 +383,23 @@ export class SalesReturnService {
       .createQueryBuilder('di')
       .innerJoin('di.salesDelivery', 'd')
       .select('di.salesInvoiceItemId', 'itemId')
-      .addSelect('COALESCE(SUM(di.quantity), 0)', 'qty')
-      .addSelect('COALESCE(SUM(di.lineCost), 0)', 'cost')
+      // Two delivery flows share the table: a fully POSTED note (quantity = what
+      // shipped) and a per-line delivery ORDER whose header stays DRAFT while
+      // lines are confirmed one by one (deliveredQuantity + actualDeliveryDate).
+      .addSelect(
+        `COALESCE(SUM(CASE
+          WHEN d.status = :posted THEN di.quantity
+          WHEN d.status = :draft THEN COALESCE(di.deliveredQuantity, 0)
+          ELSE 0 END), 0)`,
+        'qty',
+      )
+      .addSelect(`COALESCE(SUM(CASE WHEN d.status IN (:...live) THEN di.lineCost ELSE 0 END), 0)`, 'cost')
       .where('di.salesInvoiceItemId IN (:...ids)', { ids: invoiceItemIds })
-      .andWhere('d.status = :posted', { posted: SalesDeliveryStatus.POSTED })
+      .setParameters({
+        posted: SalesDeliveryStatus.POSTED,
+        draft: SalesDeliveryStatus.DRAFT,
+        live: [SalesDeliveryStatus.POSTED, SalesDeliveryStatus.DRAFT],
+      })
       .groupBy('di.salesInvoiceItemId')
       .getRawMany<{ itemId: string; qty: string; cost: string }>();
     return new Map(
