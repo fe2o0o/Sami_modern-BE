@@ -71,7 +71,7 @@ export class SalesReturnPostingService {
       // Receive returned STOCK lines back at their original cost.
       const stockLines: StockLineInput[] = ret.items
         .filter((i) => i.lineType !== SalesLineType.MANUFACTURING && products.get(i.productId)?.trackInventory)
-        .map((i) => ({ warehouseId: ret.warehouseId, productId: i.productId, quantity: i.quantity, unitCost: i.costAtPost }));
+        .map((i) => ({ warehouseId: ret.warehouseId!, productId: i.productId, quantity: i.quantity, unitCost: i.costAtPost }));
       if (stockLines.length) {
         await this.stockService.receive(stockLines, manager, {
           movementType: StockMovementType.SALE_RETURN,
@@ -171,7 +171,7 @@ export class SalesReturnPostingService {
       // Reversing the return re-issues the stock back out.
       const stockLines: StockLineInput[] = ret.items
         .filter((i) => i.lineType !== SalesLineType.MANUFACTURING && products.get(i.productId)?.trackInventory)
-        .map((i) => ({ warehouseId: ret.warehouseId, productId: i.productId, quantity: i.quantity }));
+        .map((i) => ({ warehouseId: ret.warehouseId!, productId: i.productId, quantity: i.quantity }));
       if (stockLines.length) {
         await this.stockService.issue(stockLines, manager, {
           movementType: StockMovementType.SALE_RETURN,

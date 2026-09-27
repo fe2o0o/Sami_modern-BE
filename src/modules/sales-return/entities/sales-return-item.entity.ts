@@ -28,8 +28,9 @@ export class SalesReturnItem extends BaseEntity {
   @Column({ type: 'uuid' })
   productId!: string;
 
-  @Column({ type: 'uuid' })
-  warehouseId!: string;
+  /** Null for lines that never touch stock (service / non-inventory products). */
+  @Column({ type: 'uuid', nullable: true })
+  warehouseId!: string | null;
 
   @Column({ type: 'uuid', nullable: true })
   unitId!: string | null;

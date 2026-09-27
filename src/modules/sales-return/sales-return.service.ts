@@ -160,7 +160,8 @@ export class SalesReturnService {
       salesInvoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       customerId: invoice.customerId,
-      warehouseId: items[0]?.warehouseId ?? invoice.warehouseId ?? undefined,
+      // Header warehouse = where the stock lines go back; a service-only return has none.
+      warehouseId: items.find((i) => i.warehouseId)?.warehouseId ?? invoice.warehouseId ?? null,
       // A branch-restricted user's documents are forced onto their own branch.
       branchId: resolveWriteBranch(branchScope, invoice.branchId),
       fiscalYearId: dto.fiscalYearId,
@@ -269,7 +270,7 @@ export class SalesReturnService {
     const r = await this.findOne(id, branchScope);
     const [customer, warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.customerRepository.findOne({ where: { id: r.customerId } }),
-      this.warehouseRepository.findOne({ where: { id: r.warehouseId } }),
+      r.warehouseId ? this.warehouseRepository.findOne({ where: { id: r.warehouseId } }) : null,
       r.branchId ? this.branchRepository.findOne({ where: { id: r.branchId } }) : null,
       this.fiscalYearRepository.findOne({ where: { id: r.fiscalYearId } }),
       this.periodRepository.findOne({ where: { id: r.accountingPeriodId } }),
@@ -325,12 +326,13 @@ export class SalesReturnService {
       item.lineNumber = index + 1;
       item.salesInvoiceItemId = src.id;
       item.productId = src.productId;
-      // Goods return to the warehouse the invoice line was sold from.
-      const lineWarehouse = src.warehouseId ?? invoice.warehouseId;
-      if (!lineWarehouse) {
+      // Goods return to the warehouse the invoice line was sold from. A service /
+      // non-inventory line never touches stock, so it needs no warehouse at all.
+      const lineWarehouse = src.warehouseId ?? invoice.warehouseId ?? null;
+      if (ships.get(src.id) && !lineWarehouse) {
         throw new BadRequestException(`لا يمكن تحديد مخزن لمرتجع الصنف "${src.productName}"`);
       }
-      item.warehouseId = lineWarehouse;
+      item.warehouseId = ships.get(src.id) ? lineWarehouse : null;
       item.unitId = src.unitId;
       item.lineType = src.lineType;
       item.productCode = src.productCode;
