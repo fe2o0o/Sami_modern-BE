@@ -128,6 +128,9 @@ export class ProductService {
         manager, Unit, optStr(v.unitCode), 'الوحدة',
       );
 
+      const productType = enumFromLabel<ProductType>(
+        v.productType, PRODUCT_TYPE_LABELS, 'نوع المنتج', ProductType.FINISHED_PRODUCT,
+      );
       await repo.save(
         repo.create({
           code,
@@ -138,10 +141,9 @@ export class ProductService {
           categoryId,
           brandId,
           unitId,
-          productType: enumFromLabel<ProductType>(
-            v.productType, PRODUCT_TYPE_LABELS, 'نوع المنتج', ProductType.FINISHED_PRODUCT,
-          ),
-          trackInventory: bool(v.trackInventory, true),
+          productType,
+          // A service never has stock, whatever the sheet says.
+          trackInventory: productType === ProductType.SERVICE ? false : bool(v.trackInventory, true),
           isManufactured: bool(v.isManufactured, false),
           costPrice: optNum(v.costPrice, 0),
           sellingPrice: optNum(v.sellingPrice, 0),
@@ -176,9 +178,14 @@ export class ProductService {
       await this.ensureUnique('barcode', dto.barcode, undefined, 'الباركود مستخدم بالفعل');
     }
     const { components, ...rest } = dto;
-    const saved = await this.productRepository.save(this.productRepository.create({ ...rest, code }));
+    const saved = await this.productRepository.save(this.productRepository.create({ ...rest, ...this.inventoryFlag(rest), code }));
     if (components?.length) await this.replaceComponents(saved.id, components);
     return this.findOne(saved.id);
+  }
+
+  /** A service has no stock: never let it be flagged as inventory-tracked. */
+  private inventoryFlag(p: { productType?: ProductType; trackInventory?: boolean }): { trackInventory?: boolean } {
+    return p.productType === ProductType.SERVICE ? { trackInventory: false } : {};
   }
 
   /** Replace a product's Bill of Materials with the given component lines. */
@@ -259,7 +266,7 @@ export class ProductService {
       await this.ensureUnique('barcode', dto.barcode, id, 'الباركود مستخدم بالفعل');
     }
     const { components, ...rest } = dto;
-    Object.assign(product, rest);
+    Object.assign(product, rest, this.inventoryFlag({ ...product, ...rest }));
     await this.productRepository.save(product);
     // Replace the BOM only when the caller sent a components array.
     if (components !== undefined) await this.replaceComponents(id, components);
