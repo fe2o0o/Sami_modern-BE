@@ -34,8 +34,9 @@ export class SalesReturn extends BaseEntity {
   @Column({ type: 'uuid' })
   customerId!: string;
 
-  @Column({ type: 'uuid' })
-  warehouseId!: string;
+  /** Warehouse the goods come back to — null for a service-only return (nothing to receive). */
+  @Column({ type: 'uuid', nullable: true })
+  warehouseId!: string | null;
 
   @Column({ type: 'uuid', nullable: true })
   branchId!: string | null;

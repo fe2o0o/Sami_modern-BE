@@ -30,6 +30,8 @@ import {
   JournalLineInput,
 } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
+import { Supplier } from '../supplier/entities/supplier.entity';
 
 /**
  * Owns the accounting/inventory side-effects of a purchase invoice. Posting and
@@ -110,8 +112,12 @@ export class PurchaseInvoicePostingService {
       // Snapshot the net cost each line was received at (for returns / reversal).
       items.forEach((item) => (item.unitCostAtPost = this.netUnitCost(item)));
 
-      // Build + post the balanced journal entry via the central engine.
-      const lines = this.buildJournalLines(invoice, items, products, settings);
+      // Build + post the balanced journal entry via the central engine. The
+      // narration names the supplier so the ledger reads without opening the invoice.
+      const supplier = await manager.getRepository(Supplier).findOne({ where: { id: invoice.supplierId }, select: { id: true, name: true } });
+      const supplierName = supplier?.name ?? '';
+      const paymentLabel = invoice.paymentType === PurchasePaymentType.CREDIT ? 'آجلة' : 'نقدية';
+      const lines = this.buildJournalLines(invoice, items, products, settings, invoiceNumber, supplierName);
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.PURCHASE_INVOICE,
@@ -121,7 +127,7 @@ export class PurchaseInvoicePostingService {
           fiscalYearId: invoice.fiscalYearId,
           accountingPeriodId: invoice.accountingPeriodId,
           branchId: invoice.branchId,
-          description: `فاتورة مشتريات ${invoiceNumber}`,
+          description: `فاتورة مشتريات ${paymentLabel} ${invoiceNumber} — المورد: ${supplierName}`,
           lines,
           actorId,
         },
@@ -317,47 +323,37 @@ export class PurchaseInvoicePostingService {
     return qty > 0 ? round2(item.netBeforeTax / qty) : 0;
   }
 
-  /** Aggregate the invoice into balanced journal lines by account. */
+  /** Aggregate the invoice into balanced, narrated journal lines by account. */
   private buildJournalLines(
     invoice: PurchaseInvoice,
     items: PurchaseInvoiceItem[],
     products: Map<string, Product>,
     settings: AccountingSetting,
+    invoiceNumber: string,
+    supplierName: string,
   ): JournalLineInput[] {
-    const acc = new Map<string, { debit: number; credit: number }>();
-    const add = (accountId: string, debit: number, credit: number): void => {
-      const e = acc.get(accountId) ?? { debit: 0, credit: 0 };
-      e.debit = round2(e.debit + debit);
-      e.credit = round2(e.credit + credit);
-      acc.set(accountId, e);
-    };
+    const b = new JournalLineBuilder();
+    const ref = `فاتورة مشتريات ${invoiceNumber}`;
 
     // Debit inventory (per product's resolved inventory account) at net cost.
     for (const item of items) {
       const product = products.get(item.productId)!;
       const inventoryAccount = this.resolveInventoryAccount(product, settings)!;
-      add(inventoryAccount, item.netBeforeTax, 0);
+      b.add(inventoryAccount, item.netBeforeTax, 0, `استلام بضاعة في المخزن — ${ref}`, { warehouseId: invoice.warehouseId });
     }
     // Debit recoverable input VAT.
     if (invoice.vatAmount > 0) {
-      add(settings.inputVatAccountId!, invoice.vatAmount, 0);
+      b.add(settings.inputVatAccountId!, invoice.vatAmount, 0, `ضريبة القيمة المضافة (مدخلات) — ${ref}`);
     }
 
-    // Credit the payable (credit purchase) or cash/bank (cash purchase).
-    const creditAccount =
-      invoice.paymentType === PurchasePaymentType.CREDIT
-        ? settings.supplierControlAccountId!
-        : invoice.cashAccountId!;
-    add(creditAccount, 0, invoice.totalAmount);
+    // Credit the payable (credit purchase, tagged with the supplier) or cash/bank (cash purchase).
+    if (invoice.paymentType === PurchasePaymentType.CREDIT) {
+      b.add(settings.supplierControlAccountId!, 0, invoice.totalAmount, `مستحق للمورد ${supplierName} — ${ref}`, { supplierId: invoice.supplierId });
+    } else {
+      b.add(invoice.cashAccountId!, 0, invoice.totalAmount, `سداد نقدي — ${ref} — المورد: ${supplierName}`);
+    }
 
-    return [...acc.entries()]
-      .map(([accountId, e]) => {
-        const net = round2(e.debit - e.credit);
-        return net >= 0
-          ? { accountId, debit: net, credit: 0 }
-          : { accountId, debit: 0, credit: round2(-net) };
-      })
-      .filter((l) => l.debit > 0 || l.credit > 0);
+    return b.build();
   }
 
   /** Validate every account the posting needs is configured. Arabic messages. */

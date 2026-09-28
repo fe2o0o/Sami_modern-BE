@@ -26,6 +26,8 @@ import {
   JournalLineInput,
 } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
+import { Supplier } from '../supplier/entities/supplier.entity';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 
@@ -80,7 +82,9 @@ export class PurchaseReturnPostingService {
         allowNegative: true,
       });
 
-      const lines = this.buildJournalLines(ret, products, settings);
+      const supplier = await manager.getRepository(Supplier).findOne({ where: { id: ret.supplierId }, select: { id: true, name: true } });
+      const supplierName = supplier?.name ?? '';
+      const lines = this.buildJournalLines(ret, products, settings, number, supplierName);
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.PURCHASE_RETURN,
@@ -90,7 +94,7 @@ export class PurchaseReturnPostingService {
           fiscalYearId: ret.fiscalYearId,
           accountingPeriodId: ret.accountingPeriodId,
           branchId: ret.branchId,
-          description: `مردود مشتريات ${number} — فاتورة ${ret.invoiceNumber ?? ''}`,
+          description: `مردود مشتريات ${number} — فاتورة ${ret.invoiceNumber ?? ''} — المورد: ${supplierName}`,
           lines,
           actorId,
         },
@@ -249,32 +253,25 @@ export class PurchaseReturnPostingService {
   // =========================================================
   // ACCOUNTING (inverse of the purchase)
   // =========================================================
-  private buildJournalLines(ret: PurchaseReturn, products: Map<string, Product>, settings: AccountingSetting): JournalLineInput[] {
-    const acc = new Map<string, { debit: number; credit: number }>();
-    const add = (accountId: string, debit: number, credit: number): void => {
-      const e = acc.get(accountId) ?? { debit: 0, credit: 0 };
-      e.debit = round2(e.debit + debit);
-      e.credit = round2(e.credit + credit);
-      acc.set(accountId, e);
-    };
+  private buildJournalLines(ret: PurchaseReturn, products: Map<string, Product>, settings: AccountingSetting, number: string, supplierName: string): JournalLineInput[] {
+    const b = new JournalLineBuilder();
+    const ref = `مردود مشتريات ${number}`;
 
-    // Debit the payable (credit purchase) or cash/bank refund (cash purchase).
-    const debitAccount = ret.paymentType === PurchasePaymentType.CREDIT ? settings.supplierControlAccountId! : ret.cashAccountId!;
-    add(debitAccount, ret.totalAmount, 0);
+    // Debit the payable (credit purchase, tagged with the supplier) or cash/bank refund (cash purchase).
+    if (ret.paymentType === PurchasePaymentType.CREDIT) {
+      b.add(settings.supplierControlAccountId!, ret.totalAmount, 0, `تخفيض مستحق المورد ${supplierName} — ${ref}`, { supplierId: ret.supplierId });
+    } else {
+      b.add(ret.cashAccountId!, ret.totalAmount, 0, `استرداد نقدي من المورد ${supplierName} — ${ref}`);
+    }
 
     // Credit inventory (goods leave) at the returned net cost.
     for (const item of ret.items) {
-      add(this.resolveInventoryAccount(products.get(item.productId)!, settings)!, 0, item.netBeforeTax);
+      b.add(this.resolveInventoryAccount(products.get(item.productId)!, settings)!, 0, item.netBeforeTax, `إخراج بضاعة مرتجعة من المخزن — ${ref}`, { warehouseId: ret.warehouseId });
     }
     // Credit recoverable input VAT (reduce it).
-    if (ret.vatAmount > 0) add(settings.inputVatAccountId!, 0, ret.vatAmount);
+    if (ret.vatAmount > 0) b.add(settings.inputVatAccountId!, 0, ret.vatAmount, `عكس ضريبة القيمة المضافة (مدخلات) — ${ref}`);
 
-    return [...acc.entries()]
-      .map(([accountId, e]) => {
-        const net = round2(e.debit - e.credit);
-        return net >= 0 ? { accountId, debit: net, credit: 0 } : { accountId, debit: 0, credit: round2(-net) };
-      })
-      .filter((l) => l.debit > 0 || l.credit > 0);
+    return b.build();
   }
 
   private validateAccounts(ret: PurchaseReturn, products: Map<string, Product>, settings: AccountingSetting): void {

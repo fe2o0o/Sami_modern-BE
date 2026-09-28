@@ -16,6 +16,7 @@ import { ManufacturingOrderQueryDto } from './dto/manufacturing-order-query.dto'
 import { Product } from '../product/entities/product.entity';
 import { ProductComponent } from '../product/entities/product-component.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
+import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
 import { Customer } from '../customer/entities/customer.entity';
 import { Branch } from '../branch/entities/branch.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
@@ -35,6 +36,40 @@ export interface ManufacturingOrderListItem {
   deliveryDate: string | null;
   status: ManufacturingOrderStatus;
   sourceNumber: string | null;
+  factorySupplierId: string | null;
+  factorySupplierName: string | null;
+  manufacturingFee: number;
+  /** Fee already booked to the supplier (at start of execution). */
+  feeBookedAt: Date | null;
+  startedAt: Date | null;
+  producedAt: Date | null;
+  /** Past the promised delivery date and still not produced/done. */
+  isLate: boolean;
+  /** Quantity delivered to the customer so far (from the linked delivery lines). */
+  deliveredQuantity: number;
+}
+
+/** Per-supplier manufacturing statement: what is with the factory, what's late, fees. */
+export interface SupplierManufacturingStatement {
+  summary: {
+    ordersCount: number;
+    openCount: number;
+    lateCount: number;
+    producedCount: number;
+    doneCount: number;
+    totalFees: number;
+    bookedFees: number;
+  };
+  orders: ManufacturingOrderListItem[];
+}
+
+const OPEN_STATUSES = [ManufacturingOrderStatus.NEW, ManufacturingOrderStatus.IN_PROGRESS];
+
+function todayIso(): string {
+  const d = new Date();
+  const m = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
 /** One manufacturing line to spawn an order from (from a sales invoice). */
@@ -153,6 +188,15 @@ export class ManufacturingService {
         ? (await this.customerRepository.findOne({ where: { id: dto.customerId } }))?.name ?? null
         : null;
     }
+    // Once the fee is booked to the supplier (at start), fee/supplier are locked.
+    if (order.feeJournalEntryId) {
+      if (dto.manufacturingFee !== undefined && (dto.manufacturingFee ?? 0) !== order.manufacturingFee) {
+        throw new BadRequestException('رسوم التصنيع مُرحّلة على المورّد بالفعل عند بدء التنفيذ ولا يمكن تغييرها');
+      }
+      if (dto.factorySupplierId !== undefined && (dto.factorySupplierId ?? null) !== order.factorySupplierId) {
+        throw new BadRequestException('المورّد مُرحّلة عليه الرسوم بالفعل ولا يمكن تغييره بعد بدء التنفيذ');
+      }
+    }
     if (dto.quantity !== undefined) order.quantity = dto.quantity;
     if (dto.orderDate) order.orderDate = dto.orderDate;
     if (dto.deliveryDate !== undefined) order.deliveryDate = dto.deliveryDate ?? null;
@@ -191,6 +235,11 @@ export class ManufacturingService {
     });
   }
 
+  /**
+   * Plain status transitions (DONE). Starting execution and cancelling go
+   * through ManufacturingProductionService because they post/reverse the
+   * supplier fee.
+   */
   async setStatus(
     id: string,
     status: ManufacturingOrderStatus,
@@ -245,8 +294,12 @@ export class ManufacturingService {
     }
     if (query.productId) qb.andWhere('mo.productId = :p', { p: query.productId });
     if (query.customerId) qb.andWhere('mo.customerId = :cu', { cu: query.customerId });
+    if (query.factorySupplierId) qb.andWhere('mo.factorySupplierId = :fs', { fs: query.factorySupplierId });
     if (query.branchId) qb.andWhere('mo.branchId = :br', { br: query.branchId });
     if (query.status) qb.andWhere('mo.status = :st', { st: query.status });
+    if (query.late) {
+      qb.andWhere('mo.deliveryDate < :today', { today: todayIso() }).andWhere('mo.status IN (:...open)', { open: OPEN_STATUSES });
+    }
     if (query.dateFrom) qb.andWhere('mo.orderDate >= :df', { df: query.dateFrom });
     if (query.dateTo) qb.andWhere('mo.orderDate <= :dt', { dt: query.dateTo });
 
@@ -254,7 +307,46 @@ export class ManufacturingService {
       .skip(query.skip).take(query.perPage);
 
     const [items, total] = await qb.getManyAndCount();
-    const rows: ManufacturingOrderListItem[] = items.map((i) => ({
+    const rows = await this.toListItems(items);
+    return paginate(rows, total, query.page, query.perPage);
+  }
+
+  /**
+   * Everything a factory (supplier) has with us: open / late / produced orders,
+   * their delivery state and the fees booked — the supplier-side statement.
+   */
+  async bySupplier(supplierId: string, branchScope: BranchScope = null): Promise<SupplierManufacturingStatement> {
+    const qb = this.orderRepository.createQueryBuilder('mo').where('mo.factorySupplierId = :s', { s: supplierId });
+    applyBranchScope(qb, 'mo.branchId', branchScope);
+    const items = await qb.orderBy('mo.orderDate', 'DESC').addOrderBy('mo.createdAt', 'DESC').getMany();
+    const orders = await this.toListItems(items);
+    const summary = {
+      ordersCount: orders.length,
+      openCount: orders.filter((o) => OPEN_STATUSES.includes(o.status)).length,
+      lateCount: orders.filter((o) => o.isLate).length,
+      producedCount: orders.filter((o) => o.status === ManufacturingOrderStatus.PRODUCED).length,
+      doneCount: orders.filter((o) => o.status === ManufacturingOrderStatus.DONE).length,
+      totalFees: round2(orders.filter((o) => o.status !== ManufacturingOrderStatus.CANCELLED).reduce((s, o) => s + o.manufacturingFee, 0)),
+      bookedFees: round2(orders.filter((o) => !!o.feeBookedAt && o.status !== ManufacturingOrderStatus.CANCELLED).reduce((s, o) => s + o.manufacturingFee, 0)),
+    };
+    return { summary, orders };
+  }
+
+  /** Map entities to list rows, enriching with the delivered quantity + late flag. */
+  private async toListItems(items: ManufacturingOrder[]): Promise<ManufacturingOrderListItem[]> {
+    if (!items.length) return [];
+    const delivered = new Map<string, number>();
+    const rows = await this.orderRepository.manager
+      .getRepository(SalesDeliveryItem)
+      .createQueryBuilder('d')
+      .select('d.manufacturingOrderId', 'orderId')
+      .addSelect('COALESCE(SUM(d.deliveredQuantity), 0)', 'qty')
+      .where('d.manufacturingOrderId IN (:...ids)', { ids: items.map((i) => i.id) })
+      .groupBy('d.manufacturingOrderId')
+      .getRawMany<{ orderId: string; qty: string }>();
+    for (const r of rows) delivered.set(r.orderId, Number(r.qty) || 0);
+    const today = todayIso();
+    return items.map((i) => ({
       id: i.id,
       orderNumber: i.orderNumber,
       orderDate: i.orderDate,
@@ -265,8 +357,15 @@ export class ManufacturingService {
       deliveryDate: i.deliveryDate,
       status: i.status,
       sourceNumber: i.sourceNumber,
+      factorySupplierId: i.factorySupplierId,
+      factorySupplierName: i.factorySupplierName,
+      manufacturingFee: i.manufacturingFee,
+      feeBookedAt: i.feeBookedAt,
+      startedAt: i.startedAt,
+      producedAt: i.producedAt,
+      isLate: !!i.deliveryDate && i.deliveryDate < today && OPEN_STATUSES.includes(i.status),
+      deliveredQuantity: delivered.get(i.id) ?? 0,
     }));
-    return paginate(rows, total, query.page, query.perPage);
   }
 
   async findOne(id: string, branchScope: BranchScope = null): Promise<ManufacturingOrder> {
@@ -452,4 +551,8 @@ export class ManufacturingService {
 
 function round3(v: number): number {
   return Math.round((v + Number.EPSILON) * 1000) / 1000;
+}
+
+function round2(v: number): number {
+  return Math.round((v + Number.EPSILON) * 100) / 100;
 }

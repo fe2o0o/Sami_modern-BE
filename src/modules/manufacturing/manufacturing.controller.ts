@@ -20,6 +20,7 @@ import {
 } from './dto/update-manufacturing-order.dto';
 import { ProduceManufacturingOrderDto } from './dto/produce-manufacturing-order.dto';
 import { ManufacturingOrderQueryDto } from './dto/manufacturing-order-query.dto';
+import { ManufacturingOrderStatus } from './enums/manufacturing.enum';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
@@ -39,6 +40,13 @@ export class ManufacturingController {
   @ApiOperation({ summary: 'عرض أوامر التصنيع مع الترقيم والفلاتر' })
   findAll(@Query() query: ManufacturingOrderQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.service.findAll(query, branchScope);
+  }
+
+  @Get('by-supplier/:supplierId')
+  @RequirePermissions('manufacturing.view')
+  @ApiOperation({ summary: 'كشف أوامر التصنيع لمورّد (مصنع): المفتوح والمتأخر والمُنتج والرسوم' })
+  bySupplier(@Param('supplierId', ParseUUIDPipe) supplierId: string, @BranchScope() branchScope: string[] | null) {
+    return this.service.bySupplier(supplierId, branchScope);
   }
 
   @Get(':id')
@@ -81,7 +89,11 @@ export class ManufacturingController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateManufacturingStatusDto,
     @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
   ) {
+    // Starting books the fee to the supplier; cancelling reverses it — both post.
+    if (dto.status === ManufacturingOrderStatus.IN_PROGRESS) return this.production.start(id, actorId, branchScope);
+    if (dto.status === ManufacturingOrderStatus.CANCELLED) return this.production.cancel(id, actorId, branchScope);
     return this.service.setStatus(id, dto.status, actorId);
   }
 

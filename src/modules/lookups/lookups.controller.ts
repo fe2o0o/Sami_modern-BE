@@ -44,6 +44,12 @@ export class LookupsController {
     return this.lookupsService.bankAccounts();
   }
 
+  @Get('subledger-accounts')
+  @ApiOperation({ summary: 'حسابات المراقبة والخزائن/البنوك المرتبطة بدفاتر مساعدة (لشاشة القيود)' })
+  subledgerAccounts() {
+    return this.lookupsService.subledgerAccounts();
+  }
+
   @Get('units')
   @ApiOperation({ summary: 'قائمة وحدات القياس' })
   units() {

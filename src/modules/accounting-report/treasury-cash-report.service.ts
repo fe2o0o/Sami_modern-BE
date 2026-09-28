@@ -28,12 +28,14 @@ export interface CashAccountSummaryRow {
   totalIn: number;
   totalOut: number;
   closing: number;
+  /** Balance as of now (all movements, ignoring the period filter). */
+  currentBalance: number;
 }
 
 export interface CashAccountsSummary {
   period: { from: string | null; to: string | null };
   rows: CashAccountSummaryRow[];
-  totals: { opening: number; totalIn: number; totalOut: number; closing: number };
+  totals: { opening: number; totalIn: number; totalOut: number; closing: number; currentBalance: number };
 }
 
 export interface CashStatementMovement {
@@ -93,8 +95,9 @@ export class TreasuryCashReportService {
         totalIn: round2(acc.totalIn + r.totalIn),
         totalOut: round2(acc.totalOut + r.totalOut),
         closing: round2(acc.closing + r.closing),
+        currentBalance: round2(acc.currentBalance + r.currentBalance),
       }),
-      { opening: 0, totalIn: 0, totalOut: 0, closing: 0 },
+      { opening: 0, totalIn: 0, totalOut: 0, closing: 0, currentBalance: 0 },
     );
 
     return {
@@ -122,6 +125,7 @@ export class TreasuryCashReportService {
       .addSelect(this.openingExpr('tx'), 'opening')
       .addSelect(this.inExpr('tx'), 'totalIn')
       .addSelect(this.outExpr('tx'), 'totalOut')
+      .addSelect(this.currentExpr('tx'), 'current')
       .where('tr.isActive = :active', { active: true })
       .groupBy('tr.id')
       .addGroupBy('tr.code')
@@ -152,6 +156,7 @@ export class TreasuryCashReportService {
       .addSelect(this.openingExpr('tx'), 'opening')
       .addSelect(this.inExpr('tx'), 'totalIn')
       .addSelect(this.outExpr('tx'), 'totalOut')
+      .addSelect(this.currentExpr('tx'), 'current')
       .where('b.isActive = :active', { active: true })
       .groupBy('b.id')
       .addGroupBy('b.code')
@@ -281,6 +286,10 @@ export class TreasuryCashReportService {
   private outExpr(alias: string): string {
     return `COALESCE(SUM(CASE WHEN ${alias}.transactionDate >= :from AND ${alias}.transactionDate <= :to THEN ${alias}.credit ELSE 0 END), 0)`;
   }
+  /** Net of every movement to date — the cash actually in the box right now. */
+  private currentExpr(alias: string): string {
+    return `COALESCE(SUM(${alias}.debit - ${alias}.credit), 0)`;
+  }
 
   private toSummaryRow(r: RawSummary, kind: CashAccountKind): CashAccountSummaryRow {
     const opening = round2(Number(r.opening ?? 0));
@@ -297,6 +306,7 @@ export class TreasuryCashReportService {
       totalIn,
       totalOut,
       closing: round2(opening + totalIn - totalOut),
+      currentBalance: round2(Number(r.current ?? 0)),
     };
   }
 
@@ -396,4 +406,5 @@ interface RawSummary {
   opening: string;
   totalIn: string;
   totalOut: string;
+  current: string;
 }

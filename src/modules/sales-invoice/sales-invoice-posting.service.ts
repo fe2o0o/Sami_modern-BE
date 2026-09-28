@@ -32,6 +32,7 @@ import {
   JournalLineInput,
 } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { SalesDeliveryService } from '../sales-delivery/sales-delivery.service';
 
 /**
@@ -115,8 +116,12 @@ export class SalesInvoicePostingService {
         await this.stockService.reserve(stockLines, manager);
       }
 
-      // Build + post the balanced journal entry via the central engine.
-      const lines = this.buildJournalLines(invoice, items, products, settings);
+      // Build + post the balanced journal entry via the central engine. The
+      // narration names the customer so the ledger reads without opening the invoice.
+      const customer = await manager.getRepository(Customer).findOne({ where: { id: invoice.customerId }, select: { id: true, name: true } });
+      const customerName = customer?.name ?? '';
+      const paymentLabel = invoice.paymentType === SalesPaymentType.CREDIT ? 'آجل' : 'نقدي';
+      const lines = this.buildJournalLines(invoice, items, products, settings, invoiceNumber, customerName);
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.SALES_INVOICE,
@@ -126,7 +131,7 @@ export class SalesInvoicePostingService {
           fiscalYearId: invoice.fiscalYearId,
           accountingPeriodId: invoice.accountingPeriodId,
           branchId: invoice.branchId,
-          description: `فاتورة مبيعات ${invoiceNumber}`,
+          description: `فاتورة مبيعات ${paymentLabel} ${invoiceNumber} — العميل: ${customerName}`,
           lines,
           actorId,
         },
@@ -447,37 +452,34 @@ export class SalesInvoicePostingService {
   // =========================================================
   // ACCOUNTING
   // =========================================================
-  /** Aggregate the invoice into balanced journal lines by account. */
+  /** Aggregate the invoice into balanced, narrated journal lines by account. */
   private buildJournalLines(
     invoice: SalesInvoice,
     items: SalesInvoiceItem[],
     products: Map<string, Product>,
     settings: AccountingSetting,
+    invoiceNumber: string,
+    customerName: string,
   ): JournalLineInput[] {
-    const acc = new Map<string, { debit: number; credit: number }>();
-    const add = (accountId: string, debit: number, credit: number): void => {
-      const e = acc.get(accountId) ?? { debit: 0, credit: 0 };
-      e.debit = round2(e.debit + debit);
-      e.credit = round2(e.credit + credit);
-      acc.set(accountId, e);
-    };
+    const b = new JournalLineBuilder();
+    const ref = `فاتورة مبيعات ${invoiceNumber}`;
 
-    // Debit the receivable (credit sale) or cash/bank (cash sale).
-    const debitAccount =
-      invoice.paymentType === SalesPaymentType.CREDIT
-        ? settings.customerControlAccountId!
-        : invoice.cashAccountId!;
-    add(debitAccount, invoice.totalAmount, 0);
+    // Debit the receivable (credit sale, tagged with the customer) or cash/bank (cash sale).
+    if (invoice.paymentType === SalesPaymentType.CREDIT) {
+      b.add(settings.customerControlAccountId!, invoice.totalAmount, 0, `مديونية العميل ${customerName} — ${ref}`, { customerId: invoice.customerId });
+    } else {
+      b.add(invoice.cashAccountId!, invoice.totalAmount, 0, `تحصيل نقدي — ${ref} — العميل: ${customerName}`);
+    }
 
     // Credit revenue (per product's resolved revenue account).
     for (const item of items) {
       const product = products.get(item.productId)!;
       const revenueAccount = product.salesAccountId ?? settings.salesRevenueAccountId!;
-      add(revenueAccount, 0, item.netBeforeTax);
+      b.add(revenueAccount, 0, item.netBeforeTax, `إيراد مبيعات — ${ref}`);
     }
     // Credit output VAT.
     if (invoice.vatAmount > 0) {
-      add(settings.outputVatAccountId!, 0, invoice.vatAmount);
+      b.add(settings.outputVatAccountId!, 0, invoice.vatAmount, `ضريبة القيمة المضافة (مخرجات) — ${ref}`);
     }
 
     // NOTE: COGS + inventory are intentionally NOT booked here. Goods are only
@@ -486,18 +488,11 @@ export class SalesInvoicePostingService {
 
     // Sales commission: DR commission expense / CR commission payable.
     if (invoice.commissionTotal > 0) {
-      add(settings.commissionExpenseAccountId!, invoice.commissionTotal, 0);
-      add(settings.commissionPayableAccountId!, 0, invoice.commissionTotal);
+      b.add(settings.commissionExpenseAccountId!, invoice.commissionTotal, 0, `عمولة مبيعات — ${ref}`);
+      b.add(settings.commissionPayableAccountId!, 0, invoice.commissionTotal, `عمولات مبيعات مستحقة — ${ref}`);
     }
 
-    return [...acc.entries()]
-      .map(([accountId, e]) => {
-        const net = round2(e.debit - e.credit);
-        return net >= 0
-          ? { accountId, debit: net, credit: 0 }
-          : { accountId, debit: 0, credit: round2(-net) };
-      })
-      .filter((l) => l.debit > 0 || l.credit > 0);
+    return b.build();
   }
 
   /** Validate every account the posting needs is configured. Arabic messages. */

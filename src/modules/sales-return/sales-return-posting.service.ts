@@ -28,6 +28,8 @@ import {
   JournalLineInput,
 } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
+import { Customer } from '../customer/entities/customer.entity';
 
 /**
  * Accounting/inventory side-effects of a sales return — the inverse of a sale
@@ -68,8 +70,8 @@ export class SalesReturnPostingService {
 
       // Receive returned STOCK lines back at their original cost.
       const stockLines: StockLineInput[] = ret.items
-        .filter((i) => i.lineType !== SalesLineType.MANUFACTURING && products.get(i.productId)?.trackInventory)
-        .map((i) => ({ warehouseId: ret.warehouseId, productId: i.productId, quantity: i.quantity, unitCost: i.costAtPost }));
+        .filter((i) => this.touchesStock(i, products))
+        .map((i) => ({ warehouseId: (i.warehouseId ?? ret.warehouseId)!, productId: i.productId, quantity: i.quantity, unitCost: i.costAtPost }));
       if (stockLines.length) {
         await this.stockService.receive(stockLines, manager, {
           movementType: StockMovementType.SALE_RETURN,
@@ -81,25 +83,33 @@ export class SalesReturnPostingService {
         });
       }
 
-      const lines = this.buildJournalLines(ret, products, settings);
-      const journalEntry = await this.journalService.createSystemJournalEntry(
-        {
-          sourceType: JournalSourceType.SALES_RETURN,
-          sourceId: ret.id,
-          sourceNumber: number,
-          entryDate: ret.returnDate,
-          fiscalYearId: ret.fiscalYearId,
-          accountingPeriodId: ret.accountingPeriodId,
-          branchId: ret.branchId,
-          description: `مردود مبيعات ${number} — فاتورة ${ret.invoiceNumber ?? ''}`,
-          lines,
-          actorId,
-        },
-        manager,
-      );
+      const customer = await manager.getRepository(Customer).findOne({ where: { id: ret.customerId }, select: { id: true, name: true } });
+      const customerName = customer?.name ?? '';
+      const lines = this.buildJournalLines(ret, products, settings, number, customerName);
+      // A zero-value return (e.g. a free service line) has nothing to book —
+      // it still closes the returned quantity but creates no journal/ledger rows.
+      const journalEntry = lines.length
+        ? await this.journalService.createSystemJournalEntry(
+            {
+              sourceType: JournalSourceType.SALES_RETURN,
+              sourceId: ret.id,
+              sourceNumber: number,
+              entryDate: ret.returnDate,
+              fiscalYearId: ret.fiscalYearId,
+              accountingPeriodId: ret.accountingPeriodId,
+              branchId: ret.branchId,
+              description: `مردود مبيعات ${number} — فاتورة ${ret.invoiceNumber ?? ''} — العميل: ${customerName}`,
+              lines,
+              actorId,
+            },
+            manager,
+          )
+        : null;
 
-      // Credit sale → reduce the customer's receivable.
-      if (ret.paymentType === SalesPaymentType.CREDIT) {
+      if (ret.totalAmount <= 0) {
+        // nothing to settle with the customer / cashbox
+      } else if (ret.paymentType === SalesPaymentType.CREDIT) {
+        // Credit sale → reduce the customer's receivable.
         await this.customerLedger.record(
           {
             customerId: ret.customerId,
@@ -127,7 +137,7 @@ export class SalesReturnPostingService {
             sourceType: JournalSourceType.SALES_RETURN,
             sourceId: ret.id,
             sourceNumber: number,
-            journalEntryId: journalEntry.id,
+            journalEntryId: journalEntry?.id ?? null,
             description: `مردود مبيعات نقدي ${number}`,
             actorId,
           },
@@ -137,7 +147,7 @@ export class SalesReturnPostingService {
 
       ret.returnNumber = number;
       ret.status = SalesReturnStatus.POSTED;
-      ret.journalEntryId = journalEntry.id;
+      ret.journalEntryId = journalEntry?.id ?? null;
       ret.postedAt = new Date();
       ret.postedBy = actorId ?? null;
       ret.updatedBy = actorId ?? null;
@@ -161,13 +171,13 @@ export class SalesReturnPostingService {
         'تاريخ العكس خارج نطاق الفترة المحاسبية المختارة');
 
       const original = ret.journalEntryId ? await this.journalService.findWithLines(ret.journalEntryId) : null;
-      if (!original) throw new BadRequestException('تعذّر إيجاد القيد الأصلي للمردود');
+      if (ret.journalEntryId && !original) throw new BadRequestException('تعذّر إيجاد القيد الأصلي للمردود');
 
       const products = await this.loadProducts(ret.items.map((i) => i.productId), manager);
       // Reversing the return re-issues the stock back out.
       const stockLines: StockLineInput[] = ret.items
-        .filter((i) => i.lineType !== SalesLineType.MANUFACTURING && products.get(i.productId)?.trackInventory)
-        .map((i) => ({ warehouseId: ret.warehouseId, productId: i.productId, quantity: i.quantity }));
+        .filter((i) => this.touchesStock(i, products))
+        .map((i) => ({ warehouseId: (i.warehouseId ?? ret.warehouseId)!, productId: i.productId, quantity: i.quantity }));
       if (stockLines.length) {
         await this.stockService.issue(stockLines, manager, {
           movementType: StockMovementType.SALE_RETURN,
@@ -180,31 +190,37 @@ export class SalesReturnPostingService {
         });
       }
 
-      const reversalLines: JournalLineInput[] = original.lines.map((l) => ({
-        accountId: l.accountId,
-        debit: l.credit,
-        credit: l.debit,
-        description: l.description ? `عكس: ${l.description}` : 'عكس مردود مبيعات',
-      }));
-      const reversalEntry = await this.journalService.createSystemJournalEntry(
-        {
-          sourceType: JournalSourceType.SALES_RETURN,
-          sourceId: ret.id,
-          sourceNumber: ret.returnNumber,
-          entryDate: dto.reversalDate,
-          fiscalYearId: period.fiscalYearId,
-          accountingPeriodId: period.id,
-          branchId: ret.branchId,
-          description: `عكس مردود مبيعات ${ret.returnNumber ?? ''} — ${dto.reason}`,
-          reversalOfJournalEntryId: original.id,
-          lines: reversalLines,
-          actorId,
-        },
-        manager,
-      );
-      await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
+      // A zero-value return posted no journal — nothing to mirror back.
+      let reversalEntry: { id: string } | null = null;
+      if (original) {
+        const reversalLines: JournalLineInput[] = original.lines.map((l) => ({
+          accountId: l.accountId,
+          debit: l.credit,
+          credit: l.debit,
+          description: l.description ? `عكس: ${l.description}` : 'عكس مردود مبيعات',
+        }));
+        reversalEntry = await this.journalService.createSystemJournalEntry(
+          {
+            sourceType: JournalSourceType.SALES_RETURN,
+            sourceId: ret.id,
+            sourceNumber: ret.returnNumber,
+            entryDate: dto.reversalDate,
+            fiscalYearId: period.fiscalYearId,
+            accountingPeriodId: period.id,
+            branchId: ret.branchId,
+            description: `عكس مردود مبيعات ${ret.returnNumber ?? ''} — ${dto.reason}`,
+            reversalOfJournalEntryId: original.id,
+            lines: reversalLines,
+            actorId,
+          },
+          manager,
+        );
+        await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
+      }
 
-      if (ret.paymentType === SalesPaymentType.CREDIT) {
+      if (ret.totalAmount <= 0) {
+        // nothing was settled with the customer / cashbox
+      } else if (ret.paymentType === SalesPaymentType.CREDIT) {
         await this.customerLedger.record(
           {
             customerId: ret.customerId,
@@ -232,7 +248,7 @@ export class SalesReturnPostingService {
             sourceType: JournalSourceType.SALES_RETURN,
             sourceId: ret.id,
             sourceNumber: ret.returnNumber,
-            journalEntryId: reversalEntry.id,
+            journalEntryId: reversalEntry?.id ?? null,
             description: `عكس مردود مبيعات نقدي ${ret.returnNumber ?? ''}`,
             actorId,
           },
@@ -244,7 +260,7 @@ export class SalesReturnPostingService {
       ret.reversedAt = new Date();
       ret.reversedBy = actorId ?? null;
       ret.reversalReason = dto.reason;
-      ret.reversalJournalEntryId = reversalEntry.id;
+      ret.reversalJournalEntryId = reversalEntry?.id ?? null;
       ret.updatedBy = actorId ?? null;
 
       await manager.getRepository(SalesReturn).save(ret);
@@ -259,46 +275,39 @@ export class SalesReturnPostingService {
     ret: SalesReturn,
     products: Map<string, Product>,
     settings: AccountingSetting,
+    number: string,
+    customerName: string,
   ): JournalLineInput[] {
-    const acc = new Map<string, { debit: number; credit: number }>();
-    const add = (accountId: string, debit: number, credit: number): void => {
-      const e = acc.get(accountId) ?? { debit: 0, credit: 0 };
-      e.debit = round2(e.debit + debit);
-      e.credit = round2(e.credit + credit);
-      acc.set(accountId, e);
-    };
+    const b = new JournalLineBuilder();
+    const ref = `مردود مبيعات ${number}`;
 
-    // Credit receivable (credit sale) or refund cash/bank (cash sale).
-    const creditAccount =
-      ret.paymentType === SalesPaymentType.CREDIT ? settings.customerControlAccountId! : ret.cashAccountId!;
-    add(creditAccount, 0, ret.totalAmount);
+    // Credit receivable (credit sale, tagged with the customer) or refund cash/bank (cash sale).
+    if (ret.paymentType === SalesPaymentType.CREDIT) {
+      b.add(settings.customerControlAccountId!, 0, ret.totalAmount, `تخفيض مديونية العميل ${customerName} — ${ref}`, { customerId: ret.customerId });
+    } else {
+      b.add(ret.cashAccountId!, 0, ret.totalAmount, `رد نقدي للعميل ${customerName} — ${ref}`);
+    }
 
     // Debit revenue (reduce it) + debit output VAT.
     for (const item of ret.items) {
       const revenueAccount = products.get(item.productId)!.salesAccountId ?? settings.salesRevenueAccountId!;
-      add(revenueAccount, item.netBeforeTax, 0);
+      b.add(revenueAccount, item.netBeforeTax, 0, `عكس إيراد مبيعات — ${ref}`);
     }
-    if (ret.vatAmount > 0) add(settings.outputVatAccountId!, ret.vatAmount, 0);
+    if (ret.vatAmount > 0) b.add(settings.outputVatAccountId!, ret.vatAmount, 0, `عكس ضريبة القيمة المضافة (مخرجات) — ${ref}`);
 
     // Restore inventory + reverse COGS for returned stock lines.
     for (const item of ret.items) {
-      if (item.lineType === SalesLineType.MANUFACTURING) continue;
+      if (!this.touchesStock(item, products)) continue;
       const product = products.get(item.productId)!;
-      if (!product.trackInventory) continue;
       const cost = round2(item.quantity * item.costAtPost);
       if (cost <= 0) continue;
       const cogs = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId!;
       const inventory = this.resolveInventoryAccount(product, settings)!;
-      add(inventory, cost, 0);
-      add(cogs, 0, cost);
+      b.add(inventory, cost, 0, `إعادة بضاعة مرتجعة للمخزون — ${ref}`, { warehouseId: ret.warehouseId });
+      b.add(cogs, 0, cost, `عكس تكلفة البضاعة المباعة — ${ref}`);
     }
 
-    return [...acc.entries()]
-      .map(([accountId, e]) => {
-        const net = round2(e.debit - e.credit);
-        return net >= 0 ? { accountId, debit: net, credit: 0 } : { accountId, debit: 0, credit: round2(-net) };
-      })
-      .filter((l) => l.debit > 0 || l.credit > 0);
+    return b.build();
   }
 
   private validateAccounts(ret: SalesReturn, products: Map<string, Product>, settings: AccountingSetting): void {
@@ -315,7 +324,7 @@ export class SalesReturnPostingService {
       if (!product) block('أحد المنتجات غير موجود.');
       const revenue = product!.salesAccountId ?? settings.salesRevenueAccountId;
       if (!revenue) block('حساب إيرادات المبيعات غير محدد في إعدادات المحاسبة.');
-      if (item.lineType !== SalesLineType.MANUFACTURING && product!.trackInventory) {
+      if (this.touchesStock(item, products)) {
         if (!(product!.cogsAccountId ?? settings.costOfGoodsSoldAccountId)) {
           block('حساب تكلفة البضاعة المباعة غير محدد في إعدادات المحاسبة.');
         }
@@ -327,6 +336,15 @@ export class SalesReturnPostingService {
     if (ret.vatAmount > 0 && !settings.outputVatAccountId) {
       block('حساب ضريبة القيمة المضافة على المبيعات غير محدد في إعدادات المحاسبة.');
     }
+  }
+
+  /**
+   * Only STOCK lines of inventory-tracked products move goods back into the
+   * warehouse and reverse COGS. Service and manufacturing lines never touch
+   * stock — even if the product record was (wrongly) flagged as tracked.
+   */
+  private touchesStock(item: SalesReturnItem, products: Map<string, Product>): boolean {
+    return item.lineType === SalesLineType.STOCK && !!products.get(item.productId)?.trackInventory;
   }
 
   private resolveInventoryAccount(product: Product, settings: AccountingSetting): string | null {

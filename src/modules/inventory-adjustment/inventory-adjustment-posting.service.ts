@@ -25,6 +25,7 @@ import {
   JournalLineInput,
 } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 
 function round2(v: number): number {
   return Math.round((v + Number.EPSILON) * 100) / 100;
@@ -104,7 +105,7 @@ export class InventoryAdjustmentPostingService {
         ),
       );
 
-      const lines = this.buildJournalLines(adjustment, products, settings);
+      const lines = this.buildJournalLines(adjustment, products, settings, number);
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.INVENTORY_ADJUSTMENT,
@@ -114,7 +115,7 @@ export class InventoryAdjustmentPostingService {
           fiscalYearId: adjustment.fiscalYearId,
           accountingPeriodId: adjustment.accountingPeriodId,
           branchId: adjustment.branchId,
-          description: `تسوية مخزون ${number}`,
+          description: `تسوية مخزون ${number}${adjustment.notes ? ` — ${adjustment.notes}` : ''}`,
           lines,
           actorId,
         },
@@ -218,33 +219,23 @@ export class InventoryAdjustmentPostingService {
     adjustment: InventoryAdjustment,
     products: Map<string, Product>,
     settings: AccountingSetting,
+    number: string,
   ): JournalLineInput[] {
-    const acc = new Map<string, { debit: number; credit: number }>();
-    const add = (accountId: string, debit: number, credit: number): void => {
-      const e = acc.get(accountId) ?? { debit: 0, credit: 0 };
-      e.debit = round2(e.debit + debit);
-      e.credit = round2(e.credit + credit);
-      acc.set(accountId, e);
-    };
+    const b = new JournalLineBuilder();
+    const ref = `تسوية مخزون ${number}`;
     const adjAccount = settings.inventoryAdjustmentAccountId!;
+    const dims = { warehouseId: adjustment.warehouseId };
     for (const item of adjustment.items) {
       const inv = this.resolveInventoryAccount(products.get(item.productId)!, settings)!;
       if (item.adjustmentType === AdjustmentType.INCREASE) {
-        add(inv, item.lineValue, 0);
-        add(adjAccount, 0, item.lineValue);
+        b.add(inv, item.lineValue, 0, `زيادة مخزون — ${ref}`, dims);
+        b.add(adjAccount, 0, item.lineValue, `فروق زيادة مخزون — ${ref}`, dims);
       } else {
-        add(adjAccount, item.lineValue, 0);
-        add(inv, 0, item.lineValue);
+        b.add(adjAccount, item.lineValue, 0, `فروق عجز مخزون — ${ref}`, dims);
+        b.add(inv, 0, item.lineValue, `عجز مخزون — ${ref}`, dims);
       }
     }
-    return [...acc.entries()]
-      .map(([accountId, e]) => {
-        const net = round2(e.debit - e.credit);
-        return net >= 0
-          ? { accountId, debit: net, credit: 0 }
-          : { accountId, debit: 0, credit: round2(-net) };
-      })
-      .filter((l) => l.debit > 0 || l.credit > 0);
+    return b.build();
   }
 
   private resolveInventoryAccount(product: Product, settings: AccountingSetting): string | null {

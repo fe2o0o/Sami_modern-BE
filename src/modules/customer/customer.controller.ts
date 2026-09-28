@@ -50,6 +50,13 @@ export class CustomerController {
     return this.customerService.findOne(id);
   }
 
+  @Get(':id/balance')
+  @RequirePermissions('customers.view')
+  @ApiOperation({ summary: 'الرصيد الحالي وحد الائتمان للعميل (لشاشات الفواتير)' })
+  balance(@Param('id', ParseUUIDPipe) id: string) {
+    return this.customerService.balanceOf(id);
+  }
+
   @Get(':id/statement')
   @RequirePermissions('customers.view')
   @ApiOperation({ summary: 'كشف حساب العميل (الحركات والرصيد)' })

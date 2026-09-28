@@ -89,6 +89,14 @@ export class ManufacturingOrder extends BaseEntity {
   @Column({ type: 'varchar', length: 255, nullable: true })
   factorySupplierName!: string | null;
 
+  /** The fee is booked as a supplier payable when execution STARTS (not at
+   *  production). These record that posting so produce/cancel can respect it. */
+  @Column({ type: 'uuid', nullable: true })
+  feeJournalEntryId!: string | null;
+
+  @Column({ type: 'datetime', nullable: true })
+  feeBookedAt!: Date | null;
+
   // ── Production result ──
   /** Total cost capitalised into the finished product = components + fee. */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })

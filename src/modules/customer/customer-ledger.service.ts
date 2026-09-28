@@ -69,6 +69,21 @@ export class CustomerLedgerService {
     return round2(Number(row?.d ?? 0) - Number(row?.c ?? 0));
   }
 
+  /** Current balances for many customers in one query (0 for those with no movements). */
+  async balances(customerIds: string[]): Promise<Map<string, number>> {
+    const map = new Map<string, number>(customerIds.map((id) => [id, 0]));
+    if (!customerIds.length) return map;
+    const rows = await this.repository
+      .createQueryBuilder('t')
+      .select('t.customerId', 'id')
+      .addSelect('COALESCE(SUM(t.debit - t.credit), 0)', 'b')
+      .where('t.customerId IN (:...ids)', { ids: customerIds })
+      .groupBy('t.customerId')
+      .getRawMany<{ id: string; b: string }>();
+    for (const r of rows) map.set(r.id, round2(Number(r.b)));
+    return map;
+  }
+
   /** Full statement for a customer, newest first, with the running balance. */
   async statement(customerId: string): Promise<CustomerStatement> {
     const transactions = await this.repository.find({

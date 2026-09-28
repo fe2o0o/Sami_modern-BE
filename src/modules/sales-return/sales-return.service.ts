@@ -16,6 +16,7 @@ import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
 import { SalesInvoiceStatus, SalesLineType } from '../sales-invoice/enums/sales-invoice.enum';
 import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
+import { Product } from '../product/entities/product.entity';
 import { SalesDeliveryStatus } from '../sales-delivery/enums/sales-delivery.enum';
 import { round2 } from '../sales-invoice/sales-math';
 import { Customer } from '../customer/entities/customer.entity';
@@ -46,10 +47,17 @@ export interface ReturnableLine {
   productName: string | null;
   unitName: string | null;
   lineType: string;
+  /** Quantity on the invoice line. */
+  invoicedQuantity: number;
+  /** Quantity actually delivered (equals invoiced for lines that never ship through a delivery note). */
+  deliveredQuantity: number;
+  /** The returnable basis: delivered goods for stock lines, invoiced quantity otherwise. */
   soldQuantity: number;
   returnedQuantity: number;
   remainingQuantity: number;
   unitPrice: number;
+  /** Why nothing can be returned on this line right now (null = returnable). */
+  blockedReason: string | null;
 }
 
 @Injectable()
@@ -90,13 +98,20 @@ export class SalesReturnService {
       throw new BadRequestException('لا يمكن إنشاء مردود إلا من فاتورة مُرحّلة');
     }
     const returned = await this.returnedQtyByItem(invoice.items.map((i) => i.id));
-    // Only DELIVERED goods are returnable. Manufacturing lines never ship through
-    // a delivery note, so they fall back to the invoiced quantity.
+    // Only DELIVERED goods are returnable. Manufacturing, service and
+    // non-inventory lines never ship through a delivery note, so they fall back
+    // to the invoiced quantity (they were "delivered" at invoicing).
     const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
+    const ships = await this.shipsViaDeliveryByItem(invoice.items);
     const lines: ReturnableLine[] = invoice.items.map((it) => {
       const returnedQty = returned.get(it.id) ?? 0;
-      const basis =
-        it.lineType === SalesLineType.MANUFACTURING ? it.quantity : delivered.get(it.id)?.qty ?? 0;
+      const shipsViaDelivery = ships.get(it.id) ?? false;
+      const deliveredQty = shipsViaDelivery ? (delivered.get(it.id)?.qty ?? 0) : it.quantity;
+      const basis = deliveredQty;
+      const remaining = round3(basis - returnedQty);
+      let blockedReason: string | null = null;
+      if (shipsViaDelivery && deliveredQty <= 0) blockedReason = 'لم يُسلَّم بعد — المرتجع يُبنى على الكميات المُسلَّمة فقط';
+      else if (remaining <= 0) blockedReason = 'تم إرجاع الكمية بالكامل';
       return {
         salesInvoiceItemId: it.id,
         productId: it.productId,
@@ -104,10 +119,13 @@ export class SalesReturnService {
         productName: it.productName,
         unitName: it.unitName,
         lineType: it.lineType,
-        soldQuantity: basis,
+        invoicedQuantity: it.quantity,
+        deliveredQuantity: round3(deliveredQty),
+        soldQuantity: round3(basis),
         returnedQuantity: round3(returnedQty),
-        remainingQuantity: round3(basis - returnedQty),
+        remainingQuantity: remaining,
         unitPrice: it.unitPrice,
+        blockedReason,
       };
     });
     return {
@@ -142,7 +160,8 @@ export class SalesReturnService {
       salesInvoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       customerId: invoice.customerId,
-      warehouseId: items[0]?.warehouseId ?? invoice.warehouseId ?? undefined,
+      // Header warehouse = where the stock lines go back; a service-only return has none.
+      warehouseId: items.find((i) => i.warehouseId)?.warehouseId ?? invoice.warehouseId ?? null,
       // A branch-restricted user's documents are forced onto their own branch.
       branchId: resolveWriteBranch(branchScope, invoice.branchId),
       fiscalYearId: dto.fiscalYearId,
@@ -251,7 +270,7 @@ export class SalesReturnService {
     const r = await this.findOne(id, branchScope);
     const [customer, warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.customerRepository.findOne({ where: { id: r.customerId } }),
-      this.warehouseRepository.findOne({ where: { id: r.warehouseId } }),
+      r.warehouseId ? this.warehouseRepository.findOne({ where: { id: r.warehouseId } }) : null,
       r.branchId ? this.branchRepository.findOne({ where: { id: r.branchId } }) : null,
       this.fiscalYearRepository.findOne({ where: { id: r.fiscalYearId } }),
       this.periodRepository.findOne({ where: { id: r.accountingPeriodId } }),
@@ -282,6 +301,7 @@ export class SalesReturnService {
     const itemById = new Map(invoice.items.map((i): [string, SalesInvoiceItem] => [i.id, i]));
     const alreadyReturned = await this.returnedQtyByItem(invoice.items.map((i) => i.id), excludeReturnId);
     const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
+    const ships = await this.shipsViaDeliveryByItem(invoice.items);
 
     // Aggregate requested qty per invoice item to validate against remaining.
     const requested = new Map<string, number>();
@@ -290,8 +310,9 @@ export class SalesReturnService {
     return dtos.map((d, index) => {
       const src = itemById.get(d.salesInvoiceItemId);
       if (!src) throw new BadRequestException('أحد السطور لا يخص هذه الفاتورة');
-      const basis =
-        src.lineType === SalesLineType.MANUFACTURING ? src.quantity : delivered.get(src.id)?.qty ?? 0;
+      // Same rule as returnableItems(): stock goods → delivered qty; service /
+      // manufacturing / non-inventory lines → the invoiced qty.
+      const basis = ships.get(src.id) ? (delivered.get(src.id)?.qty ?? 0) : src.quantity;
       const remaining = round3(basis - (alreadyReturned.get(src.id) ?? 0));
       if (requested.get(src.id)! - remaining > 1e-6) {
         throw new BadRequestException(
@@ -305,12 +326,13 @@ export class SalesReturnService {
       item.lineNumber = index + 1;
       item.salesInvoiceItemId = src.id;
       item.productId = src.productId;
-      // Goods return to the warehouse the invoice line was sold from.
-      const lineWarehouse = src.warehouseId ?? invoice.warehouseId;
-      if (!lineWarehouse) {
+      // Goods return to the warehouse the invoice line was sold from. A service /
+      // non-inventory line never touches stock, so it needs no warehouse at all.
+      const lineWarehouse = src.warehouseId ?? invoice.warehouseId ?? null;
+      if (ships.get(src.id) && !lineWarehouse) {
         throw new BadRequestException(`لا يمكن تحديد مخزن لمرتجع الصنف "${src.productName}"`);
       }
-      item.warehouseId = lineWarehouse;
+      item.warehouseId = ships.get(src.id) ? lineWarehouse : null;
       item.unitId = src.unitId;
       item.lineType = src.lineType;
       item.productCode = src.productCode;
@@ -327,10 +349,30 @@ export class SalesReturnService {
       item.lineTotal = round2(item.netBeforeTax + item.vatAmount);
       // Cost basis comes from the delivery note (COGS is booked at delivery, not
       // at invoicing). Manufacturing lines carry no inventory cost.
-      item.costAtPost =
-        src.lineType === SalesLineType.MANUFACTURING ? 0 : delivered.get(src.id)?.unitCost ?? 0;
+      item.costAtPost = ships.get(src.id) ? (delivered.get(src.id)?.unitCost ?? 0) : 0;
       return item;
     });
+  }
+
+  /**
+   * Which invoice lines physically ship through a delivery note (and are
+   * therefore returnable only once delivered): STOCK lines of inventory-tracked
+   * products. Service, manufacturing and non-inventory lines are "delivered" at
+   * invoicing, so their whole invoiced quantity is returnable.
+   */
+  private async shipsViaDeliveryByItem(items: SalesInvoiceItem[]): Promise<Map<string, boolean>> {
+    const productIds = [...new Set(items.map((i) => i.productId))];
+    const products = productIds.length
+      ? await this.dataSource.getRepository(Product).find({
+          where: { id: In(productIds) },
+          select: { id: true, trackInventory: true },
+          withDeleted: true,
+        })
+      : [];
+    const tracksInventory = new Map<string, boolean>(products.map((p) => [p.id, p.trackInventory]));
+    return new Map<string, boolean>(
+      items.map((i) => [i.id, i.lineType === SalesLineType.STOCK && (tracksInventory.get(i.productId) ?? true)]),
+    );
   }
 
   /** Net delivered qty + weighted-average unit cost per invoice item (POSTED deliveries only). */
@@ -343,10 +385,23 @@ export class SalesReturnService {
       .createQueryBuilder('di')
       .innerJoin('di.salesDelivery', 'd')
       .select('di.salesInvoiceItemId', 'itemId')
-      .addSelect('COALESCE(SUM(di.quantity), 0)', 'qty')
-      .addSelect('COALESCE(SUM(di.lineCost), 0)', 'cost')
+      // Two delivery flows share the table: a fully POSTED note (quantity = what
+      // shipped) and a per-line delivery ORDER whose header stays DRAFT while
+      // lines are confirmed one by one (deliveredQuantity + actualDeliveryDate).
+      .addSelect(
+        `COALESCE(SUM(CASE
+          WHEN d.status = :posted THEN di.quantity
+          WHEN d.status = :draft THEN COALESCE(di.deliveredQuantity, 0)
+          ELSE 0 END), 0)`,
+        'qty',
+      )
+      .addSelect(`COALESCE(SUM(CASE WHEN d.status IN (:...live) THEN di.lineCost ELSE 0 END), 0)`, 'cost')
       .where('di.salesInvoiceItemId IN (:...ids)', { ids: invoiceItemIds })
-      .andWhere('d.status = :posted', { posted: SalesDeliveryStatus.POSTED })
+      .setParameters({
+        posted: SalesDeliveryStatus.POSTED,
+        draft: SalesDeliveryStatus.DRAFT,
+        live: [SalesDeliveryStatus.POSTED, SalesDeliveryStatus.DRAFT],
+      })
       .groupBy('di.salesInvoiceItemId')
       .getRawMany<{ itemId: string; qty: string; cost: string }>();
     return new Map(

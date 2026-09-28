@@ -28,6 +28,13 @@ export class SupplierController {
     private readonly ledgerService: SupplierLedgerService,
   ) {}
 
+  @Get(':id/balance')
+  @RequirePermissions('suppliers.view')
+  @ApiOperation({ summary: 'الرصيد الحالي للمورد (لشاشات الفواتير)' })
+  balance(@Param('id', ParseUUIDPipe) id: string) {
+    return this.supplierService.balanceOf(id);
+  }
+
   @Get(':id/statement')
   @RequirePermissions('suppliers.view')
   @ApiOperation({ summary: 'كشف حساب مورد (الرصيد + الحركات)' })
