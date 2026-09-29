@@ -56,6 +56,15 @@ export class SalesInvoiceItem extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   specifications!: string | null;
 
+  /** External factory for the resulting manufacturing order (null = in-house).
+   *  Nothing is posted to the supplier here — only when the order is started. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  factorySupplierId!: string | null;
+
+  /** Manufacturing fee (TOTAL for the line = per-unit × quantity) carried to the order. */
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0, transformer: numericTransformer })
+  manufacturingFee!: number;
+
   // ── Snapshots ──
   @Column({ type: 'varchar', length: 50, nullable: true })
   productCode!: string | null;

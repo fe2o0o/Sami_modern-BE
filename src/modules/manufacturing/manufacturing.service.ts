@@ -14,6 +14,7 @@ import { UpdateManufacturingOrderDto } from './dto/update-manufacturing-order.dt
 import { ManufacturingComponentDto } from './dto/manufacturing-component.dto';
 import { ManufacturingOrderQueryDto } from './dto/manufacturing-order-query.dto';
 import { Product } from '../product/entities/product.entity';
+import { Supplier } from '../supplier/entities/supplier.entity';
 import { ProductComponent } from '../product/entities/product-component.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
 import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
@@ -87,6 +88,11 @@ export interface ManufacturingFromInvoiceInput {
   color: string | null;
   material: string | null;
   specifications: string | null;
+  /** External factory chosen on the invoice line (null = in-house). Only stored on
+   *  the order here; the fee is posted to the supplier when the order is STARTED. */
+  factorySupplierId?: string | null;
+  /** Manufacturing fee for the whole order (already per-unit × quantity). */
+  manufacturingFee?: number;
   sourceType: string;
   sourceId: string;
   sourceNumber: string | null;
@@ -160,6 +166,7 @@ export class ManufacturingService {
           fiscalYearId: fiscalYear.id,
           manufacturingFee: dto.manufacturingFee ?? 0,
           factorySupplierId: dto.factorySupplierId ?? null,
+          factorySupplierName: await this.supplierName(dto.factorySupplierId ?? null, manager),
           notes: dto.notes ?? null,
           components,
           createdBy: actorId ?? null,
@@ -205,7 +212,10 @@ export class ManufacturingService {
     if (dto.material !== undefined) order.material = dto.material ?? null;
     if (dto.specifications !== undefined) order.specifications = dto.specifications ?? null;
     if (dto.manufacturingFee !== undefined) order.manufacturingFee = dto.manufacturingFee ?? 0;
-    if (dto.factorySupplierId !== undefined) order.factorySupplierId = dto.factorySupplierId ?? null;
+    if (dto.factorySupplierId !== undefined) {
+      order.factorySupplierId = dto.factorySupplierId ?? null;
+      order.factorySupplierName = await this.supplierName(order.factorySupplierId, this.orderRepository.manager);
+    }
     // A branch-restricted user cannot move a document to another branch.
     if (branchScope !== null) order.branchId = resolveWriteBranch(branchScope, order.branchId);
     else if (dto.branchId !== undefined) order.branchId = dto.branchId ?? null;
@@ -332,6 +342,26 @@ export class ManufacturingService {
     return { summary, orders };
   }
 
+  /** Supplier display name for the snapshot column (null when no factory / unknown id). */
+  private async supplierName(
+    supplierId: string | null,
+    manager: { getRepository: EntityManager['getRepository'] },
+  ): Promise<string | null> {
+    if (!supplierId) return null;
+    const s = await manager.getRepository(Supplier).findOne({ where: { id: supplierId }, select: { id: true, name: true } });
+    return s?.name ?? null;
+  }
+
+  /** Orders edited before the name snapshot existed carry an id but no name — resolve in bulk. */
+  private async fillSupplierNames(orders: ManufacturingOrder[]): Promise<void> {
+    const missing = orders.filter((o) => o.factorySupplierId && !o.factorySupplierName);
+    if (!missing.length) return;
+    const ids = [...new Set(missing.map((o) => o.factorySupplierId!))];
+    const suppliers = await this.orderRepository.manager.getRepository(Supplier).find({ where: { id: In(ids) }, select: { id: true, name: true } });
+    const byId = new Map(suppliers.map((s) => [s.id, s.name]));
+    for (const o of missing) o.factorySupplierName = byId.get(o.factorySupplierId!) ?? null;
+  }
+
   /** Map entities to list rows, enriching with the delivered quantity + late flag. */
   private async toListItems(items: ManufacturingOrder[]): Promise<ManufacturingOrderListItem[]> {
     if (!items.length) return [];
@@ -345,6 +375,7 @@ export class ManufacturingService {
       .groupBy('d.manufacturingOrderId')
       .getRawMany<{ orderId: string; qty: string }>();
     for (const r of rows) delivered.set(r.orderId, Number(r.qty) || 0);
+    await this.fillSupplierNames(items);
     const today = todayIso();
     return items.map((i) => ({
       id: i.id,
@@ -378,6 +409,7 @@ export class ManufacturingService {
 
   async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const order = await this.findOne(id, branchScope);
+    await this.fillSupplierNames([order]);
     const [branch, fiscalYear, users, components, invoiceLine] = await Promise.all([
       order.branchId ? this.branchRepository.findOne({ where: { id: order.branchId } }) : null,
       order.fiscalYearId ? this.fiscalYearRepository.findOne({ where: { id: order.fiscalYearId } }) : null,
@@ -477,6 +509,9 @@ export class ManufacturingService {
         color: input.color,
         material: input.material,
         specifications: input.specifications,
+        factorySupplierId: input.factorySupplierId ?? null,
+        factorySupplierName: await this.supplierName(input.factorySupplierId ?? null, manager),
+        manufacturingFee: round2(input.manufacturingFee ?? 0),
         status: ManufacturingOrderStatus.NEW,
         branchId: input.branchId,
         fiscalYearId: fiscalYear.id,

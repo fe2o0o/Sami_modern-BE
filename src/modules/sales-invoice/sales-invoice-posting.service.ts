@@ -260,6 +260,8 @@ export class SalesInvoicePostingService {
               color: item.color,
               material: item.material,
               specifications: item.specifications,
+              factorySupplierId: item.factorySupplierId ?? null,
+              manufacturingFee: item.manufacturingFee ?? 0,
               sourceType: JournalSourceType.SALES_INVOICE,
               sourceId: invoice.id,
               sourceNumber: invoiceNumber,

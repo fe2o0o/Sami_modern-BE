@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Supplier } from '../supplier/entities/supplier.entity';
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import {
   BranchScope,
@@ -405,6 +406,18 @@ export class SalesInvoiceService {
       ? await this.productRepository.find({ where: { id: In(componentIds) }, relations: { unit: true } })
       : [];
     const componentById = new Map(componentProducts.map((p): [string, Product] => [p.id, p]));
+    // Factories chosen on manufacturing lines must be real, active suppliers.
+    const factoryIds = [
+      ...new Set(
+        itemsDto
+          .filter((d) => (d.lineType ?? SalesLineType.STOCK) === SalesLineType.MANUFACTURING && d.factorySupplierId)
+          .map((d) => d.factorySupplierId as string),
+      ),
+    ];
+    if (factoryIds.length) {
+      const found = await this.dataSource.getRepository(Supplier).count({ where: { id: In(factoryIds) } });
+      if (found !== factoryIds.length) throw new BadRequestException('المصنع (المورد) المختار لأحد الأصناف غير موجود');
+    }
 
     const computed = computeInvoice(this.toLineInputs(itemsDto)).lines;
 
@@ -431,6 +444,9 @@ export class SalesInvoiceService {
       item.color = dto.color ?? null;
       item.material = dto.material ?? null;
       item.specifications = dto.specifications ?? null;
+      const isMfg = lineType === SalesLineType.MANUFACTURING;
+      item.factorySupplierId = isMfg ? dto.factorySupplierId ?? null : null;
+      item.manufacturingFee = isMfg ? round2(dto.manufacturingFee ?? 0) : 0;
       item.productCode = product.code;
       item.productName = product.name;
       item.unitName = unitId ? unitById.get(unitId)?.name ?? null : null;

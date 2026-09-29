@@ -105,6 +105,20 @@ export class SalesInvoiceItemDto {
   @Min(0)
   vatRate?: number;
 
+  /** External factory (supplier) for the manufacturing order — null/absent = in-house.
+   *  Not posted to the supplier at invoice time; booked when the order is started. */
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @IsOptional()
+  @IsUUID('4', { message: 'المصنع (المورد) غير صحيح' })
+  factorySupplierId?: string | null;
+
+  /** Manufacturing fee for the whole line (per-unit × quantity), carried to the order. */
+  @ApiPropertyOptional({ default: 0, description: 'رسوم التصنيع (إجمالي السطر)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0, { message: 'رسوم التصنيع لا يمكن أن تكون سالبة' })
+  manufacturingFee?: number;
+
   /** Per-order BOM for a MANUFACTURING line (does not change the product master). */
   @ApiPropertyOptional({ type: [SalesInvoiceItemComponentDto] })
   @IsOptional()
