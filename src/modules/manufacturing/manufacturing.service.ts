@@ -451,12 +451,16 @@ export class ManufacturingService {
     const fiscalYear = await this.resolveFiscalYearIn(input.fiscalYearId, manager);
     const orderNumber = await this.sequenceService.nextDocumentNumber('MO', fiscalYear, manager);
     const repo = manager.getRepository(ManufacturingOrder);
-    // Use the invoice line's per-order BOM when provided (already TOTAL quantities),
+    // Use the invoice line's BOM when provided (entered PER UNIT, scaled below),
     // otherwise copy the product's default BOM (per-unit × order quantity).
     const components = await this.buildOrderComponents(
       input.productId,
       input.quantity,
-      input.components?.length ? input.components : undefined,
+      // Invoice-line components are entered PER UNIT (the spec dialog's "الكمية/وحدة"),
+      // so scale them by the ordered quantity — exactly like the product BOM path.
+      input.components?.length
+        ? input.components.map((c) => ({ ...c, quantity: round3(c.quantity * (input.quantity || 1)) }))
+        : undefined,
       manager,
     );
     return repo.save(

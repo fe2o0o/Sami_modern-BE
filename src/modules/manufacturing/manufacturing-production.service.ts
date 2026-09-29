@@ -6,6 +6,8 @@ import { ManufacturingOrderComponent } from './entities/manufacturing-order-comp
 import { ManufacturingOrderStatus } from './enums/manufacturing.enum';
 import { ProduceManufacturingOrderDto } from './dto/produce-manufacturing-order.dto';
 import { Product } from '../product/entities/product.entity';
+import { ProductType } from '../product/enums/product-type.enum';
+import { applyEffectiveAccounts } from '../product/product-accounts';
 import { Supplier } from '../supplier/entities/supplier.entity';
 import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
@@ -86,6 +88,7 @@ export class ManufacturingProductionService {
         if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
         const product = await manager.getRepository(Product).findOne({ where: { id: order.productId } });
         if (!product) throw new BadRequestException('المنتج المُصنّع غير موجود');
+        await applyEffectiveAccounts([product], manager);
         // The fee is part of the product's cost, so it goes straight into the
         // product's inventory (cost) account — not a separate expense.
         const productCostAcc = product.inventoryAccountId ?? settings.finishedGoodsInventoryAccountId;
@@ -286,11 +289,31 @@ export class ManufacturingProductionService {
       const product = await manager.getRepository(Product).findOne({ where: { id: order.productId } });
       if (!product) throw new BadRequestException('المنتج المُصنّع غير موجود');
       if (!product.trackInventory) throw new BadRequestException(`المنتج "${product.name}" ليس صنفاً مخزنياً`);
+      await applyEffectiveAccounts([product], manager);
 
       const finishedAcc = product.inventoryAccountId ?? settings.finishedGoodsInventoryAccountId;
-      const rawAcc = settings.rawMaterialInventoryAccountId;
       if (!finishedAcc) throw new BadRequestException('حساب مخزون تام الصنع غير محدد في إعدادات المحاسبة');
-      if (!rawAcc) throw new BadRequestException('حساب مخزون المواد الخام غير محدد في إعدادات المحاسبة');
+
+      // Each component leaves ITS OWN inventory account (category -> product ->
+      // raw-material / finished-goods default), not one blanket raw-material account.
+      const componentIds = [...new Set(components.map((c) => c.componentProductId))];
+      const componentProducts = componentIds.length
+        ? await manager.getRepository(Product).find({ where: { id: In(componentIds) } })
+        : [];
+      await applyEffectiveAccounts(componentProducts, manager);
+      const componentById = new Map(componentProducts.map((cp) => [cp.id, cp]));
+      const componentInventoryAcc = (productId: string): string => {
+        const cp = componentById.get(productId);
+        const byType =
+          cp?.productType === ProductType.RAW_MATERIAL
+            ? settings.rawMaterialInventoryAccountId
+            : settings.finishedGoodsInventoryAccountId;
+        const acc = cp?.inventoryAccountId ?? byType ?? settings.rawMaterialInventoryAccountId;
+        if (!acc) throw new BadRequestException(`حساب المخزون للمكوّن "${cp?.name ?? productId}" غير محدد في إعدادات المحاسبة`);
+        return acc;
+      };
+      // Validate up-front, before any stock moves.
+      components.forEach((c) => componentInventoryAcc(c.componentProductId));
 
       let supplier: Supplier | null = null;
       if (factoryId) {
@@ -357,7 +380,16 @@ export class ManufacturingProductionService {
       if (bookedIntoFinished > 0) {
         lines.push({ accountId: finishedAcc, debit: bookedIntoFinished, credit: 0, productId: order.productId, warehouseId, description: `إنتاج ${order.productName ?? ''} (${order.quantity}) — ${orderRef}` });
       }
-      if (componentCost > 0) lines.push({ accountId: rawAcc, debit: 0, credit: componentCost, warehouseId, description: `صرف خامات للإنتاج — ${orderRef}` });
+      if (componentCost > 0) {
+        const creditByAcc = new Map<string, number>();
+        for (const c of components) {
+          const acc = componentInventoryAcc(c.componentProductId);
+          creditByAcc.set(acc, round2((creditByAcc.get(acc) ?? 0) + c.lineCost));
+        }
+        for (const [accountId, credit] of creditByAcc) {
+          if (credit > 0) lines.push({ accountId, debit: 0, credit, warehouseId, description: `صرف خامات للإنتاج — ${orderRef}` });
+        }
+      }
       if (fee > 0 && !feeBooked) {
         lines.push({
           accountId: feeAcc!,

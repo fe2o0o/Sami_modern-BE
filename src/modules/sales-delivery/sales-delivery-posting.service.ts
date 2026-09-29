@@ -21,6 +21,7 @@ import {
   SalesLineType,
 } from '../sales-invoice/enums/sales-invoice.enum';
 import { Product } from '../product/entities/product.entity';
+import { applyEffectiveAccounts } from '../product/product-accounts';
 import { ProductType } from '../product/enums/product-type.enum';
 import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
 import { ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
@@ -61,6 +62,15 @@ export class SalesDeliveryPostingService {
       }
       if (delivery.status !== SalesDeliveryStatus.DRAFT) throw new BadRequestException('لا يمكن ترحيل إذن تسليم غير مسودة');
       if (!delivery.items?.length) throw new BadRequestException('لا يمكن ترحيل إذن تسليم بدون أصناف');
+      // An invoice-linked delivery ORDER is confirmed line by line (deliverItem);
+      // posting it as a whole would issue its legacy `quantity` (0) and mark it
+      // delivered without moving anything.
+      if (delivery.source === SalesDeliverySource.INVOICE) {
+        throw new BadRequestException('إذن التسليم المرتبط بفاتورة يُؤكَّد سطراً بسطر (تأكيد تسليم كل صنف) ولا يُرحَّل دفعة واحدة');
+      }
+      if (delivery.items.some((i) => (i.quantity || 0) <= 0)) {
+        throw new BadRequestException('لا يمكن ترحيل إذن تسليم يحتوي على أصناف بكمية صفر');
+      }
 
       const { fiscalYear } = await this.assertOpenPostingContext(
         delivery.fiscalYearId, delivery.accountingPeriodId, delivery.deliveryDate, manager,
@@ -95,11 +105,9 @@ export class SalesDeliveryPostingService {
       });
       delivery.totalCost = round2(delivery.items.reduce((s, i) => s + i.lineCost, 0));
 
-      // Invoice-linked: release the held reservation and advance delivery progress.
-      if (delivery.source === SalesDeliverySource.INVOICE && delivery.salesInvoiceId) {
-        await this.stockService.releaseReservation(stockLines, manager);
-        await this.applyInvoiceDelivery(manager, delivery, +1);
-      }
+      // (Invoice-linked orders never reach this point — they are confirmed per
+      //  line in deliverItem, which releases the reservation and advances the
+      //  invoice's delivery progress there.)
 
       // Book the cost of sales: DR COGS / CR inventory.
       const lines = this.buildJournalLines(delivery, products, settings, number);
@@ -289,7 +297,10 @@ export class SalesDeliveryPostingService {
 
       const customerName = await this.customerName(delivery.customerId, manager);
       const itemRef = `${product.name ?? ''} (${qty}) — إذن تسليم ${number}`;
-      await this.journalService.createSystemJournalEntry(
+      // A zero weighted-average cost (goods sold before any costed receipt, or an
+      // opening balance entered without a cost) means there is no COGS to book:
+      // the goods still leave the warehouse, the journal is simply skipped.
+      if (lineCost > 0) await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.SALES_DELIVERY,
           sourceId: delivery.id,
@@ -601,6 +612,8 @@ export class SalesDeliveryPostingService {
   private async loadProducts(ids: string[], manager: EntityManager): Promise<Map<string, Product>> {
     const unique = [...new Set(ids)];
     const rows = unique.length ? await manager.getRepository(Product).find({ where: { id: In(unique) } }) : [];
+    // Category-level accounts take precedence over the product's own (legacy) ones.
+    await applyEffectiveAccounts(rows, manager);
     return new Map(rows.map((p): [string, Product] => [p.id, p]));
   }
 

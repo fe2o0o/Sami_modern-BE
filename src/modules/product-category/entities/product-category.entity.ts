@@ -34,6 +34,20 @@ export class ProductCategory extends BaseEntity {
   isActive!: boolean;
 
   // =========================
+  // ACCOUNTING (optional): every product in this category (and its
+  // sub-categories, unless they set their own) posts to these accounts.
+  // Empty -> the defaults from Accounting Settings.
+  // =========================
+  @Column({ type: 'uuid', nullable: true })
+  inventoryAccountId!: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  cogsAccountId!: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  salesAccountId!: string | null;
+
+  // =========================
   // HIERARCHY
   // =========================
   @ManyToOne(() => ProductCategory, (category) => category.children, {

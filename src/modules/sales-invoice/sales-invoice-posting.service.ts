@@ -15,6 +15,7 @@ import { round2 } from './sales-math';
 
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
 import { Product } from '../product/entities/product.entity';
+import { applyEffectiveAccounts } from '../product/product-accounts';
 import { Customer } from '../customer/entities/customer.entity';
 import { ProductType } from '../product/enums/product-type.enum';
 import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
@@ -581,6 +582,8 @@ export class SalesInvoicePostingService {
     const rows = unique.length
       ? await manager.getRepository(Product).find({ where: { id: In(unique) } })
       : [];
+    // Category-level accounts take precedence over the product's own (legacy) ones.
+    await applyEffectiveAccounts(rows, manager);
     return new Map(rows.map((p): [string, Product] => [p.id, p]));
   }
 

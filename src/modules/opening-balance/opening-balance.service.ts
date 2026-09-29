@@ -31,6 +31,7 @@ import { Company } from '../company/entities/company.entity';
 import { Customer } from '../customer/entities/customer.entity';
 import { Supplier } from '../supplier/entities/supplier.entity';
 import { Product } from '../product/entities/product.entity';
+import { applyEffectiveAccounts } from '../product/product-accounts';
 import { Warehouse } from '../warehouse/entities/warehouse.entity';
 import { Role } from '../role/entities/role.entity';
 import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
@@ -1179,6 +1180,8 @@ export class OpeningBalanceService {
           : [],
       ]);
 
+    // Category-level accounts take precedence over the product's own (legacy) ones.
+    await applyEffectiveAccounts(products, this.dataSource);
     return {
       settings,
       accountsById: new Map(

@@ -39,4 +39,20 @@ export class CreateProductCategoryDto {
   @IsOptional()
   @IsBoolean({ message: 'الحالة يجب أن تكون قيمة منطقية' })
   isActive?: boolean;
+
+  // Accounting overrides (inherited by sub-categories; empty = settings default)
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'حساب المخزون لمنتجات هذا التصنيف' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'حساب المخزون غير صالح' })
+  inventoryAccountId?: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'حساب تكلفة البضاعة المباعة لمنتجات هذا التصنيف' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'حساب التكلفة غير صالح' })
+  cogsAccountId?: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'حساب إيراد المبيعات لمنتجات هذا التصنيف' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'حساب الإيراد غير صالح' })
+  salesAccountId?: string | null;
 }

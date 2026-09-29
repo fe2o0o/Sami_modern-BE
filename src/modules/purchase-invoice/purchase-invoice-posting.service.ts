@@ -15,6 +15,7 @@ import {
 import { ReversePurchaseInvoiceDto } from './dto/reverse-purchase-invoice.dto';
 import { round2 } from '../sales-invoice/sales-math';
 import { Product } from '../product/entities/product.entity';
+import { applyEffectiveAccounts } from '../product/product-accounts';
 import { ProductType } from '../product/enums/product-type.enum';
 import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
@@ -429,6 +430,8 @@ export class PurchaseInvoicePostingService {
     const rows = unique.length
       ? await manager.getRepository(Product).find({ where: { id: In(unique) } })
       : [];
+    // Category-level accounts take precedence over the product's own (legacy) ones.
+    await applyEffectiveAccounts(rows, manager);
     return new Map(rows.map((p): [string, Product] => [p.id, p]));
   }
 
