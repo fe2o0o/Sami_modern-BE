@@ -9,6 +9,8 @@ import {
 
 export enum Environment {
   Development = 'development',
+  /** QC server: its own checkout (branch `qc`), `.env`, database and PM2 app. */
+  Qc = 'qc',
   Production = 'production',
   Test = 'test',
   Provision = 'provision',
@@ -79,6 +81,17 @@ export function validateEnv(config: Record<string, unknown>) {
         .map((e) => `  - ${Object.values(e.constraints ?? {}).join(', ')}`)
         .join('\n')}`,
     );
+  }
+
+  // Database isolation: a QC process must never point at the production
+  // database (and vice versa). The server's `.env` decides the environment, so
+  // the database name has to say the same thing.
+  const db = validated.DB_DATABASE ?? '';
+  if (validated.NODE_ENV === Environment.Qc && !/qc/i.test(db)) {
+    throw new Error(`NODE_ENV=qc but DB_DATABASE="${db}" is not a QC database (its name must contain "qc").`);
+  }
+  if (validated.NODE_ENV === Environment.Production && /(qc|test|dev|staging)/i.test(db)) {
+    throw new Error(`NODE_ENV=production but DB_DATABASE="${db}" looks like a non-production database.`);
   }
 
   return validated;
