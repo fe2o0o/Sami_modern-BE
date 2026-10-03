@@ -193,7 +193,8 @@ export class FinancialStatementsService {
   // HELPERS
   // =========================================================
   private line(account: ChartOfAccount, amount: number): StatementLine {
-    return { accountId: account.id, code: account.accountCode, name: account.accountNameAr, amount };
+    const name = account.deletedAt ? `${account.accountNameAr} (محذوف)` : account.accountNameAr;
+    return { accountId: account.id, code: account.accountCode, name, amount };
   }
   private sum(lines: StatementLine[]): number {
     return round2(lines.reduce((s, l) => s + l.amount, 0));
@@ -201,7 +202,9 @@ export class FinancialStatementsService {
 
   private async loadAccounts(ids: string[]): Promise<ChartOfAccount[]> {
     if (!ids.length) return [];
-    const rows = await this.accountRepository.find({ where: { id: In(ids) } });
+    // Include soft-deleted accounts: a deleted account that still carries posted
+    // lines must stay on the statement, otherwise it stops balancing.
+    const rows = await this.accountRepository.find({ where: { id: In(ids) }, withDeleted: true });
     rows.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
     return rows;
   }

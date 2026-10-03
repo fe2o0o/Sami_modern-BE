@@ -512,7 +512,27 @@ export class ChartOfAccountService {
    * Placeholder hook — always false until journal entries / accounting settings
    * / ERP transactions exist. Wire those repositories here later.
    */
-  private async isAccountUsed(_accountId: string): Promise<boolean> {
-    return Promise.resolve(false);
+  /**
+   * An account is "used" once anything references it: journal lines (posted OR
+   * draft — history must never lose its account), a treasury / bank account that
+   * posts through it, a product / category override, or an accounting setting.
+   * Such an account can only be deactivated, never deleted: the financial
+   * statements would otherwise silently drop its balance and stop balancing.
+   */
+  private async isAccountUsed(accountId: string): Promise<boolean> {
+    const used = async (sql: string, params: string[]): Promise<boolean> => {
+      const rows = (await this.dataSource.query(sql, params)) as Array<{ n: number | string }>;
+      return Number(rows[0]?.n ?? 0) > 0;
+    };
+    const one = [accountId];
+    if (await used('SELECT COUNT(*) AS n FROM journal_entry_lines WHERE account_id = ? AND deleted_at IS NULL', one)) return true;
+    if (await used('SELECT COUNT(*) AS n FROM treasuries WHERE account_id = ? AND deleted_at IS NULL', one)) return true;
+    if (await used('SELECT COUNT(*) AS n FROM bank_accounts WHERE account_id = ? AND deleted_at IS NULL', one)) return true;
+    const three = [accountId, accountId, accountId];
+    const overrideSql = (table: string) =>
+      `SELECT COUNT(*) AS n FROM ${table} WHERE deleted_at IS NULL AND (inventory_account_id = ? OR cogs_account_id = ? OR sales_account_id = ?)`;
+    if (await used(overrideSql('products'), three)) return true;
+    if (await used(overrideSql('product_categories'), three)) return true;
+    return false;
   }
 }

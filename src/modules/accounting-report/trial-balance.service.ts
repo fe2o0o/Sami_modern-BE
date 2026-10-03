@@ -113,6 +113,8 @@ export class TrialBalanceService {
           where: query.accountType
             ? { id: In(ids), accountType: query.accountType }
             : { id: In(ids) },
+          // Deleted accounts with balances stay on the trial balance.
+          withDeleted: true,
         })
       : [];
     accounts.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
@@ -135,7 +137,7 @@ export class TrialBalanceService {
       rows.push({
         accountId: account.id,
         code: account.accountCode,
-        name: account.accountNameAr,
+        name: account.deletedAt ? `${account.accountNameAr} (محذوف)` : account.accountNameAr,
         accountType: account.accountType,
         openingDebit: opening.debit,
         openingCredit: opening.credit,

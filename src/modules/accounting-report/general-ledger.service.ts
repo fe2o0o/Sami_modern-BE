@@ -76,6 +76,7 @@ export class GeneralLedgerService {
     query.branchScope = branchScope;
     const account = await this.accountRepository.findOne({
       where: { id: query.accountId },
+      withDeleted: true,
     });
     if (!account) {
       throw new NotFoundException('الحساب غير موجود');
