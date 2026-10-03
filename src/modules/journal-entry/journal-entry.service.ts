@@ -82,6 +82,8 @@ export interface DetailedLine {
   description: string | null;
   customerId: string | null;
   supplierId: string | null;
+  treasuryId: string | null;
+  bankAccountId: string | null;
   /** Subledger the line is mirrored on (customer/supplier/treasury/bank), if any. */
   partyType: JournalPartyKind | null;
   partyId: string | null;
@@ -378,6 +380,8 @@ export class JournalEntryService {
         description: l.description,
         customerId: l.customerId ?? null,
         supplierId: l.supplierId ?? null,
+        treasuryId: l.treasuryId ?? null,
+        bankAccountId: l.bankAccountId ?? null,
         ...parties[i],
       })),
       createdAt: entry.createdAt,
@@ -703,6 +707,8 @@ export class JournalEntryService {
     entity.branchId = line.branchId ?? fallbackBranchId ?? null;
     entity.customerId = line.customerId ?? null;
     entity.supplierId = line.supplierId ?? null;
+    entity.treasuryId = line.treasuryId ?? null;
+    entity.bankAccountId = line.bankAccountId ?? null;
     entity.warehouseId = line.warehouseId ?? null;
     entity.productId = line.productId ?? null;
     return entity;
@@ -719,6 +725,8 @@ export class JournalEntryService {
       branchId: l.branchId ?? null,
       customerId: l.customerId ?? null,
       supplierId: l.supplierId ?? null,
+      treasuryId: l.treasuryId ?? null,
+      bankAccountId: l.bankAccountId ?? null,
       warehouseId: l.warehouseId ?? null,
       productId: l.productId ?? null,
     }));

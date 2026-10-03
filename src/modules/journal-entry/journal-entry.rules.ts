@@ -10,6 +10,8 @@ export interface JournalLineInput {
   branchId?: string | null;
   customerId?: string | null;
   supplierId?: string | null;
+  treasuryId?: string | null;
+  bankAccountId?: string | null;
   warehouseId?: string | null;
   productId?: string | null;
 }

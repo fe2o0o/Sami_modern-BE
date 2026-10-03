@@ -90,6 +90,39 @@ export class JournalEntrySubledgerService {
       }
     });
 
+    // Cash parties: a chosen treasury/bank must post through the line's GL account,
+    // and a cash account shared by several treasuries/banks needs an explicit choice at post.
+    const cashAccountIds = [...new Set(lines.map((l) => l.accountId))];
+    const [treasuries, banks] = await Promise.all([
+      manager.getRepository(Treasury).find({ where: { accountId: In(cashAccountIds) }, select: { id: true, accountId: true, isActive: true } }),
+      manager.getRepository(BankAccount).find({ where: { accountId: In(cashAccountIds) }, select: { id: true, accountId: true, isActive: true } }),
+    ]);
+    const tById = new Map(treasuries.map((t) => [t.id, t]));
+    const bById = new Map(banks.map((b) => [b.id, b]));
+    lines.forEach((line, index) => {
+      const label = `السطر ${index + 1}`;
+      if (line.treasuryId && line.bankAccountId) throw new BadRequestException(`${label}: لا يمكن ربط خزينة وحساب بنكي في نفس السطر`);
+      if ((line.treasuryId || line.bankAccountId) && (line.customerId || line.supplierId)) {
+        throw new BadRequestException(`${label}: لا يمكن ربط خزينة/بنك مع عميل أو مورد في نفس السطر`);
+      }
+      if (line.treasuryId) {
+        const t = tById.get(line.treasuryId);
+        if (!t) throw new BadRequestException(`${label}: الخزينة المختارة غير موجودة`);
+        if (t.accountId !== line.accountId) throw new BadRequestException(`${label}: الخزينة المختارة لا تتبع هذا الحساب`);
+      }
+      if (line.bankAccountId) {
+        const b = bById.get(line.bankAccountId);
+        if (!b) throw new BadRequestException(`${label}: الحساب البنكي المختار غير موجود`);
+        if (b.accountId !== line.accountId) throw new BadRequestException(`${label}: الحساب البنكي المختار لا يتبع هذا الحساب`);
+      }
+      if (opts.requireParty && !line.treasuryId && !line.bankAccountId) {
+        const tCount = treasuries.filter((t) => t.accountId === line.accountId && t.isActive).length;
+        const bCount = banks.filter((b) => b.accountId === line.accountId && b.isActive).length;
+        if (tCount > 1) throw new BadRequestException(`${label}: أكثر من خزينة تستخدم هذا الحساب — اختر الخزينة`);
+        if (bCount > 1) throw new BadRequestException(`${label}: أكثر من حساب بنكي يستخدم هذا الحساب — اختر الحساب البنكي`);
+      }
+    });
+
     const customerIds = [...new Set(lines.map((l) => l.customerId).filter((v): v is string => !!v))];
     if (customerIds.length) {
       const found = await manager.getRepository(Customer).count({ where: { id: In(customerIds) } });
@@ -153,7 +186,12 @@ export class JournalEntrySubledgerService {
         );
         continue;
       }
-      const cash = await resolveCash(line.accountId);
+      // An explicitly chosen treasury/bank wins; otherwise resolve by the GL account.
+      const cash = line.treasuryId
+        ? { treasuryId: line.treasuryId }
+        : line.bankAccountId
+          ? { bankAccountId: line.bankAccountId }
+          : await resolveCash(line.accountId);
       if (cash?.treasuryId) {
         await this.treasuryLedger.record(
           { treasuryId: cash.treasuryId, type: opts.reversal ? TreasuryTransactionType.REVERSAL : TreasuryTransactionType.ADJUSTMENT, journalEntryId: entry.id, ...base },
@@ -174,13 +212,19 @@ export class JournalEntrySubledgerService {
     const customerIds = [...new Set(lines.map((l) => l.customerId).filter((v): v is string => !!v))];
     const supplierIds = [...new Set(lines.map((l) => l.supplierId).filter((v): v is string => !!v))];
     const accountIds = [...new Set(lines.filter((l) => !l.customerId && !l.supplierId).map((l) => l.accountId))];
+    const treasuryIds = [...new Set(lines.map((l) => l.treasuryId).filter((v): v is string => !!v))];
+    const bankIds = [...new Set(lines.map((l) => l.bankAccountId).filter((v): v is string => !!v))];
 
-    const [customers, suppliers, treasuries, banks] = await Promise.all([
+    const [customers, suppliers, treasuries, banks, chosenTreasuries, chosenBanks] = await Promise.all([
       customerIds.length ? manager.getRepository(Customer).find({ where: { id: In(customerIds) }, select: { id: true, name: true }, withDeleted: true }) : Promise.resolve([] as Customer[]),
       supplierIds.length ? manager.getRepository(Supplier).find({ where: { id: In(supplierIds) }, select: { id: true, name: true }, withDeleted: true }) : Promise.resolve([] as Supplier[]),
       accountIds.length ? manager.getRepository(Treasury).find({ where: { accountId: In(accountIds) }, select: { id: true, name: true, accountId: true } }) : Promise.resolve([] as Treasury[]),
       accountIds.length ? manager.getRepository(BankAccount).find({ where: { accountId: In(accountIds) }, select: { id: true, bankName: true, accountName: true, accountId: true } }) : Promise.resolve([] as BankAccount[]),
+      treasuryIds.length ? manager.getRepository(Treasury).find({ where: { id: In(treasuryIds) }, select: { id: true, name: true, accountId: true } }) : Promise.resolve([] as Treasury[]),
+      bankIds.length ? manager.getRepository(BankAccount).find({ where: { id: In(bankIds) }, select: { id: true, bankName: true, accountName: true, accountId: true } }) : Promise.resolve([] as BankAccount[]),
     ]);
+    const tById = new Map<string, Treasury>(chosenTreasuries.map((t) => [t.id, t]));
+    const bById = new Map<string, BankAccount>(chosenBanks.map((b) => [b.id, b]));
     const cName = new Map<string, string>(customers.map((c) => [c.id, c.name]));
     const sName = new Map<string, string>(suppliers.map((s) => [s.id, s.name]));
     const tByAcc = new Map<string, Treasury>(treasuries.map((t) => [t.accountId, t]));
@@ -189,6 +233,11 @@ export class JournalEntrySubledgerService {
     return lines.map((l): LinePartyInfo => {
       if (l.customerId) return { partyType: 'customer', partyId: l.customerId, partyName: cName.get(l.customerId) ?? null };
       if (l.supplierId) return { partyType: 'supplier', partyId: l.supplierId, partyName: sName.get(l.supplierId) ?? null };
+      if (l.treasuryId) return { partyType: 'treasury', partyId: l.treasuryId, partyName: tById.get(l.treasuryId)?.name ?? null };
+      if (l.bankAccountId) {
+        const cb = bById.get(l.bankAccountId);
+        return { partyType: 'bank', partyId: l.bankAccountId, partyName: cb ? `${cb.bankName} - ${cb.accountName}` : null };
+      }
       const t = tByAcc.get(l.accountId);
       if (t) return { partyType: 'treasury', partyId: t.id, partyName: t.name };
       const b = bByAcc.get(l.accountId);

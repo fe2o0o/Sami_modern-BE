@@ -40,6 +40,16 @@ export class JournalEntryLineDto {
   @IsUUID()
   supplierId?: string | null;
 
+  @ApiPropertyOptional({ format: 'uuid', description: 'الخزينة (لحساب خزينة تشترك فيه أكثر من خزينة)' })
+  @IsOptional()
+  @IsUUID()
+  treasuryId?: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'الحساب البنكي (لحساب بنك تشترك فيه أكثر من حساب)' })
+  @IsOptional()
+  @IsUUID()
+  bankAccountId?: string | null;
+
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID()

@@ -69,6 +69,15 @@ export class JournalEntryLine extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   supplierId!: string | null;
 
+  /** Treasury explicitly chosen for a cash-account line (several treasuries may
+   *  share one GL account) — the cashbook the line is mirrored on. */
+  @Column({ type: 'uuid', nullable: true })
+  treasuryId!: string | null;
+
+  /** Bank account explicitly chosen for a bank-GL line. */
+  @Column({ type: 'uuid', nullable: true })
+  bankAccountId!: string | null;
+
   @Column({ type: 'uuid', nullable: true })
   warehouseId!: string | null;
 
