@@ -30,6 +30,13 @@ export class VoucherController {
     private readonly posting: VoucherPostingService,
   ) {}
 
+  @Get('summary')
+  @RequirePermissions('vouchers.view')
+  @ApiOperation({ summary: 'تحليل سندات القبض والصرف حسب نفس فلاتر القائمة' })
+  summary(@Query() query: VoucherQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get()
   @RequirePermissions('vouchers.view')
   @ApiOperation({ summary: 'عرض سندات القبض والصرف مع الترقيم والفلاتر' })

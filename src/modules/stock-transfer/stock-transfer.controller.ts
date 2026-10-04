@@ -26,6 +26,13 @@ import { RequirePermissions } from '../permissions/decorators/require-permission
 export class StockTransferController {
   constructor(private readonly service: StockTransferService) {}
 
+  @Get('summary')
+  @RequirePermissions('stock_transfers.view')
+  @ApiOperation({ summary: 'تحليل التحويلات المخزنية حسب نفس فلاتر القائمة' })
+  summary(@Query() query: StockTransferQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get()
   @RequirePermissions('stock_transfers.view')
   @ApiOperation({ summary: 'عرض التحويلات المخزنية مع الترقيم والفلاتر' })

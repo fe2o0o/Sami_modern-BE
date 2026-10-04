@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
+import { SalesInvoiceCommission } from '../sales-invoice/entities/sales-invoice-commission.entity';
+import { SalesInvoiceStatus } from '../sales-invoice/enums/sales-invoice.enum';
 import { Employee } from './entities/employee.entity';
 import { Branch } from '../branch/entities/branch.entity';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
@@ -92,6 +94,15 @@ export class EmployeeService extends BaseCrudService<Employee> {
     const qb = this.employeeRepository
       .createQueryBuilder('employee')
       .leftJoinAndSelect('employee.branches', 'branch');
+    this.applyListFilters(qb, query);
+    const sortBy = this.sortableFields.includes(query.sortBy ?? '') ? query.sortBy! : 'createdAt';
+    qb.orderBy(`employee.${sortBy}`, query.order).skip(query.skip).take(query.perPage);
+    const [items, total] = await qb.getManyAndCount();
+    return paginate(items, total, query.page, query.perPage);
+  }
+
+  /** The list's filters (alias `employee`; base-crud search/isActive semantics) — list + summary cards. */
+  private applyListFilters<T extends ObjectLiteral>(qb: SelectQueryBuilder<T>, query: ListQuery): void {
     if (query.search) {
       const cond = this.searchFields.map((f) => `employee.${f} LIKE :s`).join(' OR ');
       qb.andWhere(`(${cond})`, { s: `%${query.search}%` });
@@ -99,10 +110,59 @@ export class EmployeeService extends BaseCrudService<Employee> {
     if (query.isActive !== undefined) {
       qb.andWhere('employee.isActive = :active', { active: query.isActive });
     }
-    const sortBy = this.sortableFields.includes(query.sortBy ?? '') ? query.sortBy! : 'createdAt';
-    qb.orderBy(`employee.${sortBy}`, query.order).skip(query.skip).take(query.perPage);
-    const [items, total] = await qb.getManyAndCount();
-    return paginate(items, total, query.page, query.perPage);
+  }
+
+  /**
+   * Analysis cards for the employees list, over EXACTLY the list's filters.
+   * Commission totals (posted sales invoices, all time — the commissions report's
+   * rule) are only computed when `withCommissions` (the caller may view reports).
+   */
+  async summary(query: ListQuery, withCommissions: boolean) {
+    const qb = this.employeeRepository.createQueryBuilder('employee');
+    this.applyListFilters(qb, query);
+    const raw = await qb
+      .clone()
+      .select('COUNT(*)', 'cnt')
+      .addSelect('SUM(CASE WHEN employee.isActive = 1 THEN 1 ELSE 0 END)', 'active')
+      .addSelect('SUM(CASE WHEN employee.commissionRate > 0 THEN 1 ELSE 0 END)', 'withRate')
+      .addSelect('COALESCE(SUM(CASE WHEN employee.isActive = 1 THEN employee.netSalary ELSE 0 END), 0)', 'salaries')
+      .getRawOne<Record<string, string | null>>();
+    // Employees with no branch assigned work in ALL branches.
+    const unassigned = await qb
+      .clone()
+      .leftJoin('employee.branches', 'branch')
+      .andWhere('branch.id IS NULL')
+      .getCount();
+
+    let commission: { total: number; invoicesCount: number; employeesCount: number } | null = null;
+    if (withCommissions) {
+      const cq = this.dataSource
+        .getRepository(SalesInvoiceCommission)
+        .createQueryBuilder('c')
+        .innerJoin('c.salesInvoice', 'si')
+        .innerJoin(Employee, 'employee', 'employee.id = c.employeeId')
+        .select('COALESCE(SUM(c.amount), 0)', 'total')
+        .addSelect('COUNT(DISTINCT c.salesInvoiceId)', 'invoices')
+        .addSelect('COUNT(DISTINCT c.employeeId)', 'employees')
+        .where('si.status = :posted', { posted: SalesInvoiceStatus.POSTED });
+      this.applyListFilters(cq, query);
+      const c = await cq.getRawOne<Record<string, string | null>>();
+      commission = {
+        total: Math.round((Number(c?.total ?? 0) + Number.EPSILON) * 100) / 100,
+        invoicesCount: Number(c?.invoices ?? 0) || 0,
+        employeesCount: Number(c?.employees ?? 0) || 0,
+      };
+    }
+
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    return {
+      count: n('cnt'),
+      activeCount: n('active'),
+      withCommissionRateCount: n('withRate'),
+      allBranchesCount: unassigned,
+      activeNetSalaries: Math.round((n('salaries') + Number.EPSILON) * 100) / 100,
+      commission,
+    };
   }
 
   /** Resolve+validate the branch ids. Empty/undefined → no branches (all). */

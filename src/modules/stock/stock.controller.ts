@@ -12,6 +12,20 @@ import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 export class StockController {
   constructor(private readonly stockService: StockService) {}
 
+  @Get('summary')
+  @RequirePermissions('stock.view')
+  @ApiOperation({ summary: 'تحليل أرصدة المخزون حسب نفس فلاتر القائمة' })
+  summary(@Query() query: StockQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.stockService.balancesSummary(query, branchScope);
+  }
+
+  @Get('movements/summary')
+  @RequirePermissions('stock.view')
+  @ApiOperation({ summary: 'تحليل حركات المخزون حسب نفس فلاتر السجل' })
+  movementsSummary(@Query() query: StockMovementQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.stockService.movementsSummary(query, branchScope);
+  }
+
   @Get()
   @RequirePermissions('stock.view')
   @ApiOperation({ summary: 'عرض أرصدة المخزون الحالية' })

@@ -277,23 +277,7 @@ export class SalesDeliveryService {
     branchScope: BranchScope = null,
   ): Promise<PaginatedResult<SalesDeliveryListItem>> {
     const qb = this.repository.createQueryBuilder('d');
-    applyBranchScope(qb, 'd.branchId', branchScope);
-    if (query.search) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('d.deliveryNumber LIKE :s', { s: `%${query.search}%` }).orWhere('d.invoiceNumber LIKE :s', {
-            s: `%${query.search}%`,
-          });
-        }),
-      );
-    }
-    if (query.customerId) qb.andWhere('d.customerId = :cu', { cu: query.customerId });
-    if (query.salesInvoiceId) qb.andWhere('d.salesInvoiceId = :si', { si: query.salesInvoiceId });
-    if (query.warehouseId) qb.andWhere('d.warehouseId = :wh', { wh: query.warehouseId });
-    if (query.fiscalYearId) qb.andWhere('d.fiscalYearId = :fy', { fy: query.fiscalYearId });
-    if (query.status) qb.andWhere('d.status = :st', { st: query.status });
-    if (query.dateFrom) qb.andWhere('d.deliveryDate >= :df', { df: query.dateFrom });
-    if (query.dateTo) qb.andWhere('d.deliveryDate <= :dt', { dt: query.dateTo });
+    this.applyListFilters(qb, query, branchScope);
     qb.leftJoinAndSelect('d.items', 'items');
     qb.orderBy('d.deliveryDate', 'DESC').addOrderBy('d.createdAt', 'DESC').skip(query.skip).take(query.perPage);
 
@@ -317,6 +301,99 @@ export class SalesDeliveryService {
       deliveryProgress: d.deliveryProgress,
     }));
     return paginate(rows, total, query.page, query.perPage);
+  }
+
+  /** The list's filters, shared by the page query and the summary cards. */
+  private applyListFilters(
+    qb: ReturnType<Repository<SalesDelivery>['createQueryBuilder']>,
+    query: SalesDeliveryQueryDto,
+    branchScope: BranchScope,
+  ): void {
+    applyBranchScope(qb, 'd.branchId', branchScope);
+    if (query.search) {
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('d.deliveryNumber LIKE :s', { s: `%${query.search}%` }).orWhere('d.invoiceNumber LIKE :s', {
+            s: `%${query.search}%`,
+          });
+        }),
+      );
+    }
+    if (query.customerId) qb.andWhere('d.customerId = :cu', { cu: query.customerId });
+    if (query.salesInvoiceId) qb.andWhere('d.salesInvoiceId = :si', { si: query.salesInvoiceId });
+    if (query.warehouseId) qb.andWhere('d.warehouseId = :wh', { wh: query.warehouseId });
+    if (query.fiscalYearId) qb.andWhere('d.fiscalYearId = :fy', { fy: query.fiscalYearId });
+    if (query.status) qb.andWhere('d.status = :st', { st: query.status });
+    if (query.dateFrom) qb.andWhere('d.deliveryDate >= :df', { df: query.dateFrom });
+    if (query.dateTo) qb.andWhere('d.deliveryDate <= :dt', { dt: query.dateTo });
+  }
+
+  /**
+   * Analysis cards for the delivery-orders list, over EXACTLY the list's filters.
+   * Invoice-linked orders stay DRAFT while their lines are confirmed one-by-one
+   * (cost is booked per confirmed line), so the cost/quantity totals cover every
+   * non-reversed order ("active") unless a status filter is applied — then they
+   * total that status.
+   */
+  async summary(query: SalesDeliveryQueryDto, branchScope: BranchScope = null) {
+    const qb = this.repository.createQueryBuilder('d');
+    this.applyListFilters(qb, query, branchScope);
+    const basis: SalesDeliveryStatus | 'active' = query.status ?? 'active';
+    const inBasis = query.status ? `d.status = :basis` : `d.status <> 'reversed'`;
+    // Pending = not fully delivered: an open (draft) order whose progress is not
+    // yet DELIVERED (a posted standalone note was issued in full at post time).
+    const pending = `d.status = 'draft' AND d.deliveryProgress <> 'delivered'`;
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN d.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN d.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN d.status = 'reversed' THEN 1 ELSE 0 END)`, 'reversed')
+      .addSelect(`SUM(CASE WHEN ${pending} THEN 1 ELSE 0 END)`, 'pending')
+      .addSelect(`SUM(CASE WHEN ${pending} AND d.deliveryProgress = 'partial' THEN 1 ELSE 0 END)`, 'partial')
+      .addSelect(
+        `SUM(CASE WHEN ${pending} AND d.expectedDeliveryDate IS NOT NULL AND d.expectedDeliveryDate < CURDATE() THEN 1 ELSE 0 END)`,
+        'overdue',
+      )
+      .addSelect(`COALESCE(SUM(CASE WHEN ${inBasis} THEN d.totalCost ELSE 0 END), 0)`, 'cost')
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+
+    // Line quantities (goods lines only — service lines don't ship), restricted
+    // to the same filtered headers via a sub-query on the header ids.
+    const ids = qb.clone().select('d.id').orderBy();
+    const qty = await this.repository.manager
+      .createQueryBuilder(SalesDeliveryItem, 'it')
+      .innerJoin(SalesDelivery, 'h', 'h.id = it.salesDeliveryId')
+      .select(`COALESCE(SUM(GREATEST(it.orderedQuantity, it.quantity)), 0)`, 'ordered')
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN h.status = 'posted' THEN GREATEST(it.deliveredQuantity, it.quantity) ELSE it.deliveredQuantity END), 0)`,
+        'delivered',
+      )
+      .where(`it.salesDeliveryId IN (${ids.getQuery()})`)
+      .andWhere(`it.lineType <> 'service'`)
+      .andWhere(query.status ? `h.status = :basis` : `h.status <> 'reversed'`)
+      .setParameters({ ...ids.getParameters(), basis })
+      .getRawOne<Record<string, string | null>>();
+
+    const n = (r: Record<string, string | null> | undefined, k: string) => Number(r?.[k] ?? 0) || 0;
+    const round = (v: number, d: number) => Math.round(v * 10 ** d) / 10 ** d;
+    const ordered = round(n(qty, 'ordered'), 3);
+    const delivered = round(n(qty, 'delivered'), 3);
+    return {
+      basis,
+      count: n(raw, 'cnt'),
+      draftCount: n(raw, 'drafts'),
+      postedCount: n(raw, 'posted'),
+      reversedCount: n(raw, 'reversed'),
+      pendingCount: n(raw, 'pending'),
+      partialCount: n(raw, 'partial'),
+      overdueCount: n(raw, 'overdue'),
+      orderedQuantity: ordered,
+      deliveredQuantity: delivered,
+      remainingQuantity: round(Math.max(ordered - delivered, 0), 3),
+      deliveredPercent: ordered > 0 ? round((delivered / ordered) * 100, 1) : 0,
+      totalCost: round(n(raw, 'cost'), 2),
+    };
   }
 
   async findOne(id: string, branchScope: BranchScope = null): Promise<SalesDelivery> {

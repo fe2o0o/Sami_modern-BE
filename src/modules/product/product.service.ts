@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
 import { promises as fs } from 'fs';
 import { join, extname } from 'path';
 import { randomUUID } from 'crypto';
@@ -16,6 +16,9 @@ import { ProductCategory } from '../product-category/entities/product-category.e
 import { CodeSettingService } from '../code-setting/code-setting.service';
 import { Brand } from '../brand/entities/brand.entity';
 import { Unit } from '../unit/entities/unit.entity';
+import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
+import { Warehouse } from '../warehouse/entities/warehouse.entity';
+import { BranchScope, applyBranchScope } from '../../common/utils/branch-scope.util';
 import { ProductType, PRODUCT_TYPE_LABELS } from './enums/product-type.enum';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -214,6 +217,19 @@ export class ProductService {
       .leftJoinAndSelect('product.unit', 'unit')
       .leftJoinAndSelect('product.images', 'images');
 
+    this.applyListFilters(qb, query);
+
+    const sortBy = SORTABLE.includes(query.sortBy ?? '') ? query.sortBy! : 'createdAt';
+    qb.orderBy(`product.${sortBy}`, query.order);
+    qb.addOrderBy('images.displayOrder', 'ASC');
+    qb.skip(query.skip).take(query.perPage);
+
+    const [items, total] = await qb.getManyAndCount();
+    return paginate(items, total, query.page, query.perPage);
+  }
+
+  /** The list's filters (alias `product`), shared by the page query and the summary cards. */
+  private applyListFilters(qb: SelectQueryBuilder<Product>, query: QueryProductDto): void {
     if (query.search) {
       qb.andWhere(
         '(product.code LIKE :s OR product.name LIKE :s OR product.nameEn LIKE :s OR product.barcode LIKE :s)',
@@ -232,14 +248,54 @@ export class ProductService {
     if (query.isActive !== undefined) {
       qb.andWhere('product.isActive = :isActive', { isActive: query.isActive });
     }
+  }
 
-    const sortBy = SORTABLE.includes(query.sortBy ?? '') ? query.sortBy! : 'createdAt';
-    qb.orderBy(`product.${sortBy}`, query.order);
-    qb.addOrderBy('images.displayOrder', 'ASC');
-    qb.skip(query.skip).take(query.perPage);
+  /**
+   * Analysis cards for the products list, over EXACTLY the list's filters.
+   * Stock value = Σ quantity × avgCost from warehouse stock of the filtered
+   * products, limited to the caller's branch scope (warehouses of their branches).
+   */
+  async summary(query: QueryProductDto, branchScope: BranchScope = null) {
+    const qb = this.productRepository.createQueryBuilder('product');
+    this.applyListFilters(qb, query);
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect('SUM(CASE WHEN product.isActive = 1 THEN 1 ELSE 0 END)', 'active')
+      .addSelect(`SUM(CASE WHEN product.productType = 'finished_product' THEN 1 ELSE 0 END)`, 'finished')
+      .addSelect(`SUM(CASE WHEN product.productType = 'raw_material' THEN 1 ELSE 0 END)`, 'raw')
+      .addSelect(`SUM(CASE WHEN product.productType = 'semi_finished' THEN 1 ELSE 0 END)`, 'semi')
+      .addSelect(`SUM(CASE WHEN product.productType = 'service' THEN 1 ELSE 0 END)`, 'service')
+      .addSelect('SUM(CASE WHEN product.trackInventory = 1 THEN 1 ELSE 0 END)', 'tracked')
+      .addSelect('SUM(CASE WHEN product.isManufactured = 1 THEN 1 ELSE 0 END)', 'manufactured')
+      .getRawOne<Record<string, string | null>>();
 
-    const [items, total] = await qb.getManyAndCount();
-    return paginate(items, total, query.page, query.perPage);
+    const stockQb = this.productRepository
+      .createQueryBuilder('product')
+      .innerJoin(WarehouseStock, 'ws', 'ws.productId = product.id AND ws.deletedAt IS NULL')
+      .innerJoin(Warehouse, 'w', 'w.id = ws.warehouseId AND w.deletedAt IS NULL');
+    this.applyListFilters(stockQb, query);
+    applyBranchScope(stockQb, 'w.branchId', branchScope);
+    const stock = await stockQb
+      .select('COALESCE(SUM(ws.quantity * ws.avgCost), 0)', 'value')
+      .addSelect('COALESCE(SUM(ws.quantity), 0)', 'qty')
+      .addSelect('COUNT(DISTINCT CASE WHEN ws.quantity > 0 THEN product.id END)', 'inStock')
+      .getRawOne<Record<string, string | null>>();
+
+    const n = (r: Record<string, string | null> | undefined, k: string) => Number(r?.[k] ?? 0) || 0;
+    const r2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
+    return {
+      count: n(raw, 'cnt'),
+      activeCount: n(raw, 'active'),
+      finishedCount: n(raw, 'finished'),
+      rawMaterialCount: n(raw, 'raw'),
+      semiFinishedCount: n(raw, 'semi'),
+      serviceCount: n(raw, 'service'),
+      trackedCount: n(raw, 'tracked'),
+      manufacturedCount: n(raw, 'manufactured'),
+      inStockCount: n(stock, 'inStock'),
+      stockQuantity: Math.round(n(stock, 'qty') * 1000) / 1000,
+      stockValue: r2(n(stock, 'value')),
+    };
   }
 
   async findOne(id: string): Promise<Product> {

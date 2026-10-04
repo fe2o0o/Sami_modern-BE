@@ -7,6 +7,9 @@ import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { BaseCrudService, ListQuery } from '../../common/services/base-crud.service';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
 import { SupplierLedgerService } from './supplier-ledger.service';
+import { SupplierTransaction } from './entities/supplier-transaction.entity';
+import { PartySummaryQueryDto } from '../../common/dto/party-summary-query.dto';
+import { partySummaryRows, summarizeParties } from '../../common/utils/party-summary';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
@@ -104,6 +107,16 @@ export class SupplierService extends BaseCrudService<Supplier> {
   }
 
   /** Current payable balance — what a purchase screen needs about a supplier. */
+  /** Analysis cards for the suppliers list — follows the same filters (+ a movement period). */
+  async summary(query: PartySummaryQueryDto) {
+    const rows = await partySummaryRows(
+      this.supplierRepository,
+      { txEntity: SupplierTransaction, fk: 'supplierId', searchFields: this.searchFields, sign: -1, withCreditLimit: false },
+      query,
+    );
+    return summarizeParties(rows, query);
+  }
+
   async balanceOf(id: string): Promise<{ id: string; name: string; balance: number }> {
     const supplier = await this.findOne(id);
     return { id, name: supplier.name, balance: await this.ledger.balance(id) };

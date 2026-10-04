@@ -7,6 +7,9 @@ import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { BaseCrudService, ListQuery } from '../../common/services/base-crud.service';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
 import { CustomerLedgerService } from './customer-ledger.service';
+import { CustomerTransaction } from './entities/customer-transaction.entity';
+import { PartySummaryQueryDto } from '../../common/dto/party-summary-query.dto';
+import { partySummaryRows, summarizeParties } from '../../common/utils/party-summary';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
@@ -103,6 +106,16 @@ export class CustomerService extends BaseCrudService<Customer> {
     const page = await super.findAll(query);
     const balances = await this.ledger.balances(page.items.map((c) => c.id));
     return { ...page, items: page.items.map((c) => ({ ...c, balance: balances.get(c.id) ?? 0 })) };
+  }
+
+  /** Analysis cards for the customers list — follows the same filters (+ a movement period). */
+  async summary(query: PartySummaryQueryDto) {
+    const rows = await partySummaryRows(
+      this.customerRepository,
+      { txEntity: CustomerTransaction, fk: 'customerId', searchFields: this.searchFields, sign: 1, withCreditLimit: true },
+      query,
+    );
+    return summarizeParties(rows, query);
   }
 
   /** Current balance + credit limit — what an invoice screen needs about a customer. */

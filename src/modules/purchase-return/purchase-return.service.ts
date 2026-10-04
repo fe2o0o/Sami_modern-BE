@@ -169,11 +169,12 @@ export class PurchaseReturnService {
     await this.repository.softDelete(id);
   }
 
-  async findAll(
+  /** Every list filter in one place — shared by `findAll` and `summary` so the cards always match the table. */
+  private applyListFilters(
+    qb: ReturnType<Repository<PurchaseReturn>['createQueryBuilder']>,
     query: PurchaseReturnQueryDto,
-    branchScope: BranchScope = null,
-  ): Promise<PaginatedResult<PurchaseReturnListItem>> {
-    const qb = this.repository.createQueryBuilder('r');
+    branchScope: BranchScope,
+  ): void {
     // Branch-restricted users only ever see their own branch's documents.
     applyBranchScope(qb, 'r.branchId', branchScope);
     if (query.search) {
@@ -191,6 +192,45 @@ export class PurchaseReturnService {
     if (query.status) qb.andWhere('r.status = :st', { st: query.status });
     if (query.dateFrom) qb.andWhere('r.returnDate >= :df', { df: query.dateFrom });
     if (query.dateTo) qb.andWhere('r.returnDate <= :dt', { dt: query.dateTo });
+  }
+
+  async summary(query: PurchaseReturnQueryDto, branchScope: BranchScope = null) {
+    const qb = this.repository.createQueryBuilder('r');
+    this.applyListFilters(qb, query, branchScope);
+    const basis = query.status ?? PurchaseReturnStatus.POSTED;
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN r.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN r.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN r.status = 'reversed' THEN 1 ELSE 0 END)`, 'voided')
+      .addSelect(`COALESCE(SUM(CASE WHEN r.status = :basis THEN r.taxableAmount ELSE 0 END), 0)`, 'taxable')
+      .addSelect(`COALESCE(SUM(CASE WHEN r.status = :basis THEN r.vatAmount ELSE 0 END), 0)`, 'vat')
+      .addSelect(`COALESCE(SUM(CASE WHEN r.status = :basis THEN r.totalAmount ELSE 0 END), 0)`, 'total')
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    const total = round2(n('total'));
+    const basisCount = basis === PurchaseReturnStatus.POSTED ? n('posted') : n('cnt');
+    return {
+      basis,
+      count: n('cnt'),
+      draftCount: n('drafts'),
+      postedCount: n('posted'),
+      voidedCount: n('voided'),
+      taxableAmount: round2(n('taxable')),
+      vatAmount: round2(n('vat')),
+      totalAmount: total,
+      averageReturn: basisCount ? round2(total / basisCount) : 0,
+    };
+  }
+
+  async findAll(
+    query: PurchaseReturnQueryDto,
+    branchScope: BranchScope = null,
+  ): Promise<PaginatedResult<PurchaseReturnListItem>> {
+    const qb = this.repository.createQueryBuilder('r');
+    this.applyListFilters(qb, query, branchScope);
+
     qb.orderBy('r.returnDate', 'DESC').addOrderBy('r.createdAt', 'DESC').skip(query.skip).take(query.perPage);
 
     const [items, total] = await qb.getManyAndCount();

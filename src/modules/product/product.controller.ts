@@ -27,6 +27,7 @@ import { QueryProductDto } from './dto/query-product.dto';
 import { ReorderImagesDto } from './dto/reorder-images.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
+import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
@@ -63,6 +64,13 @@ export class ProductController {
   @ApiOperation({ summary: 'عرض المنتجات مع الترقيم' })
   findAll(@Query() query: QueryProductDto) {
     return this.productService.findAll(query);
+  }
+
+  @Get('summary')
+  @RequirePermissions('products.view')
+  @ApiOperation({ summary: 'تحليل المنتجات حسب نفس فلاتر القائمة (قيمة المخزون ضمن فروع المستخدم)' })
+  summary(@Query() query: QueryProductDto, @BranchScope() branchScope: string[] | null) {
+    return this.productService.summary(query, branchScope);
   }
 
   @Get(':id')

@@ -42,6 +42,13 @@ export class ManufacturingController {
     return this.service.findAll(query, branchScope);
   }
 
+  @Get('summary')
+  @RequirePermissions('manufacturing.view')
+  @ApiOperation({ summary: 'تحليل أوامر التصنيع حسب نفس فلاتر القائمة' })
+  summary(@Query() query: ManufacturingOrderQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get('by-supplier/:supplierId')
   @RequirePermissions('manufacturing.view')
   @ApiOperation({ summary: 'كشف أوامر التصنيع لمورّد (مصنع): المفتوح والمتأخر والمُنتج والرسوم' })

@@ -291,6 +291,22 @@ export class ManufacturingService {
     branchScope: BranchScope = null,
   ): Promise<PaginatedResult<ManufacturingOrderListItem>> {
     const qb = this.orderRepository.createQueryBuilder('mo');
+    this.applyListFilters(qb, query, branchScope);
+
+    qb.orderBy('mo.orderDate', 'DESC').addOrderBy('mo.createdAt', 'DESC')
+      .skip(query.skip).take(query.perPage);
+
+    const [items, total] = await qb.getManyAndCount();
+    const rows = await this.toListItems(items);
+    return paginate(rows, total, query.page, query.perPage);
+  }
+
+  /** The list's filters, shared by the page query and the summary cards. */
+  private applyListFilters(
+    qb: ReturnType<Repository<ManufacturingOrder>['createQueryBuilder']>,
+    query: ManufacturingOrderQueryDto,
+    branchScope: BranchScope,
+  ): void {
     // Branch-restricted users only ever see their own branch's documents.
     applyBranchScope(qb, 'mo.branchId', branchScope);
     if (query.search) {
@@ -312,13 +328,55 @@ export class ManufacturingService {
     }
     if (query.dateFrom) qb.andWhere('mo.orderDate >= :df', { df: query.dateFrom });
     if (query.dateTo) qb.andWhere('mo.orderDate <= :dt', { dt: query.dateTo });
+  }
 
-    qb.orderBy('mo.orderDate', 'DESC').addOrderBy('mo.createdAt', 'DESC')
-      .skip(query.skip).take(query.perPage);
-
-    const [items, total] = await qb.getManyAndCount();
-    const rows = await this.toListItems(items);
-    return paginate(rows, total, query.page, query.perPage);
+  /**
+   * Analysis cards for the orders list, over EXACTLY the list's filters.
+   * Fee totals exclude cancelled orders (same rule as the supplier statement),
+   * unless a status filter is applied — then they total that status.
+   * Lateness = past delivery date and still new / in progress (the list's rule).
+   */
+  async summary(query: ManufacturingOrderQueryDto, branchScope: BranchScope = null) {
+    const qb = this.orderRepository.createQueryBuilder('mo');
+    this.applyListFilters(qb, query, branchScope);
+    const basis = query.status ?? 'active';
+    const feeRow = query.status ? '1 = 1' : `mo.status <> 'cancelled'`;
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN mo.status = 'new' THEN 1 ELSE 0 END)`, 'newCnt')
+      .addSelect(`SUM(CASE WHEN mo.status = 'in_progress' THEN 1 ELSE 0 END)`, 'inProgress')
+      .addSelect(`SUM(CASE WHEN mo.status = 'produced' THEN 1 ELSE 0 END)`, 'produced')
+      .addSelect(`SUM(CASE WHEN mo.status = 'done' THEN 1 ELSE 0 END)`, 'done')
+      .addSelect(`SUM(CASE WHEN mo.status = 'cancelled' THEN 1 ELSE 0 END)`, 'cancelled')
+      .addSelect(
+        `SUM(CASE WHEN mo.deliveryDate IS NOT NULL AND mo.deliveryDate < :sToday AND mo.status IN (:...sOpen) THEN 1 ELSE 0 END)`,
+        'late',
+      )
+      .addSelect(`SUM(CASE WHEN mo.factorySupplierId IS NULL THEN 1 ELSE 0 END)`, 'internal')
+      .addSelect(`SUM(CASE WHEN mo.factorySupplierId IS NOT NULL THEN 1 ELSE 0 END)`, 'external')
+      .addSelect(`COALESCE(SUM(CASE WHEN ${feeRow} THEN mo.manufacturingFee ELSE 0 END), 0)`, 'fees')
+      .addSelect(`COALESCE(SUM(CASE WHEN ${feeRow} AND mo.feeBookedAt IS NOT NULL THEN mo.manufacturingFee ELSE 0 END), 0)`, 'booked')
+      .addSelect(`COALESCE(SUM(CASE WHEN ${feeRow} AND mo.factorySupplierId IS NOT NULL THEN mo.manufacturingFee ELSE 0 END), 0)`, 'externalFees')
+      .addSelect(`COALESCE(SUM(CASE WHEN ${feeRow} THEN mo.quantity ELSE 0 END), 0)`, 'qty')
+      .setParameters({ sToday: todayIso(), sOpen: OPEN_STATUSES })
+      .getRawOne<Record<string, string | null>>();
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    return {
+      basis,
+      count: n('cnt'),
+      newCount: n('newCnt'),
+      inProgressCount: n('inProgress'),
+      producedCount: n('produced'),
+      doneCount: n('done'),
+      cancelledCount: n('cancelled'),
+      lateCount: n('late'),
+      internalCount: n('internal'),
+      externalCount: n('external'),
+      totalQuantity: Math.round(n('qty') * 1000) / 1000,
+      totalFees: round2(n('fees')),
+      bookedFees: round2(n('booked')),
+      externalFees: round2(n('externalFees')),
+    };
   }
 
   /**

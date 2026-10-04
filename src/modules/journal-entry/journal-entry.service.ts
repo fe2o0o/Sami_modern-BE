@@ -248,39 +248,7 @@ export class JournalEntryService {
     branchScope: BranchScope = null,
   ): Promise<PaginatedResult<JournalEntryListItem>> {
     const qb = this.entryRepository.createQueryBuilder('je');
-    // Branch-restricted users only ever see their own branch's documents.
-    applyBranchScope(qb, 'je.branchId', branchScope);
-
-    if (query.search) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('je.entryNumber LIKE :s', { s: `%${query.search}%` })
-            .orWhere('je.description LIKE :s', { s: `%${query.search}%` })
-            .orWhere('je.sourceNumber LIKE :s', { s: `%${query.search}%` });
-        }),
-      );
-    }
-    if (query.fiscalYearId) {
-      qb.andWhere('je.fiscalYearId = :fy', { fy: query.fiscalYearId });
-    }
-    if (query.accountingPeriodId) {
-      qb.andWhere('je.accountingPeriodId = :ap', { ap: query.accountingPeriodId });
-    }
-    if (query.branchId) {
-      qb.andWhere('je.branchId = :br', { br: query.branchId });
-    }
-    if (query.status) {
-      qb.andWhere('je.status = :st', { st: query.status });
-    }
-    if (query.sourceType) {
-      qb.andWhere('je.sourceType = :src', { src: query.sourceType });
-    }
-    if (query.dateFrom) {
-      qb.andWhere('je.entryDate >= :df', { df: query.dateFrom });
-    }
-    if (query.dateTo) {
-      qb.andWhere('je.entryDate <= :dt', { dt: query.dateTo });
-    }
+    this.applyListFilters(qb, query, branchScope);
 
     qb.orderBy('je.entryDate', 'DESC')
       .addOrderBy('je.createdAt', 'DESC')
@@ -314,6 +282,94 @@ export class JournalEntryService {
     }));
 
     return paginate(rows, total, query.page, query.perPage);
+  }
+
+  /** The list's filters, shared by the page query and the summary cards. */
+  private applyListFilters(
+    qb: ReturnType<Repository<JournalEntry>['createQueryBuilder']>,
+    query: JournalEntryQueryDto,
+    branchScope: BranchScope,
+  ): void {
+    // Branch-restricted users only ever see their own branch's documents.
+    applyBranchScope(qb, 'je.branchId', branchScope);
+
+    if (query.search) {
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('je.entryNumber LIKE :s', { s: `%${query.search}%` })
+            .orWhere('je.description LIKE :s', { s: `%${query.search}%` })
+            .orWhere('je.sourceNumber LIKE :s', { s: `%${query.search}%` });
+        }),
+      );
+    }
+    if (query.fiscalYearId) {
+      qb.andWhere('je.fiscalYearId = :fy', { fy: query.fiscalYearId });
+    }
+    if (query.accountingPeriodId) {
+      qb.andWhere('je.accountingPeriodId = :ap', { ap: query.accountingPeriodId });
+    }
+    if (query.branchId) {
+      qb.andWhere('je.branchId = :br', { br: query.branchId });
+    }
+    if (query.status) {
+      qb.andWhere('je.status = :st', { st: query.status });
+    }
+    if (query.sourceType) {
+      qb.andWhere('je.sourceType = :src', { src: query.sourceType });
+    }
+    if (query.dateFrom) {
+      qb.andWhere('je.entryDate >= :df', { df: query.dateFrom });
+    }
+    if (query.dateTo) {
+      qb.andWhere('je.entryDate <= :dt', { dt: query.dateTo });
+    }
+  }
+
+  /**
+   * Analysis cards for the journal list, over EXACTLY the list's filters.
+   * Debit/credit totals count entries that hit the ledger (`isPosted` — posted
+   * AND reversed, whose lines still count) unless a status filter is applied —
+   * then they total that status.
+   */
+  async summary(query: JournalEntryQueryDto, branchScope: BranchScope = null) {
+    const qb = this.entryRepository.createQueryBuilder('je');
+    this.applyListFilters(qb, query, branchScope);
+    const basis = query.status ?? JournalEntryStatus.POSTED;
+    const moneyRow = query.status ? '1 = 1' : 'je.isPosted = 1';
+    const raw = await qb
+      .clone()
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN je.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN je.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN je.status = 'reversed' THEN 1 ELSE 0 END)`, 'reversed')
+      .addSelect(`SUM(CASE WHEN je.sourceType = :manual THEN 1 ELSE 0 END)`, 'manual')
+      .addSelect(`COALESCE(SUM(CASE WHEN je.status = 'draft' THEN je.totalDebit ELSE 0 END), 0)`, 'draftDebit')
+      .addSelect(`COALESCE(SUM(CASE WHEN ${moneyRow} THEN je.totalDebit ELSE 0 END), 0)`, 'debit')
+      .addSelect(`COALESCE(SUM(CASE WHEN ${moneyRow} THEN je.totalCredit ELSE 0 END), 0)`, 'credit')
+      .setParameter('manual', JournalSourceType.MANUAL)
+      .getRawOne<Record<string, string | null>>();
+    const bySourceRaw = await qb
+      .clone()
+      .select('je.sourceType', 'sourceType')
+      .addSelect('COUNT(*)', 'cnt')
+      .groupBy('je.sourceType')
+      .orderBy('cnt', 'DESC')
+      .getRawMany<{ sourceType: string; cnt: string }>();
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    const count = n('cnt');
+    return {
+      basis,
+      count,
+      draftCount: n('drafts'),
+      postedCount: n('posted'),
+      reversedCount: n('reversed'),
+      manualCount: n('manual'),
+      systemCount: count - n('manual'),
+      draftDebit: round2(n('draftDebit')),
+      totalDebit: round2(n('debit')),
+      totalCredit: round2(n('credit')),
+      bySource: bySourceRaw.map((r) => ({ sourceType: r.sourceType, count: Number(r.cnt) || 0 })),
+    };
   }
 
   /** Enriched details for the view page. */

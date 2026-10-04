@@ -44,6 +44,13 @@ export class SalesReturnController {
     return this.service.findAll(query, branchScope);
   }
 
+  @Get('summary')
+  @RequirePermissions('sales_returns.view')
+  @ApiOperation({ summary: 'بطاقات تحليل مردودات المبيعات حسب نفس فلاتر القائمة' })
+  summary(@Query() query: SalesReturnQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get(':id')
   @RequirePermissions('sales_returns.view')
   @ApiOperation({ summary: 'تفاصيل مردود مبيعات' })

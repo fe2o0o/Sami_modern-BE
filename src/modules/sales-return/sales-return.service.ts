@@ -220,23 +220,7 @@ export class SalesReturnService {
     branchScope: BranchScope = null,
   ): Promise<PaginatedResult<SalesReturnListItem>> {
     const qb = this.repository.createQueryBuilder('r');
-    // Branch-restricted users only ever see their own branch's documents.
-    applyBranchScope(qb, 'r.branchId', branchScope);
-    if (query.search) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('r.returnNumber LIKE :s', { s: `%${query.search}%` }).orWhere('r.invoiceNumber LIKE :s', {
-            s: `%${query.search}%`,
-          });
-        }),
-      );
-    }
-    if (query.customerId) qb.andWhere('r.customerId = :cu', { cu: query.customerId });
-    if (query.salesInvoiceId) qb.andWhere('r.salesInvoiceId = :si', { si: query.salesInvoiceId });
-    if (query.fiscalYearId) qb.andWhere('r.fiscalYearId = :fy', { fy: query.fiscalYearId });
-    if (query.status) qb.andWhere('r.status = :st', { st: query.status });
-    if (query.dateFrom) qb.andWhere('r.returnDate >= :df', { df: query.dateFrom });
-    if (query.dateTo) qb.andWhere('r.returnDate <= :dt', { dt: query.dateTo });
+    this.applyListFilters(qb, query, branchScope);
     qb.orderBy('r.returnDate', 'DESC').addOrderBy('r.createdAt', 'DESC').skip(query.skip).take(query.perPage);
 
     const [items, total] = await qb.getManyAndCount();
@@ -254,6 +238,80 @@ export class SalesReturnService {
     return paginate(rows, total, query.page, query.perPage);
   }
 
+  /** The list's filters, shared by the page query and the summary cards. */
+  private applyListFilters(
+    qb: ReturnType<Repository<SalesReturn>['createQueryBuilder']>,
+    query: SalesReturnQueryDto,
+    branchScope: BranchScope,
+  ): void {
+    // Branch-restricted users only ever see their own branch's documents.
+    applyBranchScope(qb, 'r.branchId', branchScope);
+    if (query.search) {
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('r.returnNumber LIKE :s', { s: `%${query.search}%` }).orWhere('r.invoiceNumber LIKE :s', {
+            s: `%${query.search}%`,
+          });
+        }),
+      );
+    }
+    if (query.customerId) qb.andWhere('r.customerId = :cu', { cu: query.customerId });
+    if (query.salesInvoiceId) qb.andWhere('r.salesInvoiceId = :si', { si: query.salesInvoiceId });
+    if (query.fiscalYearId) qb.andWhere('r.fiscalYearId = :fy', { fy: query.fiscalYearId });
+    if (query.status) qb.andWhere('r.status = :st', { st: query.status });
+    if (query.dateFrom) qb.andWhere('r.returnDate >= :df', { df: query.dateFrom });
+    if (query.dateTo) qb.andWhere('r.returnDate <= :dt', { dt: query.dateTo });
+  }
+
+  /**
+   * Analysis cards for the sales-returns list, over EXACTLY the list's filters.
+   * Money totals count posted returns only (drafts have no effect yet), unless
+   * a status filter is applied — then they total that status.
+   */
+  async summary(query: SalesReturnQueryDto, branchScope: BranchScope = null) {
+    const qb = this.repository.createQueryBuilder('r');
+    this.applyListFilters(qb, query, branchScope);
+    const basis = query.status ?? SalesReturnStatus.POSTED;
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN r.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN r.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN r.status = 'reversed' THEN 1 ELSE 0 END)`, 'reversed')
+      .addSelect(`COALESCE(SUM(CASE WHEN r.status = :basis THEN r.taxableAmount ELSE 0 END), 0)`, 'taxable')
+      .addSelect(`COALESCE(SUM(CASE WHEN r.status = :basis THEN r.vatAmount ELSE 0 END), 0)`, 'vat')
+      .addSelect(`COALESCE(SUM(CASE WHEN r.status = :basis THEN r.totalAmount ELSE 0 END), 0)`, 'total')
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+
+    // Cost of the returned goods (quantity × original unit cost), goods lines
+    // only, over the same filtered headers.
+    const ids = qb.clone().select('r.id').orderBy();
+    const costRaw = await this.repository.manager
+      .createQueryBuilder(SalesReturnItem, 'it')
+      .innerJoin(SalesReturn, 'h', 'h.id = it.salesReturnId')
+      .select('COALESCE(SUM(it.quantity * it.costAtPost), 0)', 'cost')
+      .where(`it.salesReturnId IN (${ids.getQuery()})`)
+      .andWhere(`it.lineType <> 'service'`)
+      .andWhere('h.status = :basis')
+      .setParameters({ ...ids.getParameters(), basis })
+      .getRawOne<Record<string, string | null>>();
+
+    const n = (r: Record<string, string | null> | undefined, k: string) => Number(r?.[k] ?? 0) || 0;
+    const total = round2(n(raw, 'total'));
+    const basisCount = basis === SalesReturnStatus.POSTED ? n(raw, 'posted') : n(raw, 'cnt');
+    return {
+      basis,
+      count: n(raw, 'cnt'),
+      draftCount: n(raw, 'drafts'),
+      postedCount: n(raw, 'posted'),
+      reversedCount: n(raw, 'reversed'),
+      taxableAmount: round2(n(raw, 'taxable')),
+      vatAmount: round2(n(raw, 'vat')),
+      totalAmount: total,
+      totalCost: round2(n(costRaw, 'cost')),
+      averageReturn: basisCount ? round2(total / basisCount) : 0,
+    };
+  }
   async findOne(id: string, branchScope: BranchScope = null): Promise<SalesReturn> {
     const r = await this.repository.findOne({
       where: { id },

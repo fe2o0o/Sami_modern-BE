@@ -134,14 +134,7 @@ export class InventoryAdjustmentService {
     branchScope: BranchScope = null,
   ): Promise<PaginatedResult<InventoryAdjustmentListItem>> {
     const qb = this.repository.createQueryBuilder('a').leftJoinAndSelect('a.items', 'items');
-    // Branch-restricted users only ever see their own branch's documents.
-    applyBranchScope(qb, 'a.branchId', branchScope);
-    if (query.search) qb.andWhere('a.adjustmentNumber LIKE :s', { s: `%${query.search}%` });
-    if (query.warehouseId) qb.andWhere('a.warehouseId = :wh', { wh: query.warehouseId });
-    if (query.fiscalYearId) qb.andWhere('a.fiscalYearId = :fy', { fy: query.fiscalYearId });
-    if (query.status) qb.andWhere('a.status = :st', { st: query.status });
-    if (query.dateFrom) qb.andWhere('a.adjustmentDate >= :df', { df: query.dateFrom });
-    if (query.dateTo) qb.andWhere('a.adjustmentDate <= :dt', { dt: query.dateTo });
+    this.applyListFilters(qb, query, branchScope);
     qb.orderBy('a.adjustmentDate', 'DESC').addOrderBy('a.createdAt', 'DESC')
       .skip(query.skip).take(query.perPage);
 
@@ -158,6 +151,80 @@ export class InventoryAdjustmentService {
       status: a.status,
     }));
     return paginate(rows, total, query.page, query.perPage);
+  }
+
+  /** The list's filters, shared by the page query and the summary cards. */
+  private applyListFilters(
+    qb: ReturnType<Repository<InventoryAdjustment>['createQueryBuilder']>,
+    query: InventoryAdjustmentQueryDto,
+    branchScope: BranchScope,
+  ): void {
+    // Branch-restricted users only ever see their own branch's documents.
+    applyBranchScope(qb, 'a.branchId', branchScope);
+    if (query.search) qb.andWhere('a.adjustmentNumber LIKE :s', { s: `%${query.search}%` });
+    if (query.warehouseId) qb.andWhere('a.warehouseId = :wh', { wh: query.warehouseId });
+    if (query.fiscalYearId) qb.andWhere('a.fiscalYearId = :fy', { fy: query.fiscalYearId });
+    if (query.status) qb.andWhere('a.status = :st', { st: query.status });
+    if (query.dateFrom) qb.andWhere('a.adjustmentDate >= :df', { df: query.dateFrom });
+    if (query.dateTo) qb.andWhere('a.adjustmentDate <= :dt', { dt: query.dateTo });
+  }
+
+  /**
+   * Analysis cards for the adjustments list, over EXACTLY the list's filters.
+   * Values come from the item lines (lineValue = qty × unitCost) of posted
+   * adjustments only (drafts have no stock effect and decrease lines are only
+   * costed at posting), unless a status filter is applied.
+   */
+  async summary(query: InventoryAdjustmentQueryDto, branchScope: BranchScope = null) {
+    const basis = query.status ?? InventoryAdjustmentStatus.POSTED;
+
+    const headQb = this.repository.createQueryBuilder('a');
+    this.applyListFilters(headQb, query, branchScope);
+    const head = await headQb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN a.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN a.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN a.status = 'reversed' THEN 1 ELSE 0 END)`, 'reversed')
+      .getRawOne<Record<string, string | null>>();
+
+    const lineQb = this.repository.createQueryBuilder('a').innerJoin('a.items', 'it');
+    this.applyListFilters(lineQb, query, branchScope);
+    const lines = await lineQb
+      .select(
+        `COALESCE(SUM(CASE WHEN a.status = :basis AND it.adjustmentType = 'increase' THEN it.lineValue ELSE 0 END), 0)`,
+        'incValue',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN a.status = :basis AND it.adjustmentType = 'decrease' THEN it.lineValue ELSE 0 END), 0)`,
+        'decValue',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN a.status = :basis AND it.adjustmentType = 'increase' THEN it.quantity ELSE 0 END), 0)`,
+        'incQty',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN a.status = :basis AND it.adjustmentType = 'decrease' THEN it.quantity ELSE 0 END), 0)`,
+        'decQty',
+      )
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+
+    const h = (k: string) => Number(head?.[k] ?? 0) || 0;
+    const l = (k: string) => Number(lines?.[k] ?? 0) || 0;
+    const increaseValue = round2(l('incValue'));
+    const decreaseValue = round2(l('decValue'));
+    return {
+      basis,
+      count: h('cnt'),
+      draftCount: h('drafts'),
+      postedCount: h('posted'),
+      reversedCount: h('reversed'),
+      increaseQuantity: Math.round(l('incQty') * 1000) / 1000,
+      decreaseQuantity: Math.round(l('decQty') * 1000) / 1000,
+      increaseValue,
+      decreaseValue,
+      netValue: round2(increaseValue - decreaseValue),
+    };
   }
 
   async findOne(id: string, branchScope: BranchScope = null): Promise<InventoryAdjustment> {

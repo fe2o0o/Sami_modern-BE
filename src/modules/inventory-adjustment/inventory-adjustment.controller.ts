@@ -30,6 +30,13 @@ export class InventoryAdjustmentController {
     private readonly posting: InventoryAdjustmentPostingService,
   ) {}
 
+  @Get('summary')
+  @RequirePermissions('inventory_adjustments.view')
+  @ApiOperation({ summary: 'تحليل تسويات المخزون حسب نفس فلاتر القائمة' })
+  summary(@Query() query: InventoryAdjustmentQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get()
   @RequirePermissions('inventory_adjustments.view')
   @ApiOperation({ summary: 'عرض تسويات المخزون مع الترقيم والفلاتر' })

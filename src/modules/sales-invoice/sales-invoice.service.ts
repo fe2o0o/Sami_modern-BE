@@ -227,27 +227,7 @@ export class SalesInvoiceService {
     branchScope: BranchScope = null,
   ): Promise<PaginatedResult<SalesInvoiceListItem>> {
     const qb = this.invoiceRepository.createQueryBuilder('si');
-    // Branch-restricted users only ever see their own branch's documents.
-    applyBranchScope(qb, 'si.branchId', branchScope);
-
-    if (query.search) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('si.invoiceNumber LIKE :s', { s: `%${query.search}%` }).orWhere(
-            'si.notes LIKE :s',
-            { s: `%${query.search}%` },
-          );
-        }),
-      );
-    }
-    if (query.fiscalYearId) qb.andWhere('si.fiscalYearId = :fy', { fy: query.fiscalYearId });
-    if (query.accountingPeriodId) qb.andWhere('si.accountingPeriodId = :ap', { ap: query.accountingPeriodId });
-    if (query.customerId) qb.andWhere('si.customerId = :cu', { cu: query.customerId });
-    if (query.branchId) qb.andWhere('si.branchId = :br', { br: query.branchId });
-    if (query.warehouseId) qb.andWhere('si.warehouseId = :wh', { wh: query.warehouseId });
-    if (query.status) qb.andWhere('si.status = :st', { st: query.status });
-    if (query.dateFrom) qb.andWhere('si.invoiceDate >= :df', { df: query.dateFrom });
-    if (query.dateTo) qb.andWhere('si.invoiceDate <= :dt', { dt: query.dateTo });
+    this.applyListFilters(qb, query, branchScope);
 
     qb.orderBy('si.invoiceDate', 'DESC').addOrderBy('si.createdAt', 'DESC')
       .skip(query.skip).take(query.perPage);
@@ -279,6 +259,75 @@ export class SalesInvoiceService {
     }));
 
     return paginate(rows, total, query.page, query.perPage);
+  }
+
+  /** The list's filters, shared by the page query and the summary cards. */
+  private applyListFilters(
+    qb: ReturnType<Repository<SalesInvoice>['createQueryBuilder']>,
+    query: SalesInvoiceQueryDto,
+    branchScope: BranchScope,
+  ): void {
+    // Branch-restricted users only ever see their own branch's documents.
+    applyBranchScope(qb, 'si.branchId', branchScope);
+    if (query.search) {
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('si.invoiceNumber LIKE :s', { s: `%${query.search}%` }).orWhere(
+            'si.notes LIKE :s',
+            { s: `%${query.search}%` },
+          );
+        }),
+      );
+    }
+    if (query.fiscalYearId) qb.andWhere('si.fiscalYearId = :fy', { fy: query.fiscalYearId });
+    if (query.accountingPeriodId) qb.andWhere('si.accountingPeriodId = :ap', { ap: query.accountingPeriodId });
+    if (query.customerId) qb.andWhere('si.customerId = :cu', { cu: query.customerId });
+    if (query.branchId) qb.andWhere('si.branchId = :br', { br: query.branchId });
+    if (query.warehouseId) qb.andWhere('si.warehouseId = :wh', { wh: query.warehouseId });
+    if (query.status) qb.andWhere('si.status = :st', { st: query.status });
+    if (query.dateFrom) qb.andWhere('si.invoiceDate >= :df', { df: query.dateFrom });
+    if (query.dateTo) qb.andWhere('si.invoiceDate <= :dt', { dt: query.dateTo });
+  }
+
+  /**
+   * Analysis cards for the invoices list, over EXACTLY the list's filters.
+   * Money totals count posted invoices only (drafts are not sales yet), unless
+   * a status filter is applied — then they total that status.
+   */
+  async summary(query: SalesInvoiceQueryDto, branchScope: BranchScope = null) {
+    const qb = this.invoiceRepository.createQueryBuilder('si');
+    this.applyListFilters(qb, query, branchScope);
+    const basis = query.status ?? SalesInvoiceStatus.POSTED;
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN si.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN si.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN si.status IN ('reversed','cancelled') THEN 1 ELSE 0 END)`, 'voided')
+      .addSelect(`COALESCE(SUM(CASE WHEN si.status = :basis THEN si.taxableAmount ELSE 0 END), 0)`, 'taxable')
+      .addSelect(`COALESCE(SUM(CASE WHEN si.status = :basis THEN si.vatAmount ELSE 0 END), 0)`, 'vat')
+      .addSelect(`COALESCE(SUM(CASE WHEN si.status = :basis THEN si.totalAmount ELSE 0 END), 0)`, 'total')
+      .addSelect(`COALESCE(SUM(CASE WHEN si.status = :basis THEN si.paidAmount ELSE 0 END), 0)`, 'paid')
+      .addSelect(`COALESCE(SUM(CASE WHEN si.status = :basis THEN si.remainingAmount ELSE 0 END), 0)`, 'remaining')
+      .addSelect(`SUM(CASE WHEN si.status = :basis AND si.remainingAmount > 0.004 THEN 1 ELSE 0 END)`, 'unpaid')
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    const total = round2(n('total'));
+    const basisCount = basis === SalesInvoiceStatus.POSTED ? n('posted') : n('cnt');
+    return {
+      basis,
+      count: n('cnt'),
+      draftCount: n('drafts'),
+      postedCount: n('posted'),
+      voidedCount: n('voided'),
+      unpaidCount: n('unpaid'),
+      taxableAmount: round2(n('taxable')),
+      vatAmount: round2(n('vat')),
+      totalAmount: total,
+      paidAmount: round2(n('paid')),
+      remainingAmount: round2(n('remaining')),
+      averageInvoice: basisCount ? round2(total / basisCount) : 0,
+    };
   }
 
   async findOne(id: string, branchScope: BranchScope = null): Promise<SalesInvoice> {

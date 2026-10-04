@@ -18,6 +18,7 @@ import { PurchaseInvoiceQueryDto } from './dto/purchase-invoice-query.dto';
 import { PurchaseInvoiceItemDto } from './dto/purchase-invoice-item.dto';
 import {
   computeInvoice,
+  round2,
   SalesLineInput,
 } from '../sales-invoice/sales-math';
 import { Product } from '../product/entities/product.entity';
@@ -184,11 +185,12 @@ export class PurchaseInvoiceService {
   // =========================================================
   // READ
   // =========================================================
-  async findAll(
+  /** Every list filter in one place — shared by `findAll` and `summary` so the cards always match the table. */
+  private applyListFilters(
+    qb: ReturnType<Repository<PurchaseInvoice>['createQueryBuilder']>,
     query: PurchaseInvoiceQueryDto,
-    branchScope: BranchScope = null,
-  ): Promise<PaginatedResult<PurchaseInvoiceListItem>> {
-    const qb = this.invoiceRepository.createQueryBuilder('pi');
+    branchScope: BranchScope,
+  ): void {
     // Branch-restricted users only ever see their own branch's documents.
     applyBranchScope(qb, 'pi.branchId', branchScope);
 
@@ -209,6 +211,50 @@ export class PurchaseInvoiceService {
     if (query.status) qb.andWhere('pi.status = :st', { st: query.status });
     if (query.dateFrom) qb.andWhere('pi.invoiceDate >= :df', { df: query.dateFrom });
     if (query.dateTo) qb.andWhere('pi.invoiceDate <= :dt', { dt: query.dateTo });
+  }
+
+  async summary(query: PurchaseInvoiceQueryDto, branchScope: BranchScope = null) {
+    const qb = this.invoiceRepository.createQueryBuilder('pi');
+    this.applyListFilters(qb, query, branchScope);
+    const basis = query.status ?? PurchaseInvoiceStatus.POSTED;
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN pi.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN pi.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN pi.status IN ('reversed','cancelled') THEN 1 ELSE 0 END)`, 'voided')
+      .addSelect(`COALESCE(SUM(CASE WHEN pi.status = :basis THEN pi.taxableAmount ELSE 0 END), 0)`, 'taxable')
+      .addSelect(`COALESCE(SUM(CASE WHEN pi.status = :basis THEN pi.vatAmount ELSE 0 END), 0)`, 'vat')
+      .addSelect(`COALESCE(SUM(CASE WHEN pi.status = :basis THEN pi.totalAmount ELSE 0 END), 0)`, 'total')
+      .addSelect(`COALESCE(SUM(CASE WHEN pi.status = :basis THEN pi.paidAmount ELSE 0 END), 0)`, 'paid')
+      .addSelect(`COALESCE(SUM(CASE WHEN pi.status = :basis THEN pi.remainingAmount ELSE 0 END), 0)`, 'remaining')
+      .addSelect(`SUM(CASE WHEN pi.status = :basis AND pi.remainingAmount > 0.004 THEN 1 ELSE 0 END)`, 'unpaid')
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    const total = round2(n('total'));
+    const basisCount = basis === PurchaseInvoiceStatus.POSTED ? n('posted') : n('cnt');
+    return {
+      basis,
+      count: n('cnt'),
+      draftCount: n('drafts'),
+      postedCount: n('posted'),
+      voidedCount: n('voided'),
+      unpaidCount: n('unpaid'),
+      taxableAmount: round2(n('taxable')),
+      vatAmount: round2(n('vat')),
+      totalAmount: total,
+      paidAmount: round2(n('paid')),
+      remainingAmount: round2(n('remaining')),
+      averageInvoice: basisCount ? round2(total / basisCount) : 0,
+    };
+  }
+
+  async findAll(
+    query: PurchaseInvoiceQueryDto,
+    branchScope: BranchScope = null,
+  ): Promise<PaginatedResult<PurchaseInvoiceListItem>> {
+    const qb = this.invoiceRepository.createQueryBuilder('pi');
+    this.applyListFilters(qb, query, branchScope);
 
     qb.orderBy('pi.invoiceDate', 'DESC').addOrderBy('pi.createdAt', 'DESC')
       .skip(query.skip).take(query.perPage);

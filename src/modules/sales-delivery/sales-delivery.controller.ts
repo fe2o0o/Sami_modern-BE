@@ -52,6 +52,13 @@ export class SalesDeliveryController {
     return this.service.findAll(query, branchScope);
   }
 
+  @Get('summary')
+  @RequirePermissions('sales_deliveries.view')
+  @ApiOperation({ summary: 'بطاقات تحليل أذون التسليم حسب نفس فلاتر القائمة' })
+  summary(@Query() query: SalesDeliveryQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get(':id')
   @RequirePermissions('sales_deliveries.view')
   @ApiOperation({ summary: 'تفاصيل إذن تسليم' })

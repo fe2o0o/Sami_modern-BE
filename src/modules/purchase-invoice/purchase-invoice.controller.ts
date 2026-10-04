@@ -38,6 +38,13 @@ export class PurchaseInvoiceController {
     return this.service.purchaseProducts(warehouseId);
   }
 
+  @Get('summary')
+  @RequirePermissions('purchase_invoices.view')
+  @ApiOperation({ summary: 'تحليل فواتير المشتريات حسب نفس فلاتر القائمة' })
+  summary(@Query() query: PurchaseInvoiceQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get()
   @RequirePermissions('purchase_invoices.view')
   @ApiOperation({ summary: 'عرض فواتير المشتريات مع الترقيم والفلاتر' })

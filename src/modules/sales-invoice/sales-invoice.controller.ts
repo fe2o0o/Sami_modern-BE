@@ -38,6 +38,13 @@ export class SalesInvoiceController {
     return this.service.saleProducts(warehouseId);
   }
 
+  @Get('summary')
+  @RequirePermissions('sales_invoices.view')
+  @ApiOperation({ summary: 'تحليل فواتير المبيعات حسب نفس فلاتر القائمة' })
+  summary(@Query() query: SalesInvoiceQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get()
   @RequirePermissions('sales_invoices.view')
   @ApiOperation({ summary: 'عرض فواتير المبيعات مع الترقيم والفلاتر' })

@@ -33,6 +33,13 @@ export class JournalEntryController {
     return this.service.findAll(query, branchScope);
   }
 
+  @Get('summary')
+  @RequirePermissions('journal_entries.view')
+  @ApiOperation({ summary: 'تحليل القيود اليومية حسب نفس فلاتر القائمة' })
+  summary(@Query() query: JournalEntryQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get(':id')
   @RequirePermissions('journal_entries.view')
   @ApiOperation({ summary: 'عرض تفاصيل قيد يومية' })

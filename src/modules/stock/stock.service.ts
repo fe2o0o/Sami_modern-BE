@@ -6,6 +6,7 @@ import { WarehouseStock } from './entities/warehouse-stock.entity';
 import { StockMovement } from './entities/stock-movement.entity';
 import { StockDirection, StockMovementType } from './enums/stock.enum';
 import { StockMovementQueryDto } from './dto/stock-movement-query.dto';
+import { StockQueryDto } from './dto/stock-query.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
 import { paginate } from '../../common/utils/pagination.util';
@@ -77,6 +78,24 @@ export class StockService {
       .leftJoinAndSelect('m.product', 'product')
       .leftJoinAndSelect('m.warehouse', 'warehouse');
 
+    this.applyMovementFilters(qb, query, branchScope);
+
+    qb.orderBy('m.movementDate', 'DESC').addOrderBy('m.createdAt', 'DESC')
+      .skip(query.skip).take(query.perPage);
+
+    const [items, total] = await qb.getManyAndCount();
+    return paginate(items, total, query.page, query.perPage);
+  }
+
+  /**
+   * The movements ledger's filters, shared by the page query and the summary
+   * cards. Expects the `product` and `warehouse` aliases to be joined on `m`.
+   */
+  private applyMovementFilters(
+    qb: ReturnType<Repository<StockMovement>['createQueryBuilder']>,
+    query: StockMovementQueryDto,
+    branchScope: BranchScope,
+  ): void {
     // Branch-restricted users only see movements in their own branch's warehouses.
     applyBranchScope(qb, 'warehouse.branchId', branchScope);
     if (query.warehouseId) qb.andWhere('m.warehouseId = :wh', { wh: query.warehouseId });
@@ -90,12 +109,46 @@ export class StockService {
         s: `%${query.search}%`,
       });
     }
+  }
 
-    qb.orderBy('m.movementDate', 'DESC').addOrderBy('m.createdAt', 'DESC')
-      .skip(query.skip).take(query.perPage);
-
-    const [items, total] = await qb.getManyAndCount();
-    return paginate(items, total, query.page, query.perPage);
+  /**
+   * Analysis cards for the movements ledger, over EXACTLY the ledger's filters.
+   * Movements are immutable facts (no draft state), so every matching row counts.
+   * Values are quantity x the movement's recorded unit cost.
+   */
+  async movementsSummary(query: StockMovementQueryDto, branchScope: BranchScope = null) {
+    const qb = this.movementRepository
+      .createQueryBuilder('m')
+      .leftJoin('m.product', 'product')
+      .leftJoin('m.warehouse', 'warehouse');
+    this.applyMovementFilters(qb, query, branchScope);
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN m.direction = 'in' THEN 1 ELSE 0 END)`, 'inCnt')
+      .addSelect(`SUM(CASE WHEN m.direction = 'out' THEN 1 ELSE 0 END)`, 'outCnt')
+      .addSelect(`COALESCE(SUM(CASE WHEN m.direction = 'in' THEN m.quantity ELSE 0 END), 0)`, 'qtyIn')
+      .addSelect(`COALESCE(SUM(CASE WHEN m.direction = 'out' THEN m.quantity ELSE 0 END), 0)`, 'qtyOut')
+      .addSelect(`COALESCE(SUM(CASE WHEN m.direction = 'in' THEN m.quantity * m.unitCost ELSE 0 END), 0)`, 'valIn')
+      .addSelect(`COALESCE(SUM(CASE WHEN m.direction = 'out' THEN m.quantity * m.unitCost ELSE 0 END), 0)`, 'valOut')
+      .addSelect('COUNT(DISTINCT m.productId)', 'products')
+      .getRawOne<Record<string, string | null>>();
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    const quantityIn = round3(n('qtyIn'));
+    const quantityOut = round3(n('qtyOut'));
+    const valueIn = round2(n('valIn'));
+    const valueOut = round2(n('valOut'));
+    return {
+      count: n('cnt'),
+      inCount: n('inCnt'),
+      outCount: n('outCnt'),
+      productsCount: n('products'),
+      quantityIn,
+      quantityOut,
+      netQuantity: round3(quantityIn - quantityOut),
+      valueIn,
+      valueOut,
+      netValue: round2(valueIn - valueOut),
+    };
   }
 
   /**
@@ -418,22 +471,71 @@ export class StockService {
       .leftJoinAndSelect('product.unit', 'unit')
       .leftJoinAndSelect('stock.warehouse', 'warehouse');
 
-    // Branch-restricted users only see stock in their own branch's warehouses.
-    applyBranchScope(qb, 'warehouse.branchId', branchScope);
-    if (warehouseId) {
-      qb.andWhere('stock.warehouseId = :warehouseId', { warehouseId });
-    }
-    if (query.search) {
-      qb.andWhere('(product.code LIKE :s OR product.name LIKE :s)', {
-        s: `%${query.search}%`,
-      });
-    }
+    this.applyBalanceFilters(qb, { search: query.search, warehouseId }, branchScope);
 
     qb.orderBy('product.code', query.order);
     qb.skip(query.skip).take(query.perPage);
 
     const [items, total] = await qb.getManyAndCount();
     return paginate(items, total, query.page, query.perPage);
+  }
+
+  /**
+   * The balances list's filters, shared by the page query and the summary cards.
+   * Expects the `product` and `warehouse` aliases to be joined on `stock`.
+   */
+  private applyBalanceFilters(
+    qb: ReturnType<Repository<WarehouseStock>['createQueryBuilder']>,
+    query: { search?: string; warehouseId?: string },
+    branchScope: BranchScope,
+  ): void {
+    // Branch-restricted users only see stock in their own branch's warehouses.
+    applyBranchScope(qb, 'warehouse.branchId', branchScope);
+    if (query.warehouseId) {
+      qb.andWhere('stock.warehouseId = :warehouseId', { warehouseId: query.warehouseId });
+    }
+    if (query.search) {
+      qb.andWhere('(product.code LIKE :s OR product.name LIKE :s)', {
+        s: `%${query.search}%`,
+      });
+    }
+  }
+
+  /**
+   * Analysis cards for the balances list, over EXACTLY the list's filters. One
+   * balance row = one product in one warehouse; the reorder check compares each
+   * row's on-hand quantity with the product's reorder point (when one is set).
+   */
+  async balancesSummary(query: StockQueryDto, branchScope: BranchScope = null) {
+    const qb = this.stockRepository
+      .createQueryBuilder('stock')
+      .leftJoin('stock.product', 'product')
+      .leftJoin('stock.warehouse', 'warehouse');
+    this.applyBalanceFilters(qb, query, branchScope);
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect('COUNT(DISTINCT stock.productId)', 'products')
+      .addSelect('COALESCE(SUM(stock.quantity), 0)', 'qty')
+      .addSelect('COALESCE(SUM(stock.reservedQuantity), 0)', 'reserved')
+      .addSelect('COALESCE(SUM(stock.quantity * stock.avgCost), 0)', 'value')
+      .addSelect(
+        `SUM(CASE WHEN product.reorderPoint > 0 AND stock.quantity > 0 AND stock.quantity <= product.reorderPoint THEN 1 ELSE 0 END)`,
+        'belowReorder',
+      )
+      .addSelect(`SUM(CASE WHEN stock.quantity <= 0 THEN 1 ELSE 0 END)`, 'nonPositive')
+      .addSelect(`SUM(CASE WHEN stock.quantity < 0 THEN 1 ELSE 0 END)`, 'negative')
+      .getRawOne<Record<string, string | null>>();
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    return {
+      count: n('cnt'),
+      productsCount: n('products'),
+      totalQuantity: round3(n('qty')),
+      reservedQuantity: round3(n('reserved')),
+      stockValue: round2(n('value')),
+      belowReorderCount: n('belowReorder'),
+      nonPositiveCount: n('nonPositive'),
+      negativeCount: n('negative'),
+    };
   }
 
   /** Products present in one warehouse with their on-hand quantity + weighted-avg

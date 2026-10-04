@@ -16,6 +16,7 @@ import { SupplierLedgerService } from './supplier-ledger.service';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { StatusQueryDto } from '../../common/dto/status-query.dto';
+import { PartySummaryQueryDto } from '../../common/dto/party-summary-query.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
@@ -27,6 +28,13 @@ export class SupplierController {
     private readonly supplierService: SupplierService,
     private readonly ledgerService: SupplierLedgerService,
   ) {}
+
+  @Get('summary')
+  @RequirePermissions('suppliers.view')
+  @ApiOperation({ summary: 'تحليل الموردين (أرصدة وحركة الفترة) حسب الفلاتر' })
+  summary(@Query() query: PartySummaryQueryDto) {
+    return this.supplierService.summary(query);
+  }
 
   @Get(':id/balance')
   @RequirePermissions('suppliers.view')

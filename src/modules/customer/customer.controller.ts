@@ -16,6 +16,7 @@ import { CustomerLedgerService } from './customer-ledger.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { StatusQueryDto } from '../../common/dto/status-query.dto';
+import { PartySummaryQueryDto } from '../../common/dto/party-summary-query.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 
@@ -34,6 +35,13 @@ export class CustomerController {
   @ApiOperation({ summary: 'إضافة عميل' })
   create(@Body() dto: CreateCustomerDto) {
     return this.customerService.create(dto);
+  }
+
+  @Get('summary')
+  @RequirePermissions('customers.view')
+  @ApiOperation({ summary: 'تحليل العملاء (أرصدة وحركة الفترة) حسب الفلاتر' })
+  summary(@Query() query: PartySummaryQueryDto) {
+    return this.customerService.summary(query);
   }
 
   @Get()

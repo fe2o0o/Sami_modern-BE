@@ -226,22 +226,7 @@ export class StockTransferService {
     branchScope: BranchScope = null,
   ): Promise<PaginatedResult<StockTransferListItem>> {
     const qb = this.repository.createQueryBuilder('t').leftJoinAndSelect('t.items', 'items');
-    // Branch-restricted users only ever see their own branch's documents.
-    applyBranchScope(qb, 't.branchId', branchScope);
-    if (query.search) qb.andWhere('t.transferNumber LIKE :s', { s: `%${query.search}%` });
-    if (query.warehouseId) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('t.fromWarehouseId = :wid', { wid: query.warehouseId }).orWhere('t.toWarehouseId = :wid', {
-            wid: query.warehouseId,
-          });
-        }),
-      );
-    }
-    if (query.fiscalYearId) qb.andWhere('t.fiscalYearId = :fy', { fy: query.fiscalYearId });
-    if (query.status) qb.andWhere('t.status = :st', { st: query.status });
-    if (query.dateFrom) qb.andWhere('t.transferDate >= :df', { df: query.dateFrom });
-    if (query.dateTo) qb.andWhere('t.transferDate <= :dt', { dt: query.dateTo });
+    this.applyListFilters(qb, query, branchScope);
     qb.orderBy('t.transferDate', 'DESC').addOrderBy('t.createdAt', 'DESC')
       .skip(query.skip).take(query.perPage);
 
@@ -263,6 +248,71 @@ export class StockTransferService {
       status: t.status,
     }));
     return paginate(rows, total, query.page, query.perPage);
+  }
+
+  /** The list's filters, shared by the page query and the summary cards. */
+  private applyListFilters(
+    qb: ReturnType<Repository<StockTransfer>['createQueryBuilder']>,
+    query: StockTransferQueryDto,
+    branchScope: BranchScope,
+  ): void {
+    // Branch-restricted users only ever see their own branch's documents.
+    applyBranchScope(qb, 't.branchId', branchScope);
+    if (query.search) qb.andWhere('t.transferNumber LIKE :s', { s: `%${query.search}%` });
+    if (query.warehouseId) {
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('t.fromWarehouseId = :wid', { wid: query.warehouseId }).orWhere('t.toWarehouseId = :wid', {
+            wid: query.warehouseId,
+          });
+        }),
+      );
+    }
+    if (query.fiscalYearId) qb.andWhere('t.fiscalYearId = :fy', { fy: query.fiscalYearId });
+    if (query.status) qb.andWhere('t.status = :st', { st: query.status });
+    if (query.dateFrom) qb.andWhere('t.transferDate >= :df', { df: query.dateFrom });
+    if (query.dateTo) qb.andWhere('t.transferDate <= :dt', { dt: query.dateTo });
+  }
+
+  /**
+   * Analysis cards for the transfers list, over EXACTLY the list's filters.
+   * Quantities/values count posted transfers only (drafts move nothing and are
+   * costed at posting), unless a status filter is applied.
+   */
+  async summary(query: StockTransferQueryDto, branchScope: BranchScope = null) {
+    const basis = query.status ?? StockTransferStatus.POSTED;
+
+    const headQb = this.repository.createQueryBuilder('t');
+    this.applyListFilters(headQb, query, branchScope);
+    const head = await headQb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN t.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN t.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN t.status = 'reversed' THEN 1 ELSE 0 END)`, 'reversed')
+      .addSelect(`COALESCE(SUM(CASE WHEN t.status = :basis THEN t.totalValue ELSE 0 END), 0)`, 'value')
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+
+    const lineQb = this.repository.createQueryBuilder('t').innerJoin('t.items', 'it');
+    this.applyListFilters(lineQb, query, branchScope);
+    const lines = await lineQb
+      .select(`COALESCE(SUM(CASE WHEN t.status = :basis THEN it.quantity ELSE 0 END), 0)`, 'qty')
+      .addSelect(`COUNT(DISTINCT CASE WHEN t.status = :basis THEN it.productId END)`, 'products')
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+
+    const h = (k: string) => Number(head?.[k] ?? 0) || 0;
+    const l = (k: string) => Number(lines?.[k] ?? 0) || 0;
+    return {
+      basis,
+      count: h('cnt'),
+      draftCount: h('drafts'),
+      postedCount: h('posted'),
+      reversedCount: h('reversed'),
+      totalQuantity: Math.round(l('qty') * 1000) / 1000,
+      productsCount: l('products'),
+      totalValue: round2(h('value')),
+    };
   }
 
   async findOne(id: string, branchScope: BranchScope = null): Promise<StockTransfer> {

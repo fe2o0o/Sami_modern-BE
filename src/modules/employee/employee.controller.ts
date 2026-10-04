@@ -19,6 +19,8 @@ import { CommissionReportQueryDto } from './dto/commission-report-query.dto';
 import { StatusQueryDto } from '../../common/dto/status-query.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('Employees')
 @ApiBearerAuth('access-token')
@@ -49,6 +51,14 @@ export class EmployeeController {
   @ApiOperation({ summary: 'عرض الموظفين مع الترقيم' })
   findAll(@Query() query: StatusQueryDto) {
     return this.employeeService.findAll(query);
+  }
+
+  @Get('summary')
+  @RequirePermissions('employees.view')
+  @ApiOperation({ summary: 'تحليل الموظفين حسب نفس فلاتر القائمة (العمولات لمن يملك صلاحية التقارير)' })
+  summary(@Query() query: StatusQueryDto, @CurrentUser() user: AuthenticatedUser) {
+    const canSeeCommissions = !!user?.isSuperAdmin || (user?.permissions ?? []).includes('accounting_reports.view');
+    return this.employeeService.summary(query, canSeeCommissions);
   }
 
   @Get(':id')

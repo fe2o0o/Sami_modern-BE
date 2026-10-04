@@ -159,11 +159,12 @@ export class VoucherService {
   // =========================================================
   // READ
   // =========================================================
-  async findAll(
+  /** Every list filter in one place — shared by `findAll` and `summary` so the cards always match the table. */
+  private applyListFilters(
+    qb: ReturnType<Repository<Voucher>['createQueryBuilder']>,
     query: VoucherQueryDto,
-    branchScope: BranchScope = null,
-  ): Promise<PaginatedResult<VoucherListItem>> {
-    const qb = this.voucherRepository.createQueryBuilder('v');
+    branchScope: BranchScope,
+  ): void {
     // Branch-restricted users only ever see their own branch's documents.
     applyBranchScope(qb, 'v.branchId', branchScope);
     if (query.search) {
@@ -183,6 +184,63 @@ export class VoucherService {
     if (query.branchId) qb.andWhere('v.branchId = :br', { br: query.branchId });
     if (query.dateFrom) qb.andWhere('v.voucherDate >= :df', { df: query.dateFrom });
     if (query.dateTo) qb.andWhere('v.voucherDate <= :dt', { dt: query.dateTo });
+  }
+
+  async summary(query: VoucherQueryDto, branchScope: BranchScope = null) {
+    const qb = this.voucherRepository.createQueryBuilder('v');
+    this.applyListFilters(qb, query, branchScope);
+    const basis = query.status ?? VoucherStatus.POSTED;
+    const sumWhere = (cond: string) =>
+      `COALESCE(SUM(CASE WHEN v.status = :basis AND ${cond} THEN v.amount ELSE 0 END), 0)`;
+    const raw = await qb
+      .select('COUNT(*)', 'cnt')
+      .addSelect(`SUM(CASE WHEN v.status = 'draft' THEN 1 ELSE 0 END)`, 'drafts')
+      .addSelect(`SUM(CASE WHEN v.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
+      .addSelect(`SUM(CASE WHEN v.status = 'reversed' THEN 1 ELSE 0 END)`, 'voided')
+      .addSelect(`SUM(CASE WHEN v.status = :basis AND v.type = 'receipt' THEN 1 ELSE 0 END)`, 'receiptCnt')
+      .addSelect(`SUM(CASE WHEN v.status = :basis AND v.type = 'payment' THEN 1 ELSE 0 END)`, 'paymentCnt')
+      .addSelect(sumWhere(`v.type = 'receipt'`), 'receipts')
+      .addSelect(sumWhere(`v.type = 'payment'`), 'payments')
+      .addSelect(sumWhere(`v.type = 'receipt' AND v.paymentMethod = 'treasury'`), 'treasuryIn')
+      .addSelect(sumWhere(`v.type = 'payment' AND v.paymentMethod = 'treasury'`), 'treasuryOut')
+      .addSelect(sumWhere(`v.type = 'receipt' AND v.paymentMethod = 'bank'`), 'bankIn')
+      .addSelect(sumWhere(`v.type = 'payment' AND v.paymentMethod = 'bank'`), 'bankOut')
+      .setParameter('basis', basis)
+      .getRawOne<Record<string, string | null>>();
+    const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    const r2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
+    const receipts = r2(n('receipts'));
+    const payments = r2(n('payments'));
+    const treasuryIn = r2(n('treasuryIn'));
+    const treasuryOut = r2(n('treasuryOut'));
+    const bankIn = r2(n('bankIn'));
+    const bankOut = r2(n('bankOut'));
+    return {
+      basis,
+      count: n('cnt'),
+      draftCount: n('drafts'),
+      postedCount: n('posted'),
+      voidedCount: n('voided'),
+      receiptCount: n('receiptCnt'),
+      paymentCount: n('paymentCnt'),
+      receiptsAmount: receipts,
+      paymentsAmount: payments,
+      netAmount: r2(receipts - payments),
+      treasuryReceipts: treasuryIn,
+      treasuryPayments: treasuryOut,
+      treasuryNet: r2(treasuryIn - treasuryOut),
+      bankReceipts: bankIn,
+      bankPayments: bankOut,
+      bankNet: r2(bankIn - bankOut),
+    };
+  }
+
+  async findAll(
+    query: VoucherQueryDto,
+    branchScope: BranchScope = null,
+  ): Promise<PaginatedResult<VoucherListItem>> {
+    const qb = this.voucherRepository.createQueryBuilder('v');
+    this.applyListFilters(qb, query, branchScope);
 
     qb.orderBy('v.voucherDate', 'DESC').addOrderBy('v.createdAt', 'DESC')
       .skip(query.skip).take(query.perPage);

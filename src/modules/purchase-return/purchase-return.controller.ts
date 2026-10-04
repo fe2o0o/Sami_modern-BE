@@ -37,6 +37,13 @@ export class PurchaseReturnController {
     return this.service.returnableItems(invoiceId);
   }
 
+  @Get('summary')
+  @RequirePermissions('purchase_returns.view')
+  @ApiOperation({ summary: 'تحليل مردودات المشتريات حسب نفس فلاتر القائمة' })
+  summary(@Query() query: PurchaseReturnQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.service.summary(query, branchScope);
+  }
+
   @Get()
   @RequirePermissions('purchase_returns.view')
   @ApiOperation({ summary: 'عرض مردودات المشتريات مع الترقيم والفلاتر' })
