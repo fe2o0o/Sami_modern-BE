@@ -371,7 +371,7 @@ export class SalesInvoiceService {
     };
   }
 
-  /** Products for the invoice picker with on-hand qty in the given warehouse. */
+  /** Products for the invoice picker with FREE qty (on hand − reserved) in the given warehouse. */
   async saleProducts(warehouseId?: string): Promise<SaleProductOption[]> {
     const products = await this.productRepository.find({
       where: { isActive: true },
@@ -387,7 +387,11 @@ export class SalesInvoiceService {
         : [],
       this.imageRepository.find({ where: { productId: In(ids), isPrimary: true } }),
     ]);
-    const qtyByProduct = new Map(stocks.map((s): [string, number] => [s.productId, s.quantity]));
+    // «المتاح» = on hand − reserved for posted, undelivered invoices — what can
+    // actually be sold now without promising the same goods twice.
+    const qtyByProduct = new Map(
+      stocks.map((s): [string, number] => [s.productId, Math.round((s.quantity - (s.reservedQuantity || 0)) * 1000) / 1000]),
+    );
     const imgByProduct = new Map(images.map((i): [string, string] => [i.productId, i.url]));
 
     return products.map((p) => ({

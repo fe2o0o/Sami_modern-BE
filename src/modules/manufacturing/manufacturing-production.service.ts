@@ -345,6 +345,8 @@ export class ManufacturingProductionService {
         sourceNumber: order.orderNumber,
         movementDate: date,
         actorId,
+        // Components can't consume stock already reserved for customers' invoices.
+        respectReservations: true,
       });
       components.forEach((c, i) => {
         c.unitCost = issued[i].unitCost;

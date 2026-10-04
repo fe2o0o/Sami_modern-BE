@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { EntityManager, Repository } from 'typeorm';
 import { WarehouseStock } from './entities/warehouse-stock.entity';
+import { Warehouse } from '../warehouse/entities/warehouse.entity';
 import { StockMovement } from './entities/stock-movement.entity';
 import { StockDirection, StockMovementType } from './enums/stock.enum';
 import { StockMovementQueryDto } from './dto/stock-movement-query.dto';
@@ -46,6 +47,13 @@ export interface IssueOptions {
   actorId?: string | null;
   /** Allow the balance to go negative (reversal into an emptied warehouse). */
   allowNegative?: boolean;
+  /**
+   * Only FREE stock may be issued: quantity − reservedQuantity. Use for moves
+   * that must not consume goods already promised to posted, undelivered sales
+   * invoices (transfers, standalone delivery notes, manufacturing components).
+   * Invoice-linked deliveries leave this off — they consume their OWN reservation.
+   */
+  respectReservations?: boolean;
 }
 
 export type ReceiveOptions = IssueOptions;
@@ -294,10 +302,21 @@ export class StockService {
         lock: { mode: 'pessimistic_write' },
       });
 
-      const available = existing?.quantity ?? 0;
-      if (!opts.allowNegative && available + 1e-6 < quantity) {
+      const onHand = existing?.quantity ?? 0;
+      const reserved = opts.respectReservations ? Math.max(0, existing?.reservedQuantity ?? 0) : 0;
+      const available = onHand - reserved;
+      // A warehouse configured «يسمح بالرصيد السالب» may go below zero physically,
+      // but never takes goods reserved for customers (respectReservations).
+      const warehouseAllowsNegative =
+        !opts.allowNegative && !opts.respectReservations && available + 1e-6 < quantity
+          ? await this.warehouseAllowsNegative(item.warehouseId, manager)
+          : false;
+      if (!opts.allowNegative && !warehouseAllowsNegative && available + 1e-6 < quantity) {
         throw new BadRequestException(
-          `الكمية المتاحة من المنتج ${item.productName ?? ''} هي ${round3(available)} فقط، ولا يمكن ترحيل كمية ${quantity}.`,
+          reserved > 0
+            ? `الكمية المتاحة من المنتج ${item.productName ?? ''} هي ${round3(Math.max(0, available))} فقط ` +
+              `(الرصيد ${round3(onHand)} منها ${round3(reserved)} محجوزة لفواتير مبيعات لم تُسلَّم بعد)، ولا يمكن ترحيل كمية ${quantity}.`
+            : `الكمية المتاحة من المنتج ${item.productName ?? ''} هي ${round3(onHand)} فقط، ولا يمكن ترحيل كمية ${quantity}.`,
         );
       }
 
@@ -343,6 +362,16 @@ export class StockService {
     }
 
     return issued;
+  }
+
+  /** Warehouse policy flag «يسمح بالرصيد السالب». */
+  private async warehouseAllowsNegative(warehouseId: string, manager: EntityManager): Promise<boolean> {
+    const wh = await manager.getRepository(Warehouse).findOne({
+      where: { id: warehouseId },
+      select: { id: true, allowNegativeStock: true },
+      withDeleted: true,
+    });
+    return !!wh?.allowNegativeStock;
   }
 
   /**
@@ -546,7 +575,14 @@ export class StockService {
     branchScope: BranchScope = null,
     productType?: string,
   ): Promise<
-    { productId: string; productCode: string | null; productName: string | null; unitName: string | null; avgCost: number; quantity: number }[]
+    {
+      productId: string; productCode: string | null; productName: string | null; unitName: string | null;
+      avgCost: number; quantity: number;
+      /** Reserved for posted, undelivered sales invoices. */
+      reservedQuantity: number;
+      /** quantity − reservedQuantity: what can leave the warehouse now. */
+      available: number;
+    }[]
   > {
     const qb = this.stockRepository
       .createQueryBuilder('stock')
@@ -559,6 +595,7 @@ export class StockService {
       .addSelect('unit.name', 'unitName')
       .addSelect('stock.avgCost', 'avgCost')
       .addSelect('stock.quantity', 'quantity')
+      .addSelect('stock.reservedQuantity', 'reserved')
       .where('stock.warehouseId = :warehouseId', { warehouseId })
       .orderBy('product.name', 'ASC');
     if (productType) qb.andWhere('product.productType = :productType', { productType });
@@ -570,6 +607,7 @@ export class StockService {
       unitName: string | null;
       avgCost: string;
       quantity: string;
+      reserved: string | null;
     }>();
     return rows.map((r) => ({
       productId: r.productId,
@@ -578,6 +616,8 @@ export class StockService {
       unitName: r.unitName ?? null,
       avgCost: Number(r.avgCost ?? 0),
       quantity: Number(r.quantity ?? 0),
+      reservedQuantity: Number(r.reserved ?? 0),
+      available: round3(Number(r.quantity ?? 0) - Number(r.reserved ?? 0)),
     }));
   }
 }

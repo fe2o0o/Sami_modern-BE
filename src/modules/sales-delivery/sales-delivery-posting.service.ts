@@ -97,7 +97,9 @@ export class SalesDeliveryPostingService {
         sourceNumber: number,
         movementDate: delivery.deliveryDate,
         actorId,
-        allowNegative: true,
+        // Standalone note: only FREE stock (not reserved for invoices) can leave;
+        // the warehouse's negative-stock policy does not override reservations.
+        respectReservations: true,
       });
       delivery.items.forEach((item, idx) => {
         item.unitCostAtPost = issued[idx].unitCost;
@@ -286,7 +288,10 @@ export class SalesDeliveryPostingService {
         sourceNumber: number,
         movementDate: actualDate,
         actorId,
-        allowNegative: true,
+        // Physical availability is required (the line consumes its OWN reservation,
+        // so reservations aren't deducted). Delivering from an empty shelf used to
+        // drive stock negative at zero cost; now only a warehouse configured
+        // «يسمح بالرصيد السالب» allows it.
       });
       const unitCost = issued[0].unitCost;
       const lineCost = round2(qty * unitCost);

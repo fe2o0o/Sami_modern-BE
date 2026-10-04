@@ -156,7 +156,8 @@ export class StockTransferService {
             quantity: item.quantity,
           }],
           manager,
-          this.opts(number, transfer, actorId, StockMovementType.TRANSFER),
+          // Goods reserved for posted, undelivered sales invoices can't be moved away.
+          { ...this.opts(number, transfer, actorId, StockMovementType.TRANSFER), respectReservations: true },
         );
         const unitCost = issued[0].unitCost;
         item.unitCost = unitCost;

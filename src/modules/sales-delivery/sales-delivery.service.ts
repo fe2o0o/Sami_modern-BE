@@ -581,6 +581,12 @@ export class SalesDeliveryService {
     if (d.status !== SalesDeliveryStatus.DRAFT) {
       throw new BadRequestException('لا يمكن تعديل أو حذف إذن تسليم مُرحّل — استخدم العكس');
     }
+    // Invoice-linked orders stay DRAFT while lines are confirmed one by one, so the
+    // status alone doesn't prove nothing moved: any confirmed line already issued
+    // stock and booked COGS — editing/deleting it would orphan those postings.
+    if ((d.items ?? []).some((i) => (Number(i.deliveredQuantity) || 0) > 0)) {
+      throw new BadRequestException('لا يمكن تعديل أو حذف إذن تسليم تم تأكيد تسليم بعض أصنافه — اعكس تسليم الأصناف أولاً');
+    }
     return d;
   }
 
