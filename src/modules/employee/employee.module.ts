@@ -12,6 +12,6 @@ import { CodeSettingModule } from '../code-setting/code-setting.module';
   imports: [TypeOrmModule.forFeature([Employee, SalesInvoiceCommission, Branch]), CodeSettingModule],
   controllers: [EmployeeController],
   providers: [EmployeeService, EmployeeCommissionReportService],
-  exports: [EmployeeService, TypeOrmModule],
+  exports: [EmployeeService, EmployeeCommissionReportService, TypeOrmModule],
 })
 export class EmployeeModule {}

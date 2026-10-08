@@ -57,3 +57,25 @@ export function listQuery(
 /** System currency label used when presenting monetary figures. */
 export const CURRENCY = 'EGP';
 
+
+/** Optional enum arg: must be one of `allowed` (rejects anything else the model invents). */
+export function optEnum<T extends string>(value: unknown, allowed: readonly T[], field = 'value'): T | undefined {
+  const s = optStr(value);
+  if (!s) return undefined;
+  if (!(allowed as readonly string[]).includes(s)) {
+    throw new BadRequestException(`قيمة غير صالحة (${field}): القيم المسموحة ${allowed.join(' / ')}`);
+  }
+  return s as T;
+}
+
+/** Optional boolean arg (accepts true/false and "true"/"false"). */
+export function optBool(value: unknown): boolean | undefined {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return undefined;
+}
+
+/** Round a quantity to 3 decimals (display only). */
+export function round3(v: number): number {
+  return Math.round((Number(v) || 0) * 1000) / 1000;
+}

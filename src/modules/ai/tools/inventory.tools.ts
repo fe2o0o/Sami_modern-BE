@@ -7,7 +7,8 @@ import { StockMovementQueryDto } from '../../stock/dto/stock-movement-query.dto'
 import { ProductService } from '../../product/product.service';
 import { QueryProductDto } from '../../product/dto/query-product.dto';
 import { AiToolDefinition } from '../types/ai.types';
-import { CURRENCY, dateProp, listQuery, normalizeDate, optStr, optUuid } from './tool-helpers';
+import { StockDirection, StockMovementType } from '../../stock/enums/stock.enum';
+import { CURRENCY, dateProp, listQuery, normalizeDate, optEnum, optStr, optUuid, round3 } from './tool-helpers';
 
 /** Inventory read/aggregate tools. All gated by `stock.view`. */
 @Injectable()
@@ -53,7 +54,8 @@ export class InventoryAiTools {
       },
       {
         name: 'get_stock_balances',
-        description: 'أرصدة المخزون الحالية (الكمية المتاحة ومتوسط التكلفة) لكل صنف/مخزن. مرقّمة؛ يمكن التصفية بمخزن أو بحث بالكود/الاسم.',
+        description:
+          'أرصدة المخزون الحالية لكل صنف/مخزن: الكمية الفعلية (quantity) والمحجوز (reservedQuantity = محجوز لفواتير بيع مُرحّلة لم تُسلَّم بعد) و«المتاح» (available = الفعلي − المحجوز، أي ما يمكن صرفه الآن) ومتوسط التكلفة. مرقّمة؛ يمكن التصفية بمخزن أو بحث بالكود/الاسم.',
         permission: 'stock.view',
         parameters: {
           type: 'object',
@@ -74,7 +76,18 @@ export class InventoryAiTools {
           return {
             success: true,
             presentation: 'table',
-            data: { title: 'أرصدة المخزون', currency: CURRENCY, total: res.meta.totalItems, page: res.meta.currentPage, balances: res.items },
+            data: {
+              title: 'أرصدة المخزون',
+              currency: CURRENCY,
+              total: res.meta.totalItems,
+              page: res.meta.currentPage,
+              // «المتاح» = on hand − reserved for posted, undelivered invoices (StockService.costs' rule).
+              balances: res.items.map((b) => ({
+                ...b,
+                reservedQuantity: Number(b.reservedQuantity) || 0,
+                available: round3((Number(b.quantity) || 0) - (Number(b.reservedQuantity) || 0)),
+              })),
+            },
           };
         },
       },
@@ -107,6 +120,62 @@ export class InventoryAiTools {
             presentation: 'table',
             data: { title: 'حركات المخزون', total: res.meta.totalItems, page: res.meta.currentPage, movements: res.items },
           };
+        },
+      },
+      {
+        name: 'get_stock_balances_summary',
+        description:
+          'ملخص أرصدة المخزون (بنفس فلاتر شاشة الأرصدة: مخزن/بحث): عدد سطور الأرصدة وعدد الأصناف، إجمالي الكمية الفعلية، إجمالي المحجوز (لفواتير بيع مُرحّلة لم تُسلَّم — «المتاح» = الفعلي − المحجوز)، قيمة المخزون بمتوسط التكلفة، وعدد الأصناف تحت حد إعادة الطلب والصفرية والسالبة.',
+        permission: 'stock.view',
+        parameters: {
+          type: 'object',
+          properties: {
+            warehouseId: { type: 'string', description: 'مخزن محدد (uuid)' },
+            search: { type: 'string', description: 'كود أو اسم المنتج' },
+          },
+          additionalProperties: false,
+        },
+        handler: async (args, ctx) => {
+          const query = { warehouseId: optUuid(args.warehouseId, 'warehouseId'), search: optStr(args.search) } as StockQueryDto;
+          const data = await this.stock.balancesSummary(query, ctx.branchScope);
+          const availableQuantity = round3(data.totalQuantity - data.reservedQuantity);
+          return { success: true, presentation: 'report', data: { title: 'ملخص أرصدة المخزون', currency: CURRENCY, ...data, availableQuantity } };
+        },
+      },
+      {
+        name: 'get_stock_movements_summary',
+        description:
+          'ملخص حركات المخزون (بنفس فلاتر سجل الحركات): عدد الحركات الواردة والصادرة، كميات وقيم الوارد والصادر والصافي، وعدد الأصناف المتحركة. يمكن التصفية بمخزن/منتج/اتجاه/نوع الحركة/فترة.',
+        permission: 'stock.view',
+        parameters: {
+          type: 'object',
+          properties: {
+            warehouseId: { type: 'string', description: 'مخزن محدد (uuid)' },
+            productId: { type: 'string', description: 'منتج محدد (uuid)' },
+            direction: { type: 'string', enum: Object.values(StockDirection), description: 'in (وارد) / out (صادر)' },
+            movementType: {
+              type: 'string',
+              enum: Object.values(StockMovementType),
+              description: 'نوع الحركة: opening/purchase/purchase_return/sale/sale_return/adjustment/transfer/manufacturing …',
+            },
+            dateFrom: dateProp('بداية الفترة'),
+            dateTo: dateProp('نهاية الفترة'),
+            search: { type: 'string', description: 'كود/اسم المنتج أو رقم المستند' },
+          },
+          additionalProperties: false,
+        },
+        handler: async (args, ctx) => {
+          const query = {
+            warehouseId: optUuid(args.warehouseId, 'warehouseId'),
+            productId: optUuid(args.productId, 'productId'),
+            direction: optEnum(args.direction, Object.values(StockDirection), 'direction'),
+            movementType: optEnum(args.movementType, Object.values(StockMovementType), 'movementType'),
+            dateFrom: normalizeDate(args.dateFrom, 'dateFrom'),
+            dateTo: normalizeDate(args.dateTo, 'dateTo'),
+            search: optStr(args.search),
+          } as StockMovementQueryDto;
+          const data = await this.stock.movementsSummary(query, ctx.branchScope);
+          return { success: true, presentation: 'report', data: { title: 'ملخص حركات المخزون', currency: CURRENCY, ...data } };
         },
       },
       {

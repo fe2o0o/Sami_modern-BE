@@ -25,6 +25,13 @@ import { ContextAiTools } from './tools/context.tools';
 import { NavigationAiTools } from './tools/navigation.tools';
 import { VoucherAiTools } from './tools/voucher.tools';
 import { ReferenceAiTools } from './tools/reference.tools';
+import { ManufacturingAiTools } from './tools/manufacturing.tools';
+import { DeliveryAiTools } from './tools/delivery.tools';
+import { InventoryOpsAiTools } from './tools/inventory-ops.tools';
+import { AnalysisAiTools } from './tools/analysis.tools';
+import { EmployeeAiTools } from './tools/employee.tools';
+import { ReportsAiTools } from './tools/reports.tools';
+import { CatalogAiTools } from './tools/catalog.tools';
 
 /** Max characters of a single tool result fed back to the model (cost guard). */
 const MAX_TOOL_RESULT_CHARS = 12000;
@@ -50,6 +57,13 @@ export class AiService implements OnModuleInit {
     private readonly navigationTools: NavigationAiTools,
     private readonly voucherTools: VoucherAiTools,
     private readonly referenceTools: ReferenceAiTools,
+    private readonly manufacturingTools: ManufacturingAiTools,
+    private readonly deliveryTools: DeliveryAiTools,
+    private readonly inventoryOpsTools: InventoryOpsAiTools,
+    private readonly analysisTools: AnalysisAiTools,
+    private readonly employeeTools: EmployeeAiTools,
+    private readonly reportsTools: ReportsAiTools,
+    private readonly catalogTools: CatalogAiTools,
   ) {}
 
   /** Register all domain tools once the module is ready. */
@@ -65,6 +79,13 @@ export class AiService implements OnModuleInit {
     this.registry.register(this.navigationTools.defs());
     this.registry.register(this.voucherTools.defs());
     this.registry.register(this.referenceTools.defs());
+    this.registry.register(this.manufacturingTools.defs());
+    this.registry.register(this.deliveryTools.defs());
+    this.registry.register(this.inventoryOpsTools.defs());
+    this.registry.register(this.analysisTools.defs());
+    this.registry.register(this.employeeTools.defs());
+    this.registry.register(this.reportsTools.defs());
+    this.registry.register(this.catalogTools.defs());
     this.logger.log(`AI assistant ready with ${this.registry.count()} tools.`);
   }
 

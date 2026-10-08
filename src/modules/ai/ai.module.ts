@@ -18,6 +18,13 @@ import { ContextAiTools } from './tools/context.tools';
 import { NavigationAiTools } from './tools/navigation.tools';
 import { VoucherAiTools } from './tools/voucher.tools';
 import { ReferenceAiTools } from './tools/reference.tools';
+import { ManufacturingAiTools } from './tools/manufacturing.tools';
+import { DeliveryAiTools } from './tools/delivery.tools';
+import { InventoryOpsAiTools } from './tools/inventory-ops.tools';
+import { AnalysisAiTools } from './tools/analysis.tools';
+import { EmployeeAiTools } from './tools/employee.tools';
+import { ReportsAiTools } from './tools/reports.tools';
+import { CatalogAiTools } from './tools/catalog.tools';
 // Feature modules whose (exported) services the AI tools reuse — no business logic is duplicated.
 import { CustomerModule } from '../customer/customer.module';
 import { SupplierModule } from '../supplier/supplier.module';
@@ -36,6 +43,12 @@ import { SalesReturnModule } from '../sales-return/sales-return.module';
 import { PurchaseReturnModule } from '../purchase-return/purchase-return.module';
 import { ProductModule } from '../product/product.module';
 import { LookupsModule } from '../lookups/lookups.module';
+import { ManufacturingModule } from '../manufacturing/manufacturing.module';
+import { SalesDeliveryModule } from '../sales-delivery/sales-delivery.module';
+import { InventoryAdjustmentModule } from '../inventory-adjustment/inventory-adjustment.module';
+import { StockTransferModule } from '../stock-transfer/stock-transfer.module';
+import { EmployeeModule } from '../employee/employee.module';
+import { ProductCategoryModule } from '../product-category/product-category.module';
 
 /**
  * AI ERP Assistant (read-only V1). Reuses existing domain services via a
@@ -62,6 +75,12 @@ import { LookupsModule } from '../lookups/lookups.module';
     PurchaseReturnModule,
     ProductModule,
     LookupsModule,
+    ManufacturingModule,
+    SalesDeliveryModule,
+    InventoryAdjustmentModule,
+    StockTransferModule,
+    EmployeeModule,
+    ProductCategoryModule,
   ],
   controllers: [AiController],
   providers: [
@@ -79,6 +98,13 @@ import { LookupsModule } from '../lookups/lookups.module';
     NavigationAiTools,
     VoucherAiTools,
     ReferenceAiTools,
+    ManufacturingAiTools,
+    DeliveryAiTools,
+    InventoryOpsAiTools,
+    AnalysisAiTools,
+    EmployeeAiTools,
+    ReportsAiTools,
+    CatalogAiTools,
   ],
 })
 export class AiModule {}

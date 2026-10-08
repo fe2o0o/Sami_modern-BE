@@ -16,6 +16,7 @@ interface NavScreen {
  */
 const NAV_MAP: NavScreen[] = [
   { section: 'الرئيسية', screen: 'لوحة المعلومات', route: '/app/dashboard', description: 'مؤشرات ومبيعات ومشتريات ومخزون سريعة' },
+  { section: 'الرئيسية', screen: 'المساعد الذكي', route: '/app/assistant', description: 'اسأل عن بيانات النظام وتقاريره بلغة طبيعية' },
 
   { section: 'المالية', screen: 'الأرصدة الافتتاحية', route: '/app/financial/opening-balances', description: 'إدخال الأرصدة الافتتاحية', permission: 'opening_balances.view' },
   { section: 'المالية', screen: 'قيود اليومية', route: '/app/financial/journal-entries', description: 'عرض وإنشاء القيود المحاسبية', permission: 'journal_entries.view' },
@@ -23,30 +24,33 @@ const NAV_MAP: NavScreen[] = [
 
   { section: 'المبيعات', screen: 'فواتير المبيعات', route: '/app/sales/invoices', description: 'إنشاء وعرض فواتير البيع', permission: 'sales_invoices.view' },
   { section: 'المبيعات', screen: 'مردودات المبيعات', route: '/app/sales/returns', description: 'مرتجعات العملاء', permission: 'sales_returns.view' },
-  { section: 'المبيعات', screen: 'أذون التسليم', route: '/app/sales/deliveries', description: 'تسليم الأصناف المباعة', permission: 'sales_deliveries.view' },
+  { section: 'المبيعات', screen: 'أوامر/أذون التسليم', route: '/app/sales/deliveries', description: 'تسليم الأصناف المباعة سطراً بسطر ومتابعة المتأخر وحالة التصنيع', permission: 'sales_deliveries.view' },
 
   { section: 'المشتريات', screen: 'فواتير المشتريات', route: '/app/purchases/invoices', description: 'فواتير الشراء من الموردين', permission: 'purchase_invoices.view' },
   { section: 'المشتريات', screen: 'مردودات المشتريات', route: '/app/purchases/returns', description: 'مرتجعات للموردين', permission: 'purchase_returns.view' },
 
   { section: 'المخزون', screen: 'أرصدة المخزون', route: '/app/inventory/balances', description: 'الكميات المتاحة ومتوسط التكلفة', permission: 'stock.view' },
   { section: 'المخزون', screen: 'حركات المخزون', route: '/app/inventory/movements', description: 'سجل الوارد والصادر', permission: 'stock.view' },
-  { section: 'المخزون', screen: 'تسويات المخزون', route: '/app/inventory/adjustments', description: 'تعديل الأرصدة', permission: 'inventory_adjustments.view' },
-  { section: 'المخزون', screen: 'التحويلات', route: '/app/inventory/transfers', description: 'تحويل بين المخازن', permission: 'stock_transfers.view' },
+  { section: 'المخزون', screen: 'تسويات المخزون', route: '/app/inventory/adjustments', description: 'تسوية/تعديل الأرصدة (زيادة أو عجز)', permission: 'inventory_adjustments.view' },
+  { section: 'المخزون', screen: 'التحويلات بين المخازن', route: '/app/inventory/transfers', description: 'تحويل الأصناف من مخزن لآخر', permission: 'stock_transfers.view' },
 
-  { section: 'التصنيع', screen: 'أوامر التصنيع', route: '/app/manufacturing/orders', description: 'أوامر الإنتاج والمكوّنات', permission: 'manufacturing.view' },
+  { section: 'التصنيع', screen: 'أوامر التصنيع', route: '/app/manufacturing/orders', description: 'أوامر الإنتاج والمكوّنات والمصانع والمتأخر', permission: 'manufacturing.view' },
 
   { section: 'التقارير', screen: 'الأستاذ العام', route: '/app/accounting/general-ledger', description: 'حركة وأرصدة حساب', permission: 'accounting_reports.view' },
   { section: 'التقارير', screen: 'ميزان المراجعة', route: '/app/accounting/trial-balance', description: 'أرصدة كل الحسابات', permission: 'accounting_reports.view' },
   { section: 'التقارير', screen: 'قائمة الدخل', route: '/app/accounting/income-statement', description: 'الأرباح والخسائر', permission: 'accounting_reports.view' },
   { section: 'التقارير', screen: 'الميزانية العمومية', route: '/app/accounting/balance-sheet', description: 'الأصول والخصوم وحقوق الملكية', permission: 'accounting_reports.view' },
   { section: 'التقارير', screen: 'تقرير العمولات', route: '/app/accounting/commissions-report', description: 'عمولات الموظفين', permission: 'accounting_reports.view' },
-  { section: 'التقارير', screen: 'تقرير الخزائن', route: '/app/accounting/treasury-report', description: 'أرصدة وحركة الخزائن والبنوك', permission: 'accounting_reports.view' },
+  { section: 'التقارير', screen: 'تقرير الخزائن', route: '/app/accounting/treasury-report', description: 'أرصدة وحركة الخزائن والبنوك والرصيد الحالي', permission: 'accounting_reports.view' },
+  { section: 'التقارير', screen: 'تقرير دخل المنتجات', route: '/app/accounting/product-income', description: 'إيراد وتكلفة وربحية كل منتج', permission: 'accounting_reports.view' },
 
   { section: 'البيانات الأساسية', screen: 'المنتجات', route: '/app/master-data/products', description: 'إدارة المنتجات والمكوّنات', permission: 'products.view' },
   { section: 'البيانات الأساسية', screen: 'العملاء', route: '/app/master-data/customers', description: 'إدارة العملاء وكشوف حساباتهم', permission: 'customers.view' },
   { section: 'البيانات الأساسية', screen: 'الموردين', route: '/app/master-data/suppliers', description: 'إدارة الموردين وكشوف حساباتهم', permission: 'suppliers.view' },
   { section: 'البيانات الأساسية', screen: 'الموظفين', route: '/app/master-data/employees', description: 'إدارة الموظفين', permission: 'employees.view' },
-  { section: 'البيانات الأساسية', screen: 'الوحدات/العلامات/التصنيفات', route: '/app/master-data/units', description: 'وحدات القياس والعلامات وتصنيفات المنتجات', permission: 'product_catalog.view' },
+  { section: 'البيانات الأساسية', screen: 'وحدات القياس', route: '/app/master-data/units', description: 'وحدات القياس', permission: 'product_catalog.view' },
+  { section: 'البيانات الأساسية', screen: 'تصنيفات المنتجات', route: '/app/master-data/product-categories', description: 'شجرة التصنيفات وحسابات المخزون والتكلفة والإيراد لكل تصنيف', permission: 'product_catalog.view' },
+  { section: 'البيانات الأساسية', screen: 'العلامات التجارية', route: '/app/master-data/brands', description: 'العلامات التجارية للمنتجات', permission: 'product_catalog.view' },
 
   { section: 'الإعدادات', screen: 'الشركة', route: '/app/settings/company', description: 'بيانات الشركة', permission: 'company.view' },
   { section: 'الإعدادات', screen: 'الفروع', route: '/app/settings/branches', description: 'إدارة الفروع', permission: 'branches.view' },
@@ -67,6 +71,9 @@ const WORKFLOWS: Record<string, string> = {
   'سند قبض': 'المالية ← السندات ← سند قبض جديد: اختر العميل/الحساب وطريقة التحصيل (خزينة/بنك) والمبلغ.',
   'إضافة عميل': 'البيانات الأساسية ← العملاء ← جديد.',
   'إضافة مورد': 'البيانات الأساسية ← الموردين ← جديد.',
+  'تسليم': 'المبيعات ← أوامر التسليم: افتح أمر التسليم للفاتورة وأكّد تسليم كل سطر بكميته (يُصرف من المخزون وتُسجَّل التكلفة). أصناف التصنيع تُسلَّم بعد إنتاج أمرها؛ إن كان أمر التصنيع ملغى أو مفقوداً فأنشئ أمراً جديداً أو سلّم من المخزون أو ألغِ الصنف.',
+  'تحويل مخزني': 'المخزون ← التحويلات ← جديد: اختر المخزن المحوَّل منه وإليه والأصناف، ثم رحّل التحويل.',
+  'تسوية مخزون': 'المخزون ← تسويات المخزون ← جديد: اختر المخزن والأصناف ونوع التسوية (زيادة/عجز) والكمية، ثم رحّل.',
   'أمر تصنيع': 'التصنيع ← أوامر التصنيع: يُنشأ تلقائياً من فاتورة بها صنف تصنيع، أو يدوياً؛ حدّد المكوّنات (مخزن كل مكوّن) والرسوم، ثم "تنفيذ الإنتاج".',
 };
 
@@ -111,7 +118,7 @@ export class NavigationAiTools {
       },
       {
         name: 'get_module_help',
-        description: 'شرح خطوات عملية شائعة (فاتورة مبيعات، فاتورة مشتريات، سند قبض، إضافة عميل/مورد، أمر تصنيع).',
+        description: 'شرح خطوات عملية شائعة (فاتورة مبيعات، فاتورة مشتريات، سند قبض، إضافة عميل/مورد، أمر تصنيع، تسليم، تحويل مخزني، تسوية مخزون).',
         parameters: {
           type: 'object',
           properties: { topic: { type: 'string', description: 'اسم العملية' } },
