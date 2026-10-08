@@ -28,9 +28,6 @@
  *
  *   node scripts/reset-sales-documents.js                       → DRY RUN (changes nothing)
  *   node scripts/reset-sales-documents.js --apply --confirm=<DB_DATABASE>
- *   --delete-je=JE-2026-000131[,JE-…]  also delete these MANUAL journal entries (e.g. ones
- *     entered to settle the removed returns) with their reversals and their customer/
- *     supplier statement rows. Refused if any of them touches a treasury/bank.
  * TAKE A FULL BACKUP FIRST. Everything runs in ONE transaction (all-or-nothing).
  */
 require('dotenv').config({ quiet: true });
@@ -49,8 +46,6 @@ const DOC_TABLES = [
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
 const confirm = (args.find((a) => a.startsWith('--confirm=')) || '').split('=')[1];
-const EXTRA_JE = ((args.find((a) => a.startsWith('--delete-je=')) || '').split('=')[1] || '')
-  .split(',').map((x) => x.trim()).filter(Boolean);
 const r2 = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
 const r3 = (v) => Math.round((v + Number.EPSILON) * 1000) / 1000;
 const ph = (arr) => arr.map(() => '?').join(',');
@@ -93,30 +88,6 @@ async function main() {
     cashJes.push({ ...je, net, cashLineIds: cashLines.map((l) => l.id), customerId: doc.cu, docNo: doc.no ?? je.sno ?? '' });
   }
   if (cashJes.length && !settings?.cc) throw new Error('customer control account is not set in accounting settings — cannot preserve cash legs');
-
-  // ── extra MANUAL journal entries to delete (by number) ──
-  let extraJes = [];
-  if (EXTRA_JE.length) {
-    extraJes = await q(`SELECT id, entry_number eno, source_type st, status FROM journal_entries WHERE entry_number IN (${ph(EXTRA_JE)})`, EXTRA_JE);
-    const missingNos = EXTRA_JE.filter((no) => !extraJes.some((j) => j.eno === no));
-    if (missingNos.length) throw new Error(`journal entries not found: ${missingNos.join(', ')}`);
-    const notManual = extraJes.filter((j) => j.st !== 'manual');
-    if (notManual.length) throw new Error(`only MANUAL entries can be deleted with --delete-je (not: ${notManual.map((j) => j.eno).join(', ')})`);
-    // include their reversal entries
-    const rev = await q(`SELECT id, entry_number eno, source_type st, status FROM journal_entries WHERE reversal_of_journal_entry_id IN (${ph(extraJes.map((j) => j.id))})`, extraJes.map((j) => j.id));
-    extraJes = [...extraJes, ...rev];
-    const ids = extraJes.map((j) => j.id);
-    const touchesCash = await n(
-      `SELECT COUNT(*) n FROM journal_entry_lines WHERE journal_entry_id IN (${ph(ids)}) AND account_id IN (SELECT account_id FROM treasuries UNION SELECT account_id FROM bank_accounts)`, ids);
-    const cashRows = await n(`SELECT (SELECT COUNT(*) FROM treasury_transactions WHERE journal_entry_id IN (${ph(ids)})) + (SELECT COUNT(*) FROM bank_transactions WHERE journal_entry_id IN (${ph(ids)})) n`, [...ids, ...ids]);
-    if (touchesCash || cashRows) throw new Error('one of the --delete-je entries touches a treasury/bank — refused (treasuries must not change)');
-    console.log('Extra MANUAL journal entries to delete:');
-    console.table(await q(
-      `SELECT j.entry_number, j.status, a.account_code, a.account_name_ar, l.debit, l.credit, c.name customer
-         FROM journal_entries j JOIN journal_entry_lines l ON l.journal_entry_id = j.id
-         LEFT JOIN chart_of_accounts a ON a.id = l.account_id LEFT JOIN customers c ON c.id = l.customer_id
-        WHERE j.id IN (${ph(ids)}) ORDER BY j.entry_number, l.line_number`, ids));
-  }
 
   // ── what will be removed ──
   const counts = {};
@@ -200,14 +171,6 @@ async function main() {
          SELECT ?, ?, entry_date, 'adjustment', 'manual', id, entry_number, ?, ?, ?, NOW(), NOW(), 1 FROM journal_entries WHERE id = ?`,
         [crypto.randomUUID(), j.customerId, j.net < 0 ? amount : 0, j.net > 0 ? amount : 0, desc, j.id],
       );
-    }
-    // 1b) extra MANUAL journal entries (+reversals) and their statement rows
-    if (extraJes.length) {
-      const ids = extraJes.map((j) => j.id);
-      await q(`DELETE FROM customer_transactions WHERE source_type = 'journal_entry' AND source_id IN (${ph(ids)})`, ids);
-      await q(`DELETE FROM supplier_transactions WHERE source_type = 'journal_entry' AND source_id IN (${ph(ids)})`, ids);
-      await q(`DELETE FROM journal_entry_lines WHERE journal_entry_id IN (${ph(ids)})`, ids);
-      await q(`DELETE FROM journal_entries WHERE id IN (${ph(ids)})`, ids);
     }
     // 2) delete everything else those documents posted
     await q(`DELETE FROM customer_transactions WHERE source_type IN (${ph(SOURCES)})`, SOURCES);
