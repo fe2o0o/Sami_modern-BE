@@ -37,6 +37,7 @@ import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { SalesDeliveryService } from '../sales-delivery/sales-delivery.service';
 import { ProductComponent } from '../product/entities/product-component.entity';
 import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
+import { missingAccountMessage } from '../product/product-accounts';
 
 /**
  * Owns the accounting/inventory side-effects of a sales invoice. Posting and
@@ -569,7 +570,7 @@ export class SalesInvoicePostingService {
       item.cogsReleasedQty = 0;
       if (estimate <= 0) continue;
       const cogsAcc = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId;
-      if (!cogsAcc) throw new BadRequestException('لا يمكن ترحيل فاتورة المبيعات لأن حساب تكلفة البضاعة المباعة غير محدد (للتصنيف أو في الإعدادات).');
+      if (!cogsAcc) throw new BadRequestException(`لا يمكن ترحيل فاتورة المبيعات لأن ${missingAccountMessage('cogs', product.name)}`);
       const label = `${item.productName ?? product.name ?? ''} (${item.quantity})`;
       lines.push({ accountId: cogsAcc, debit: estimate, credit: 0, productId: item.productId, description: `تكلفة مبيعات ${label} — فاتورة ${invoiceNumber}${item.lineType === SalesLineType.MANUFACTURING ? ' (تقديرية — تصنيع)' : ''}` });
       lines.push({ accountId: clearing, debit: 0, credit: estimate, productId: item.productId, description: `بضاعة مباعة لم تُسلَّم ${label} — فاتورة ${invoiceNumber}` });
@@ -597,7 +598,7 @@ export class SalesInvoicePostingService {
       const product = products.get(item.productId);
       if (!product) block('أحد المنتجات غير موجود.');
       const revenue = product!.salesAccountId ?? settings.salesRevenueAccountId;
-      if (!revenue) block('حساب إيرادات المبيعات غير محدد في إعدادات المحاسبة.');
+      if (!revenue) block(missingAccountMessage('revenue', product!.name));
 
       // Only STOCK lines touch inventory/COGS — manufacturing & service skip these.
       if (item.lineType === SalesLineType.STOCK && product!.trackInventory) {
@@ -605,9 +606,9 @@ export class SalesInvoicePostingService {
           block(`لم يتم تحديد مخزن للصنف "${product!.name}".`);
         }
         const cogs = product!.cogsAccountId ?? settings.costOfGoodsSoldAccountId;
-        if (!cogs) block('حساب تكلفة البضاعة المباعة غير محدد في إعدادات المحاسبة.');
+        if (!cogs) block(missingAccountMessage('cogs', product!.name));
         if (!this.resolveInventoryAccount(product!, settings)) {
-          block(`حساب المخزون للمنتج "${product!.name}" غير محدد في إعدادات المحاسبة.`);
+          block(missingAccountMessage('inventory', product!.name));
         }
       }
     }

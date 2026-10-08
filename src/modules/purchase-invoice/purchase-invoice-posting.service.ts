@@ -33,6 +33,7 @@ import {
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { Supplier } from '../supplier/entities/supplier.entity';
+import { missingAccountMessage } from '../product/product-accounts';
 
 /**
  * Owns the accounting/inventory side-effects of a purchase invoice. Posting and
@@ -381,7 +382,7 @@ export class PurchaseInvoicePostingService {
         block(`المنتج "${product!.name}" ليس صنفاً مخزنياً ولا يمكن شراؤه في فاتورة مشتريات.`);
       }
       if (!this.resolveInventoryAccount(product!, settings)) {
-        block(`حساب المخزون للمنتج "${product!.name}" غير محدد في إعدادات المحاسبة.`);
+        block(missingAccountMessage('inventory', product!.name));
       }
     }
 

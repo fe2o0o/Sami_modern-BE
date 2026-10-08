@@ -29,6 +29,7 @@ import {
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { Supplier } from '../supplier/entities/supplier.entity';
+import { missingAccountMessage } from '../product/product-accounts';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 
@@ -288,7 +289,7 @@ export class PurchaseReturnPostingService {
       const product = products.get(item.productId);
       if (!product) block('أحد المنتجات غير موجود.');
       if (!this.resolveInventoryAccount(product!, settings)) {
-        block(`حساب المخزون للمنتج "${product!.name}" غير محدد في إعدادات المحاسبة.`);
+        block(missingAccountMessage('inventory', product!.name));
       }
     }
     if (ret.vatAmount > 0 && !settings.inputVatAccountId) {

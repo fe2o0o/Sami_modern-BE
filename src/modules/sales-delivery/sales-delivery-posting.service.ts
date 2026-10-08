@@ -39,6 +39,7 @@ import { JournalEntryService, JournalLineInput } from '../journal-entry/journal-
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { Customer } from '../customer/entities/customer.entity';
+import { missingAccountMessage } from '../product/product-accounts';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
@@ -295,8 +296,8 @@ export class SalesDeliveryPostingService {
       if (!product.trackInventory) throw new BadRequestException(`المنتج "${product.name}" ليس صنفاً مخزنياً`);
       const cogsAcc = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId;
       const invAcc = this.resolveInventoryAccount(product, settings);
-      if (!cogsAcc) throw new BadRequestException('حساب تكلفة المبيعات غير محدد في إعدادات المحاسبة');
-      if (!invAcc) throw new BadRequestException('حساب المخزون غير محدد في إعدادات المحاسبة');
+      if (!cogsAcc) throw new BadRequestException(missingAccountMessage('cogs', product.name));
+      if (!invAcc) throw new BadRequestException(missingAccountMessage('inventory', product.name));
 
       const number = delivery.deliveryNumber ?? (await this.sequenceService.nextDocumentNumber('DN', fiscalYear, manager));
       const stockLine: StockLineInput[] = [
@@ -669,10 +670,10 @@ export class SalesDeliveryPostingService {
       if (!product) block('أحد المنتجات غير موجود.');
       if (!product!.trackInventory) block(`المنتج "${product!.name}" ليس صنفاً مخزنياً ولا يمكن تسليمه.`);
       if (!(product!.cogsAccountId ?? settings.costOfGoodsSoldAccountId)) {
-        block(`حساب تكلفة المبيعات للمنتج "${product!.name}" غير محدد في إعدادات المحاسبة.`);
+        block(missingAccountMessage('cogs', product!.name));
       }
       if (!this.resolveInventoryAccount(product!, settings)) {
-        block(`حساب المخزون للمنتج "${product!.name}" غير محدد في إعدادات المحاسبة.`);
+        block(missingAccountMessage('inventory', product!.name));
       }
     }
   }

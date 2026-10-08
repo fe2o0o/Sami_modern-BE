@@ -20,6 +20,7 @@ import { JournalEntryService, JournalLineInput } from '../journal-entry/journal-
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { SupplierLedgerService } from '../supplier/supplier-ledger.service';
 import { SupplierTransactionType } from '../supplier/enums/supplier-transaction.enum';
+import { missingAccountMessage } from '../product/product-accounts';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
@@ -92,7 +93,7 @@ export class ManufacturingProductionService {
         // The fee is part of the product's cost, so it goes straight into the
         // product's inventory (cost) account — not a separate expense.
         const productCostAcc = product.inventoryAccountId ?? settings.finishedGoodsInventoryAccountId;
-        if (!productCostAcc) throw new BadRequestException('حساب مخزون/تكلفة المنتج (تام الصنع) غير محدد في إعدادات المحاسبة');
+        if (!productCostAcc) throw new BadRequestException(missingAccountMessage('inventory', product.name));
         const creditAcc = supplier ? settings.supplierControlAccountId : settings.manufacturingFeeAccountId;
         if (!creditAcc) {
           throw new BadRequestException(
@@ -294,7 +295,7 @@ export class ManufacturingProductionService {
       await applyEffectiveAccounts([product], manager);
 
       const finishedAcc = product.inventoryAccountId ?? settings.finishedGoodsInventoryAccountId;
-      if (!finishedAcc) throw new BadRequestException('حساب مخزون تام الصنع غير محدد في إعدادات المحاسبة');
+      if (!finishedAcc) throw new BadRequestException(missingAccountMessage('inventory', product.name));
 
       // Each component leaves ITS OWN inventory account (category -> product ->
       // raw-material / finished-goods default), not one blanket raw-material account.
@@ -311,7 +312,7 @@ export class ManufacturingProductionService {
             ? settings.rawMaterialInventoryAccountId
             : settings.finishedGoodsInventoryAccountId;
         const acc = cp?.inventoryAccountId ?? byType ?? settings.rawMaterialInventoryAccountId;
-        if (!acc) throw new BadRequestException(`حساب المخزون للمكوّن "${cp?.name ?? productId}" غير محدد في إعدادات المحاسبة`);
+        if (!acc) throw new BadRequestException(missingAccountMessage('inventory', cp?.name ?? productId));
         return acc;
       };
       // Validate up-front, before any stock moves.

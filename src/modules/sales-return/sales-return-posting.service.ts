@@ -35,6 +35,7 @@ import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-ite
 import { SalesDeliveryProgress } from '../sales-delivery/enums/sales-delivery.enum';
 import { SalesDelivery } from '../sales-delivery/entities/sales-delivery.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
+import { missingAccountMessage } from '../product/product-accounts';
 
 /**
  * Accounting/inventory side-effects of a sales return — the inverse of a sale
@@ -401,13 +402,13 @@ export class SalesReturnPostingService {
       const product = products.get(item.productId);
       if (!product) block('أحد المنتجات غير موجود.');
       const revenue = product!.salesAccountId ?? settings.salesRevenueAccountId;
-      if (!revenue) block('حساب إيرادات المبيعات غير محدد في إعدادات المحاسبة.');
+      if (!revenue) block(missingAccountMessage('revenue', product!.name));
       if (this.touchesStock(item, products)) {
         if (!(product!.cogsAccountId ?? settings.costOfGoodsSoldAccountId)) {
-          block('حساب تكلفة البضاعة المباعة غير محدد في إعدادات المحاسبة.');
+          block(missingAccountMessage('cogs', product!.name));
         }
         if (!this.resolveInventoryAccount(product!, settings)) {
-          block(`حساب المخزون للمنتج "${product!.name}" غير محدد في إعدادات المحاسبة.`);
+          block(missingAccountMessage('inventory', product!.name));
         }
       }
     }

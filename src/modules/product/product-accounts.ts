@@ -48,3 +48,15 @@ export async function applyEffectiveAccounts(
   }
   return products;
 }
+
+const ACCOUNT_LABELS = { inventory: 'المخزون', cogs: 'تكلفة المبيعات', revenue: 'الإيراد' } as const;
+
+/**
+ * Error text when no account resolves for a product. Resolution priority is:
+ * the product's CATEGORY (inherited up the tree) → the product's own legacy value
+ * → the Accounting Settings default (now optional) — so point the user at the
+ * category first.
+ */
+export function missingAccountMessage(kind: keyof typeof ACCOUNT_LABELS, productName: string | null | undefined): string {
+  return `حساب ${ACCOUNT_LABELS[kind]} للمنتج "${productName ?? ''}" غير محدد — حدّده على تصنيف المنتج (أو تصنيف أعلى منه في الشجرة)، أو كحساب افتراضي في إعدادات المحاسبة.`;
+}
