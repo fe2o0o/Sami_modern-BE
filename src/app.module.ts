@@ -47,6 +47,7 @@ import { SupplierModule } from './modules/supplier/supplier.module';
 import { StockModule } from './modules/stock/stock.module';
 import { LookupsModule } from './modules/lookups/lookups.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { AiModule } from './modules/ai/ai.module';
 import { ExcelModule } from './common/excel/excel.module';
 
 @Module({
@@ -95,6 +96,7 @@ import { ExcelModule } from './common/excel/excel.module';
     StockModule,
     LookupsModule,
     DashboardModule,
+    AiModule,
     ExcelModule,
   ],
   controllers: [AppController],

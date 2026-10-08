@@ -61,6 +61,15 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   JWT_REFRESH_EXPIRES_IN?: string;
+
+  // --- AI ERP Assistant (optional; the /ai/chat endpoint is disabled without a key) ---
+  @IsOptional()
+  @IsString()
+  OPENAI_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  OPENAI_MODEL?: string;
 }
 
 /**
