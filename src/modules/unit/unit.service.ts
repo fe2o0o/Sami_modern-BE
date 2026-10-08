@@ -10,6 +10,7 @@ import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, bool } from '../../common/excel/import.helpers';
+import { assertNotReferenced, UNIT_REFERENCES } from '../../common/utils/reference-guard';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', example: 'PCS', note: 'كود فريد للوحدة' },
@@ -89,5 +90,15 @@ export class UnitService extends BaseCrudService<Unit> {
     }
     Object.assign(unit, dto);
     return this.unitRepository.save(unit);
+  }
+  /**
+   * Delete only when nothing live references it (documents, ledgers, stock…);
+   * otherwise refuse with where it's used. Read-only check — existing and
+   * already-deleted data are never changed.
+   */
+  override async remove(id: string): Promise<void> {
+    const entity = await this.findOne(id);
+    await assertNotReferenced(this.dataSource, id, UNIT_REFERENCES, `الوحدة «${(entity as { name?: string }).name ?? ''}»`);
+    await super.remove(id);
   }
 }

@@ -29,6 +29,7 @@ import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, optNum, bool, enumFromLabel } from '../../common/excel/import.helpers';
+import { assertNotReferenced, PRODUCT_REFERENCES } from '../../common/utils/reference-guard';
 
 /** Minimal shape of a Multer file (memory storage). Avoids a @types/multer dep. */
 export interface UploadedImage {
@@ -329,9 +330,14 @@ export class ProductService {
     return this.findOne(id);
   }
 
+  /**
+   * Delete only when nothing live references it (stock, movements, documents,
+   * BOMs, opening balances); otherwise refuse with where it's used. Read-only
+   * check — existing and already-deleted data are never changed.
+   */
   async remove(id: string): Promise<void> {
-    await this.findOne(id);
-    // Future: block when the product has stock movements / documents.
+    const product = await this.findOne(id);
+    await assertNotReferenced(this.dataSource, id, PRODUCT_REFERENCES, `المنتج «${product.name}»`);
     await this.productRepository.softDelete(id);
   }
 

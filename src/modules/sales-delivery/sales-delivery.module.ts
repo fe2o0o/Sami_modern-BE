@@ -18,6 +18,7 @@ import { User } from '../user/entities/user.entity';
 import { StockModule } from '../stock/stock.module';
 import { SequenceModule } from '../sequence/sequence.module';
 import { JournalEntryModule } from '../journal-entry/journal-entry.module';
+import { ManufacturingModule } from '../manufacturing/manufacturing.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { JournalEntryModule } from '../journal-entry/journal-entry.module';
     StockModule,
     SequenceModule,
     JournalEntryModule,
+    ManufacturingModule,
   ],
   controllers: [SalesDeliveryController],
   providers: [SalesDeliveryService, SalesDeliveryPostingService],

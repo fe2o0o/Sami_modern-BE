@@ -99,8 +99,8 @@ export interface ManufacturingFromInvoiceInput {
   /** The exact invoice line this order fulfils (for the delivery back-link). */
   salesInvoiceItemId?: string | null;
   accountingPeriodId?: string | null;
-  /** Per-order BOM from the invoice line (TOTAL quantities). When empty the
-   *  product's default BOM is copied instead. */
+  /** Per-order BOM from the invoice line, quantities PER UNIT (scaled by
+   *  `quantity` here). When empty the product's default BOM is copied instead. */
   components?: { componentProductId: string; quantity: number; warehouseId?: string | null }[];
   actorId?: string | null;
 }

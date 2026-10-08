@@ -25,6 +25,7 @@ import { Branch } from '../branch/entities/branch.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
 import { Product } from '../product/entities/product.entity';
+import { ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
 import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
 import { User } from '../user/entities/user.entity';
 import { paginate } from '../../common/utils/pagination.util';
@@ -423,6 +424,7 @@ export class SalesDeliveryService {
 
   async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const d = await this.findOne(id, branchScope);
+    const manufacturing = await this.manufacturingStates(d);
     const [customer, warehouse, branch, fiscalYear, period, users] = await Promise.all([
       this.customerRepository.findOne({ where: { id: d.customerId } }),
       d.warehouseId ? this.warehouseRepository.findOne({ where: { id: d.warehouseId } }) : null,
@@ -433,6 +435,7 @@ export class SalesDeliveryService {
     ]);
     return {
       ...d,
+      items: d.items.map((it) => ({ ...it, ...(manufacturing.get(it.id) ?? {}) })),
       customerName: customer?.name ?? null,
       warehouseName: warehouse?.name ?? null,
       branchName: branch?.name ?? null,
@@ -442,6 +445,38 @@ export class SalesDeliveryService {
       postedByName: users.get(d.postedBy ?? '') ?? null,
       reversedByName: users.get(d.reversedBy ?? '') ?? null,
     };
+  }
+
+  /**
+   * For each MANUFACTURING line, the state of the production order behind it:
+   *  - pending   : order NEW / IN_PROGRESS → wait for production
+   *  - produced  : PRODUCED / DONE → confirm delivery normally
+   *  - cancelled : order cancelled                  ┐ the line needs an action:
+   *  - missing   : no order, or the order deleted   ┘ recreate an order, or deliver from stock
+   * Read-only (soft-deleted orders are read with withDeleted to tell "deleted" apart).
+   */
+  private async manufacturingStates(d: SalesDelivery): Promise<
+    Map<string, { manufacturingState: 'pending' | 'produced' | 'cancelled' | 'missing'; manufacturingOrderNumber: string | null; manufacturingOrderStatus: string | null }>
+  > {
+    const out = new Map<string, { manufacturingState: 'pending' | 'produced' | 'cancelled' | 'missing'; manufacturingOrderNumber: string | null; manufacturingOrderStatus: string | null }>();
+    const lines = (d.items ?? []).filter((i) => i.lineType === SalesLineType.MANUFACTURING);
+    if (!lines.length) return out;
+    const ids = lines.map((l) => l.manufacturingOrderId).filter((v): v is string => !!v);
+    const orders = ids.length
+      ? await this.repository.manager.getRepository(ManufacturingOrder).find({ where: { id: In(ids) }, withDeleted: true })
+      : [];
+    const byId = new Map(orders.map((o): [string, ManufacturingOrder] => [o.id, o]));
+    for (const l of lines) {
+      const mo = l.manufacturingOrderId ? byId.get(l.manufacturingOrderId) : undefined;
+      let state: 'pending' | 'produced' | 'cancelled' | 'missing' = 'missing';
+      if (mo && !mo.deletedAt) {
+        if (mo.status === ManufacturingOrderStatus.CANCELLED) state = 'cancelled';
+        else if (mo.status === ManufacturingOrderStatus.PRODUCED || mo.status === ManufacturingOrderStatus.DONE) state = 'produced';
+        else state = 'pending';
+      }
+      out.set(l.id, { manufacturingState: state, manufacturingOrderNumber: mo?.orderNumber ?? null, manufacturingOrderStatus: mo?.deletedAt ? 'deleted' : mo?.status ?? null });
+    }
+    return out;
   }
 
   // =========================================================

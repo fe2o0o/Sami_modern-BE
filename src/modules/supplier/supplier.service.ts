@@ -15,6 +15,7 @@ import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, optNum, bool } from '../../common/excel/import.helpers';
+import { assertNotReferenced, SUPPLIER_REFERENCES } from '../../common/utils/reference-guard';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', example: 'S-001', note: 'كود فريد للمورّد' },
@@ -135,5 +136,15 @@ export class SupplierService extends BaseCrudService<Supplier> {
     }
     Object.assign(supplier, dto);
     return this.supplierRepository.save(supplier);
+  }
+  /**
+   * Delete only when nothing live references it (documents, ledgers, stock…);
+   * otherwise refuse with where it's used. Read-only check — existing and
+   * already-deleted data are never changed.
+   */
+  override async remove(id: string): Promise<void> {
+    const entity = await this.findOne(id);
+    await assertNotReferenced(this.dataSource, id, SUPPLIER_REFERENCES, `المورد «${(entity as { name?: string }).name ?? ''}»`);
+    await super.remove(id);
   }
 }

@@ -236,13 +236,15 @@ export class SalesInvoicePostingService {
           .getRepository(Customer)
           .findOne({ where: { id: invoice.customerId } });
         for (const item of manufacturingItems) {
-          // Per-order BOM entered on the invoice line (per-unit) → total for the order.
+          // Per-order BOM entered on the invoice line PER UNIT. createFromInvoiceLine
+          // scales it by the order quantity — pass it unscaled (scaling here too
+          // doubled every component quantity).
           const lineComponents = await manager
             .getRepository(SalesInvoiceItemComponent)
             .find({ where: { salesInvoiceItemId: item.id }, order: { lineNumber: 'ASC' } });
           const components = lineComponents.map((c) => ({
             componentProductId: c.componentProductId,
-            quantity: round3(c.quantity * item.quantity),
+            quantity: c.quantity,
             warehouseId: c.warehouseId ?? null,
           }));
           await this.manufacturingService.createFromInvoiceLine(

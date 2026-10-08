@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsNumber, IsOptional, Min } from 'class-validator';
+import { IsDateString, IsNumber, IsOptional, IsUUID, Min } from 'class-validator';
 
 /** Confirm delivery of one order line (default quantity = the full remaining). */
 export class ConfirmLineDto {
@@ -12,6 +12,15 @@ export class ConfirmLineDto {
   @IsNumber({}, { message: 'الكمية يجب أن تكون رقماً' })
   @Min(0.0001, { message: 'الكمية يجب أن تكون أكبر من صفر' })
   quantity?: number;
+
+  /**
+   * Manufacturing line whose production order was cancelled or deleted: deliver
+   * the finished product from this warehouse's stock instead (availability checked).
+   */
+  @ApiPropertyOptional({ format: 'uuid', description: 'التسليم من مخزون هذا المخزن بدلاً من أمر التصنيع' })
+  @IsOptional()
+  @IsUUID('4', { message: 'المخزن غير صحيح' })
+  fromWarehouseId?: string;
 }
 
 /** Reverse a confirmed order line. */

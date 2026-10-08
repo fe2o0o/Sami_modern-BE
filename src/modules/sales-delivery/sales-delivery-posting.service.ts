@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { DataSource, EntityManager, In } from 'typeorm';
+import { DataSource, EntityManager, In, Not } from 'typeorm';
 import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { SalesDelivery } from './entities/sales-delivery.entity';
 import { SalesDeliveryItem } from './entities/sales-delivery-item.entity';
@@ -16,6 +16,8 @@ import {
 import { ReverseSalesDeliveryDto } from './dto/reverse-sales-delivery.dto';
 import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
+import { SalesInvoiceItemComponent } from '../sales-invoice/entities/sales-invoice-item-component.entity';
+import { ManufacturingService } from '../manufacturing/manufacturing.service';
 import {
   SalesDeliveryStatus as InvoiceDeliveryStatus,
   SalesLineType,
@@ -52,6 +54,7 @@ export class SalesDeliveryPostingService {
     private readonly sequenceService: SequenceService,
     private readonly journalService: JournalEntryService,
     private readonly dataSource: DataSource,
+    private readonly manufacturingService: ManufacturingService,
   ) {}
 
   async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<SalesDelivery> {
@@ -237,6 +240,7 @@ export class SalesDeliveryPostingService {
     actualDate: string,
     actorId?: string,
     branchScope: string[] | null = null,
+    fromWarehouseId?: string,
   ): Promise<SalesDelivery> {
     return this.dataSource.transaction(async (manager) => {
       const delivery = await this.lock(manager, deliveryId);
@@ -253,11 +257,24 @@ export class SalesDeliveryPostingService {
       if (item.lineType === SalesLineType.MANUFACTURING) {
         const mo = item.manufacturingOrderId
           ? await manager.getRepository(ManufacturingOrder).findOne({ where: { id: item.manufacturingOrderId } })
-          : null;
+          : null; // soft-deleted orders come back null
         const produced =
           mo && (mo.status === ManufacturingOrderStatus.PRODUCED || mo.status === ManufacturingOrderStatus.DONE);
-        if (!produced || !item.warehouseId) {
-          throw new BadRequestException('صنف تصنيع — بانتظار الإنتاج، لا يمكن تسليمه بعد');
+        const orderGone = !mo || mo.status === ManufacturingOrderStatus.CANCELLED;
+        if (!produced) {
+          if (orderGone && fromWarehouseId) {
+            // Production order cancelled/deleted → deliver the finished product
+            // from stock instead (issue() below checks the availability).
+            item.warehouseId = fromWarehouseId;
+          } else if (orderGone) {
+            throw new BadRequestException(
+              'أمر التصنيع لهذا الصنف ملغى أو محذوف — أنشئ أمر تصنيع جديداً للسطر، أو سلّمه من المخزون باختيار المخزن',
+            );
+          } else {
+            throw new BadRequestException(`صنف تصنيع — بانتظار الإنتاج (أمر ${mo!.orderNumber ?? ''})، لا يمكن تسليمه بعد`);
+          }
+        } else if (!item.warehouseId) {
+          throw new BadRequestException('صنف تصنيع — لم يُحدَّد مخزن الإنتاج بعد');
         }
       }
       if (!item.warehouseId) throw new BadRequestException('لم يُحدَّد مخزن لهذا السطر');
@@ -650,4 +667,82 @@ export class SalesDeliveryPostingService {
     const d = new Date(date).getTime();
     if (d < new Date(start).getTime() || d > new Date(end).getTime()) throw new BadRequestException(message);
   }
+  /**
+   * A manufacturing line whose production order was cancelled or deleted gets a
+   * NEW order for the REMAINING quantity, built from the invoice line exactly like
+   * at invoice posting (specs, per-unit BOM, factory, fee pro-rated). Nothing is
+   * posted to the supplier until that order is started.
+   */
+  async recreateManufacturingOrder(
+    deliveryId: string,
+    itemId: string,
+    actorId?: string,
+    branchScope: string[] | null = null,
+  ): Promise<ManufacturingOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const delivery = await this.lock(manager, deliveryId);
+      if (!isWithinBranchScope(delivery.branchId, branchScope)) throw new NotFoundException('لم يتم العثور على إذن التسليم');
+      const item = delivery.items.find((i) => i.id === itemId);
+      if (!item) throw new NotFoundException('السطر غير موجود في إذن التسليم');
+      if (item.lineType !== SalesLineType.MANUFACTURING || !item.salesInvoiceItemId || !delivery.salesInvoiceId) {
+        throw new BadRequestException('هذا الإجراء لأسطر التصنيع المرتبطة بفاتورة فقط');
+      }
+      const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0));
+      if (remaining <= 0) throw new BadRequestException('تم تسليم السطر بالكامل — لا حاجة لأمر تصنيع');
+
+      const moRepo = manager.getRepository(ManufacturingOrder);
+      const active = await moRepo.findOne({
+        where: { salesInvoiceItemId: item.salesInvoiceItemId, status: Not(ManufacturingOrderStatus.CANCELLED) },
+      });
+      if (active) {
+        throw new BadRequestException(`يوجد أمر تصنيع قائم لهذا السطر (${active.orderNumber ?? ''}) — لا حاجة لإنشاء أمر جديد`);
+      }
+
+      const invoice = await manager.getRepository(SalesInvoice).findOne({ where: { id: delivery.salesInvoiceId } });
+      const line = await manager.getRepository(SalesInvoiceItem).findOne({ where: { id: item.salesInvoiceItemId } });
+      if (!invoice || !line) throw new NotFoundException('سطر الفاتورة غير موجود');
+      const comps = await manager
+        .getRepository(SalesInvoiceItemComponent)
+        .find({ where: { salesInvoiceItemId: line.id }, order: { lineNumber: 'ASC' } });
+      const customer = await manager.getRepository(Customer).findOne({ where: { id: invoice.customerId } });
+      const ordered = Number(line.quantity) || 0;
+      const fee = ordered > 0 ? round2(((Number(line.manufacturingFee) || 0) * remaining) / ordered) : 0;
+
+      const order = await this.manufacturingService.createFromInvoiceLine(
+        {
+          productId: line.productId,
+          productName: line.productName,
+          quantity: remaining,
+          customerId: invoice.customerId,
+          customerName: customer?.name ?? null,
+          branchId: invoice.branchId,
+          fiscalYearId: invoice.fiscalYearId,
+          orderDate: todayIso(),
+          deliveryDate: line.deliveryDate,
+          dimensions: line.dimensions,
+          color: line.color,
+          material: line.material,
+          specifications: line.specifications,
+          factorySupplierId: line.factorySupplierId ?? null,
+          manufacturingFee: fee,
+          sourceType: JournalSourceType.SALES_INVOICE,
+          sourceId: invoice.id,
+          sourceNumber: invoice.invoiceNumber,
+          salesInvoiceItemId: line.id,
+          accountingPeriodId: invoice.accountingPeriodId,
+          components: comps.map((c) => ({ componentProductId: c.componentProductId, quantity: c.quantity, warehouseId: c.warehouseId ?? null })),
+          actorId,
+        },
+        manager,
+      );
+      item.manufacturingOrderId = order.id;
+      await manager.getRepository(SalesDeliveryItem).save(item);
+      return order;
+    });
+  }
+}
+
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`;
 }

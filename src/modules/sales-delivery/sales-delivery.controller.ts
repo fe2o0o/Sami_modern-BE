@@ -130,7 +130,20 @@ export class SalesDeliveryController {
     @CurrentUser('userId') actorId: string,
     @BranchScope() branchScope: string[] | null,
   ) {
-    return this.posting.confirmLine(id, itemId, dto.quantity, dto.actualDeliveryDate, actorId, branchScope);
+    return this.posting.confirmLine(id, itemId, dto.quantity, dto.actualDeliveryDate, actorId, branchScope, dto.fromWarehouseId);
+  }
+
+  @Post(':id/items/:itemId/manufacturing-order')
+  @RequirePermissions('sales_deliveries.post', 'manufacturing.create')
+  @ResponseMessage('تم إنشاء أمر تصنيع جديد للسطر')
+  @ApiOperation({ summary: 'إنشاء أمر تصنيع جديد لسطر تصنيع أُلغي/حُذف أمره (للكمية المتبقية)' })
+  recreateManufacturingOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.posting.recreateManufacturingOrder(id, itemId, actorId, branchScope);
   }
 
   @Post(':id/items/:itemId/reverse')
