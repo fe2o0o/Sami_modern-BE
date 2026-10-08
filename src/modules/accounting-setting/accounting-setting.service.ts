@@ -62,8 +62,8 @@ export class AccountingSettingService {
         .filter(
           (a) =>
             a.accountType === rule.accountType &&
-            !!a.accountSubType &&
-            allowed.has(a.accountSubType),
+            // An empty sub-type list = any account of that type.
+            (!rule.subTypes.length || (!!a.accountSubType && allowed.has(a.accountSubType))),
         )
         .map((a) => ({
           id: a.id,
@@ -113,8 +113,8 @@ export class AccountingSettingService {
         );
       }
       if (
-        !account.accountSubType ||
-        !rule.subTypes.includes(account.accountSubType)
+        rule.subTypes.length &&
+        (!account.accountSubType || !rule.subTypes.includes(account.accountSubType))
       ) {
         throw new BadRequestException(
           `${rule.label}: تصنيف الحساب غير مناسب لهذا الإعداد`,

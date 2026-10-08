@@ -38,6 +38,10 @@ export class UpdateAccountingSettingDto {
   @AccountId()
   inventoryAdjustmentAccountId?: string | null;
 
+  /** «بضاعة مباعة لم تُسلَّم» — enables cost of sales at invoice posting. */
+  @AccountId()
+  goodsSoldNotDeliveredAccountId?: string | null;
+
   @AccountId()
   manufacturingFeeAccountId?: string | null;
 

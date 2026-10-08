@@ -16,6 +16,11 @@ import { OpeningBalanceDetailDto } from './opening-balance-detail.dto';
  * existing lines (the editable grid always sends the complete set).
  */
 export class UpdateOpeningBalanceDto {
+  @ApiPropertyOptional({ format: 'uuid', description: 'فرع المستند — تُنسب إليه بنود الأستاذ العام' })
+  @IsOptional()
+  @IsUUID('4', { message: 'الفرع غير صالح' })
+  branchId?: string | null;
+
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID('4', { message: 'الفترة المحاسبية غير صالحة' })

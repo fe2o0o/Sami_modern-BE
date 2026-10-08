@@ -35,6 +35,8 @@ import {
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { SalesDeliveryService } from '../sales-delivery/sales-delivery.service';
+import { ProductComponent } from '../product/entities/product-component.entity';
+import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
 
 /**
  * Owns the accounting/inventory side-effects of a sales invoice. Posting and
@@ -123,6 +125,12 @@ export class SalesInvoicePostingService {
       const customerName = customer?.name ?? '';
       const paymentLabel = invoice.paymentType === SalesPaymentType.CREDIT ? 'آجل' : 'نقدي';
       const lines = this.buildJournalLines(invoice, items, products, settings, invoiceNumber, customerName);
+      // Cost of sales WITH the invoice (when the clearing account is configured):
+      // DR the product category's COGS / CR «بضاعة مباعة لم تُسلَّم». Delivery later
+      // clears it against inventory at the actual cost (difference → COGS).
+      if (settings.goodsSoldNotDeliveredAccountId) {
+        await this.accrueCostOfSales(items, products, settings, invoiceNumber, lines, manager);
+      }
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.SALES_INVOICE,
@@ -498,6 +506,74 @@ export class SalesInvoicePostingService {
     }
 
     return b.build();
+  }
+
+  /**
+   * Estimate each goods line's cost at posting and add the accrual lines.
+   *  - STOCK (inventory-tracked): quantity × the warehouse's weighted-average cost
+   *    (fallback: the product's cost price).
+   *  - MANUFACTURING: per-unit BOM (the invoice line's own components, else the
+   *    product's default BOM) × quantity × each component's current cost, + the fee.
+   *  - SERVICE: nothing.
+   * The COGS account is the product category's (inherited) — products are loaded
+   * through applyEffectiveAccounts — falling back to the settings default.
+   */
+  private async accrueCostOfSales(
+    items: SalesInvoiceItem[],
+    products: Map<string, Product>,
+    settings: AccountingSetting,
+    invoiceNumber: string,
+    lines: JournalLineInput[],
+    manager: EntityManager,
+  ): Promise<void> {
+    const clearing = settings.goodsSoldNotDeliveredAccountId!;
+    const stockRepo = manager.getRepository(WarehouseStock);
+    const productRepo = manager.getRepository(Product);
+    const unitCostIn = async (productId: string, warehouseId: string | null): Promise<number> => {
+      if (warehouseId) {
+        const ws = await stockRepo.findOne({ where: { warehouseId, productId } });
+        if (ws && Number(ws.avgCost) > 0) return Number(ws.avgCost);
+      }
+      // Any warehouse: quantity-weighted average of the positive balances.
+      const rows = (await manager.query(
+        'SELECT COALESCE(SUM(quantity * avg_cost) / NULLIF(SUM(quantity), 0), 0) AS c FROM warehouse_stock WHERE product_id = ? AND quantity > 0 AND deleted_at IS NULL',
+        [productId],
+      )) as Array<{ c: string | null }>;
+      const avg = Number(rows[0]?.c ?? 0);
+      if (avg > 0) return avg;
+      const p = await productRepo.findOne({ where: { id: productId }, select: { id: true, costPrice: true } });
+      return Number(p?.costPrice) || 0;
+    };
+
+    for (const item of items) {
+      const product = products.get(item.productId);
+      if (!product) continue;
+      let estimate = 0;
+      if (item.lineType === SalesLineType.STOCK && product.trackInventory) {
+        estimate = round2(item.quantity * (await unitCostIn(item.productId, item.warehouseId ?? null)));
+      } else if (item.lineType === SalesLineType.MANUFACTURING) {
+        const own = await manager.getRepository(SalesInvoiceItemComponent).find({ where: { salesInvoiceItemId: item.id } });
+        const bom = own.length
+          ? own.map((c) => ({ productId: c.componentProductId, perUnit: Number(c.quantity) || 0, warehouseId: c.warehouseId ?? null }))
+          : (await manager.getRepository(ProductComponent).find({ where: { parentProductId: item.productId } })).map((c) => ({
+              productId: c.componentProductId,
+              perUnit: Number(c.quantity) || 0,
+              warehouseId: null as string | null,
+            }));
+        let components = 0;
+        for (const c of bom) components += c.perUnit * item.quantity * (await unitCostIn(c.productId, c.warehouseId));
+        estimate = round2(components + (Number(item.manufacturingFee) || 0));
+      }
+      item.cogsAccrued = estimate;
+      item.cogsAccruedSettled = 0;
+      item.cogsReleasedQty = 0;
+      if (estimate <= 0) continue;
+      const cogsAcc = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId;
+      if (!cogsAcc) throw new BadRequestException('لا يمكن ترحيل فاتورة المبيعات لأن حساب تكلفة البضاعة المباعة غير محدد (للتصنيف أو في الإعدادات).');
+      const label = `${item.productName ?? product.name ?? ''} (${item.quantity})`;
+      lines.push({ accountId: cogsAcc, debit: estimate, credit: 0, productId: item.productId, description: `تكلفة مبيعات ${label} — فاتورة ${invoiceNumber}${item.lineType === SalesLineType.MANUFACTURING ? ' (تقديرية — تصنيع)' : ''}` });
+      lines.push({ accountId: clearing, debit: 0, credit: estimate, productId: item.productId, description: `بضاعة مباعة لم تُسلَّم ${label} — فاتورة ${invoiceNumber}` });
+    }
   }
 
   /** Validate every account the posting needs is configured. Arabic messages. */

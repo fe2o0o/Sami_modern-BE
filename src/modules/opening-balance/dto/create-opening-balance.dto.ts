@@ -4,6 +4,7 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -33,6 +34,16 @@ export class CreateOpeningBalanceDto {
   @IsOptional()
   @IsBoolean({ message: 'قيمة الموازنة التلقائية يجب أن تكون منطقية' })
   autoBalance?: boolean;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'فرع المستند — تُنسب إليه بنود الأستاذ العام' })
+  @IsOptional()
+  @IsUUID('4', { message: 'الفرع غير صالح' })
+  branchId?: string | null;
+
+  @ApiPropertyOptional({ enum: ['primary', 'supplementary'], default: 'primary', description: 'أساسي أو إضافي (لفرع آخر)' })
+  @IsOptional()
+  @IsIn(['primary', 'supplementary'], { message: 'نوع الرصيد الافتتاحي غير صحيح' })
+  kind?: 'primary' | 'supplementary';
 
   @ApiPropertyOptional({ type: [OpeningBalanceDetailDto] })
   @IsOptional()

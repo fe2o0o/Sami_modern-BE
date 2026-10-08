@@ -273,7 +273,10 @@ export class OpeningBalanceService {
     }
     this.assertDateInFiscalYear(dto.openingDate, fiscalYear);
 
-    await this.ensureNoActiveBalance(fiscalYear.id);
+    const kind = dto.kind ?? 'primary';
+    // Only ONE primary per year; supplementary ones (another branch added later)
+    // sit next to it — overlap with already-entered balances is blocked at validation.
+    if (kind === 'primary') await this.ensureNoActiveBalance(fiscalYear.id);
 
     const autoBalance = dto.autoBalance ?? true;
     const refs = await this.loadDetailRefs(dto.details ?? []);
@@ -284,6 +287,8 @@ export class OpeningBalanceService {
       openingDate: dto.openingDate,
       notes: dto.notes ?? null,
       autoBalance,
+      kind,
+      branchId: dto.branchId ?? null,
       status: OpeningBalanceStatus.DRAFT,
       details: this.buildDetails(dto.details ?? [], refs),
       createdBy: actorId ?? null,
@@ -365,6 +370,7 @@ export class OpeningBalanceService {
       this.assertDateInFiscalYear(dto.openingDate, fiscalYear);
       openingBalance.openingDate = dto.openingDate;
     }
+    if (dto.branchId !== undefined) openingBalance.branchId = dto.branchId ?? null;
     if (dto.notes !== undefined) {
       openingBalance.notes = dto.notes ?? null;
     }
@@ -399,6 +405,7 @@ export class OpeningBalanceService {
     this.assertNotPosted(openingBalance);
 
     const result = await this.runValidation(openingBalance);
+    await this.checkOverlap(openingBalance, result);
 
     // Only promote to "validated" when the checks pass.
     if (result.valid) {
@@ -418,6 +425,7 @@ export class OpeningBalanceService {
     this.assertNotPosted(openingBalance);
 
     const result = await this.runValidation(openingBalance);
+    await this.checkOverlap(openingBalance, result);
     if (!result.valid) {
       throw new BadRequestException(result.errors.join(' | '));
     }
@@ -430,7 +438,8 @@ export class OpeningBalanceService {
     const impact = this.buildImpact(openingBalance, ctx);
     const lines = impact.journalLines.map((l) => ({
       accountId: l.accountId,
-      branchId: l.branchId, // per-line branch → branch-level GL traceability
+      // Per-line branch (cash/bank/stock rows) → else the document's branch (GL rows).
+      branchId: l.branchId ?? openingBalance.branchId ?? null,
       debit: l.debit,
       credit: l.credit,
       description: l.isSystemGenerated ? 'موازنة الأرصدة الافتتاحية' : null,
@@ -755,9 +764,11 @@ export class OpeningBalanceService {
         'يمكن إنشاء نسخة تصحيح فقط من رصيد افتتاحي معكوس',
       );
     }
-    await this.ensureNoActiveBalance(source.fiscalYearId);
+    if ((source.kind ?? 'primary') === 'primary') await this.ensureNoActiveBalance(source.fiscalYearId);
 
     const draft = this.openingBalanceRepository.create({
+      kind: source.kind ?? 'primary',
+      branchId: source.branchId ?? null,
       companyId: source.companyId,
       fiscalYearId: source.fiscalYearId,
       accountingPeriodId: source.accountingPeriodId,
@@ -857,9 +868,50 @@ export class OpeningBalanceService {
     return { affectedProducts: productIds.length, warnings, items };
   }
 
+  /**
+   * A balance must not be entered twice in the same fiscal year: any line that
+   * repeats a reference already present in ANOTHER active (non-reversed) opening
+   * balance — same account+branch, customer, supplier, treasury, bank account or
+   * product+warehouse — is refused. This is what lets a supplementary opening
+   * balance be added for another branch without touching / double-counting the
+   * one already posted. Read-only check.
+   */
+  private async checkOverlap(ob: OpeningBalance, result: { valid: boolean; errors: string[] }): Promise<void> {
+    const others = await this.openingBalanceRepository.find({
+      where: { fiscalYearId: ob.fiscalYearId, status: Not(OpeningBalanceStatus.REVERSED), id: Not(ob.id) },
+      relations: { details: true },
+    });
+    if (!others.length) return;
+    const keyOf = (d: OpeningBalanceDetail): string | null => {
+      if (d.isSystemGenerated) return null;
+      switch (d.referenceType) {
+        case OpeningBalanceReferenceType.CUSTOMER: return d.customerId ? `customer:${d.customerId}` : null;
+        case OpeningBalanceReferenceType.SUPPLIER: return d.supplierId ? `supplier:${d.supplierId}` : null;
+        case OpeningBalanceReferenceType.CASH: return d.treasuryId ? `treasury:${d.treasuryId}` : null;
+        case OpeningBalanceReferenceType.BANK: return d.bankAccountId ? `bank:${d.bankAccountId}` : null;
+        case OpeningBalanceReferenceType.INVENTORY: return d.productId ? `stock:${d.productId}:${d.warehouseId ?? ''}` : null;
+        // General-ledger accounts may legitimately repeat (another branch's assets/equity).
+        default: return null;
+      }
+    };
+    const taken = new Set<string>();
+    for (const o of others) for (const d of o.details ?? []) { const k = keyOf(d); if (k) taken.add(k); }
+    const clashes = new Set<string>();
+    for (const d of ob.details ?? []) {
+      const k = keyOf(d);
+      if (k && taken.has(k)) clashes.add(k.split(':')[0]);
+    }
+    if (!clashes.size) return;
+    const label: Record<string, string> = { customer: 'عميل', supplier: 'مورد', treasury: 'خزينة', bank: 'حساب بنكي', stock: 'صنف في نفس المخزن' };
+    result.valid = false;
+    result.errors.push(
+      `يوجد رصيد افتتاحي آخر فعّال لنفس السنة يحتوي على نفس البند (${[...clashes].map((c) => label[c] ?? c).join('، ')}) — لا يمكن إدخال الرصيد مرتين؛ احذف البنود المكررة من هذا المستند`,
+    );
+  }
+
   private async ensureNoActiveBalance(fiscalYearId: string): Promise<void> {
     const active = await this.openingBalanceRepository.count({
-      where: { fiscalYearId, status: Not(OpeningBalanceStatus.REVERSED) },
+      where: { fiscalYearId, status: Not(OpeningBalanceStatus.REVERSED), kind: 'primary' },
     });
     if (active > 0) {
       throw new ConflictException(

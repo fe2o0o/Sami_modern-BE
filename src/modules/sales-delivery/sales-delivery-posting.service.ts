@@ -326,7 +326,31 @@ export class SalesDeliveryPostingService {
       // A zero weighted-average cost (goods sold before any costed receipt, or an
       // opening balance entered without a cost) means there is no COGS to book:
       // the goods still leave the warehouse, the journal is simply skipped.
-      if (lineCost > 0) await this.journalService.createSystemJournalEntry(
+      // Invoice-accrued cost (if the invoice booked COGS at posting): this delivery
+      // clears its share of «بضاعة مباعة لم تُسلَّم»; the gap to the ACTUAL issue
+      // cost goes to COGS. No accrual (legacy / clearing account not set) → the
+      // whole actual cost is COGS, exactly as before.
+      let accrualPortion = 0;
+      let invItemForAccrual: SalesInvoiceItem | null = null;
+      if (item.salesInvoiceItemId) {
+        invItemForAccrual = await manager.getRepository(SalesInvoiceItem).findOne({ where: { id: item.salesInvoiceItemId } });
+        const unsettled = round2((Number(invItemForAccrual?.cogsAccrued) || 0) - (Number(invItemForAccrual?.cogsAccruedSettled) || 0));
+        if (unsettled > 0 && remaining > 0) {
+          accrualPortion = qty + 1e-6 >= remaining ? unsettled : round2((unsettled * qty) / remaining);
+        }
+      }
+      const variance = round2(lineCost - accrualPortion);
+      const deliveryLines: JournalLineInput[] = [];
+      if (accrualPortion > 0) {
+        if (!settings.goodsSoldNotDeliveredAccountId) {
+          throw new BadRequestException('حساب «بضاعة مباعة لم تُسلَّم» غير محدد في إعدادات المحاسبة');
+        }
+        deliveryLines.push({ accountId: settings.goodsSoldNotDeliveredAccountId, debit: accrualPortion, credit: 0, productId: item.productId, description: `تسوية بضاعة مباعة لم تُسلَّم — ${itemRef}` });
+      }
+      if (variance > 0) deliveryLines.push({ accountId: cogsAcc, debit: variance, credit: 0, description: accrualPortion > 0 ? `فرق تكلفة فعلية عن المقدّرة — ${itemRef}` : `تكلفة تسليم ${itemRef}`, productId: item.productId, warehouseId: item.warehouseId });
+      if (variance < 0) deliveryLines.push({ accountId: cogsAcc, debit: 0, credit: -variance, description: `فرق تكلفة فعلية عن المقدّرة — ${itemRef}`, productId: item.productId, warehouseId: item.warehouseId });
+      if (lineCost > 0) deliveryLines.push({ accountId: invAcc, debit: 0, credit: lineCost, description: `صرف من المخزن ${itemRef}`, productId: item.productId, warehouseId: item.warehouseId });
+      if (deliveryLines.length) await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.SALES_DELIVERY,
           sourceId: delivery.id,
@@ -336,10 +360,7 @@ export class SalesDeliveryPostingService {
           accountingPeriodId: period.id,
           branchId: delivery.branchId,
           description: `تسليم ${itemRef}${delivery.invoiceNumber ? ` — فاتورة ${delivery.invoiceNumber}` : ''} — العميل: ${customerName}`,
-          lines: [
-            { accountId: cogsAcc, debit: lineCost, credit: 0, description: `تكلفة تسليم ${itemRef}`, productId: item.productId, warehouseId: item.warehouseId },
-            { accountId: invAcc, debit: 0, credit: lineCost, description: `صرف من المخزن ${itemRef}`, productId: item.productId, warehouseId: item.warehouseId },
-          ],
+          lines: deliveryLines,
           actorId,
         },
         manager,
@@ -350,6 +371,12 @@ export class SalesDeliveryPostingService {
       item.lineCost = round2((item.lineCost ?? 0) + lineCost);
       item.unitCostAtPost = unitCost;
       item.actualDeliveryDate = actualDate;
+
+      if (accrualPortion > 0 && invItemForAccrual) {
+        item.cogsAccrualSettled = round2((Number(item.cogsAccrualSettled) || 0) + accrualPortion);
+        invItemForAccrual.cogsAccruedSettled = round2((Number(invItemForAccrual.cogsAccruedSettled) || 0) + accrualPortion);
+        await manager.getRepository(SalesInvoiceItem).save(invItemForAccrual);
+      }
 
       // A fully-delivered manufacturing line closes its production order.
       await this.syncManufacturingDone(manager, item, actorId);
@@ -406,7 +433,9 @@ export class SalesDeliveryPostingService {
         );
         await this.applyInvoiceLineDelivery(manager, delivery.salesInvoiceId, item.salesInvoiceItemId, -qty);
       }
-      if (cost > 0) {
+      // Restore the invoice accrual this line had cleared (the goods are owed again).
+      const accrualBack = round2(Number(item.cogsAccrualSettled) || 0);
+      if (cost > 0 || accrualBack > 0) {
         const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
         const product = (await this.loadProducts([item.productId], manager)).get(item.productId)!;
         const cogsAcc = product.cogsAccountId ?? settings!.costOfGoodsSoldAccountId!;
@@ -421,16 +450,33 @@ export class SalesDeliveryPostingService {
             accountingPeriodId: period.id,
             branchId: delivery.branchId,
             description: `عكس تسليم ${product.name ?? ''} — ${delivery.deliveryNumber ?? ''}`,
-            lines: [
-              { accountId: invAcc, debit: cost, credit: 0 },
-              { accountId: cogsAcc, debit: 0, credit: cost },
-            ],
+            lines: ((): JournalLineInput[] => {
+              const out: JournalLineInput[] = [];
+              const variance = round2(cost - accrualBack);
+              if (cost > 0) out.push({ accountId: invAcc, debit: cost, credit: 0, productId: item.productId, warehouseId: item.warehouseId });
+              if (accrualBack > 0) {
+                if (!settings!.goodsSoldNotDeliveredAccountId) throw new BadRequestException('حساب «بضاعة مباعة لم تُسلَّم» غير محدد في إعدادات المحاسبة');
+                out.push({ accountId: settings!.goodsSoldNotDeliveredAccountId, debit: 0, credit: accrualBack, productId: item.productId });
+              }
+              if (variance > 0) out.push({ accountId: cogsAcc, debit: 0, credit: variance, productId: item.productId });
+              if (variance < 0) out.push({ accountId: cogsAcc, debit: -variance, credit: 0, productId: item.productId });
+              return out;
+            })(),
             actorId,
           },
           manager,
         );
       }
 
+      if (accrualBack > 0 && item.salesInvoiceItemId) {
+        const invRepo = manager.getRepository(SalesInvoiceItem);
+        const inv = await invRepo.findOne({ where: { id: item.salesInvoiceItemId } });
+        if (inv) {
+          inv.cogsAccruedSettled = round2(Math.max(0, (Number(inv.cogsAccruedSettled) || 0) - accrualBack));
+          await invRepo.save(inv);
+        }
+      }
+      item.cogsAccrualSettled = 0;
       item.deliveredQuantity = 0;
       item.quantity = 0;
       item.lineCost = 0;

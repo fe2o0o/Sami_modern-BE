@@ -32,6 +32,12 @@ export class AccountingSetting extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   inventoryAdjustmentAccountId!: string | null;
 
+  /** «بضاعة مباعة لم تُسلَّم» — clearing account that lets the cost of sales be
+   *  booked WITH the sales invoice (DR COGS / CR this) and cleared on delivery
+   *  (DR this / CR inventory). Empty → cost is booked at delivery (legacy). */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  goodsSoldNotDeliveredAccountId!: string | null;
+
   /** Credit account for the manufacturing fee on in-house production (labour /
    *  overhead / applied-manufacturing). For a factory order the fee credits the
    *  supplier control account instead. */

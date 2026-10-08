@@ -25,7 +25,10 @@ import { daysBetween, growthPct, previousRange, productMetrics, r2, r3, summaris
  *  Returns         = Σ sales_return_items.netBeforeTax   (POSTED returns, by returnDate)
  *                    — the amount debited back to revenue.
  *  Net revenue     = gross revenue − returns
- *  COGS            = Σ sales_delivery_items.lineCost      (confirmed lines, by actualDeliveryDate)
+ *  COGS            = Σ sales_invoice_items.cogsAccrued    (POSTED invoices, by invoiceDate — cost booked WITH the invoice)
+ *                    + Σ (sales_delivery_items.lineCost − cogsAccrualSettled)  (confirmed lines, by actualDeliveryDate —
+ *                      the actual-vs-estimate gap, or the whole cost for invoices posted without an accrual)
+ *                    − Σ sales_return_items.cogsAccrualReleased (POSTED returns of never-delivered qty, by returnDate)
  *                    − Σ sales_return_items.quantity × costAtPost (POSTED returns)
  *                    — exactly the DR/CR movements on the COGS account.
  *  Gross profit    = net revenue − COGS;  margin % = gross profit / net revenue.
@@ -38,11 +41,12 @@ import { daysBetween, growthPct, previousRange, productMetrics, r2, r3, summaris
  * fields and the summary reports the share of revenue that IS cost-covered
  * (`cogsCoveragePct`) instead of pretending.
  *
- * NOTE on timing: revenue is recognised on the invoice date while COGS is
- * booked on the actual delivery date — identical to the general ledger, so an
- * invoice delivered next month shows its revenue this month and its cost next
- * month; a partially delivered invoice carries the cost of the delivered units
- * only (`quantityDelivered` vs `quantitySold` makes this visible per row).
+ * NOTE on timing (matching): when «بضاعة مباعة لم تُسلَّم» is configured, COGS is
+ * booked WITH the invoice (estimated: stock = avg cost, manufacturing = components
+ * × current cost + fee) and only the actual-vs-estimate gap lands on the delivery
+ * date — so a month's profit pairs its revenue with its cost. Invoices posted
+ * before that (or with no clearing account) keep the legacy rule: cost on the
+ * actual delivery date. Identical to the general ledger either way.
  * Aggregation is done in SQL (grouped by product); only per-product totals
  * reach memory.
  */
@@ -293,28 +297,84 @@ export class ProductIncomeReportService {
     return raw.map((r) => ({ productId: r.productId, qty: r3(n(r.qty)), amount: r2(n(r.amount)), cost: r2(n(r.cost)) }));
   }
 
-  /** COGS as booked on delivery confirmation (DR COGS / CR inventory). */
+  /**
+   * COGS per product exactly as booked on the COGS account in the period:
+   * invoice accruals (invoice date) + delivery entries net of the accrual they
+   * cleared (delivery date) − accruals released by returns (return date).
+   */
   private async cogsAgg(range: Range, q: ProductIncomeQueryDto, scope: BranchScope): Promise<CogsAgg[]> {
+    const [accrued, delivered, released] = await Promise.all([
+      this.accruedQb(range, q, scope, 'ii.productId').getRawMany<{ k: string; v: string }>(),
+      this.deliveryCostQb(range, q, scope, 'di.productId')
+        .addSelect('COALESCE(SUM(di.deliveredQuantity), 0)', 'qty')
+        .getRawMany<{ k: string; v: string; qty: string }>(),
+      this.releasedQb(range, q, scope, 'ri.productId').getRawMany<{ k: string; v: string }>(),
+    ]);
+    const map = new Map<string, CogsAgg>();
+    const get = (id: string) => map.get(id) ?? map.set(id, { productId: id, qty: 0, cogs: 0 }).get(id)!;
+    for (const r of accrued) get(r.k).cogs += n(r.v);
+    for (const r of delivered) { const g = get(r.k); g.cogs += n(r.v); g.qty += n(r.qty); }
+    for (const r of released) get(r.k).cogs -= n(r.v);
+    return [...map.values()].map((c) => ({ productId: c.productId, qty: r3(c.qty), cogs: r2(c.cogs) }));
+  }
+
+  /** Σ cost accrued with POSTED invoices (by invoice date), grouped by `groupExpr`. */
+  private accruedQb(range: Range, q: ProductIncomeQueryDto, scope: BranchScope, groupExpr: string) {
     const qb = this.dataSource
       .createQueryBuilder()
-      .select('di.productId', 'productId')
-      .addSelect('COALESCE(SUM(di.deliveredQuantity), 0)', 'qty')
-      .addSelect('COALESCE(SUM(di.lineCost), 0)', 'cogs')
+      .select(groupExpr, 'k')
+      .addSelect('COALESCE(SUM(ii.cogsAccrued), 0)', 'v')
+      .from(SalesInvoiceItem, 'ii')
+      .innerJoin(SalesInvoice, 'si', 'si.id = ii.salesInvoiceId AND si.deletedAt IS NULL')
+      .where('si.status = :st', { st: POSTED })
+      .andWhere('ii.cogsAccrued > 0')
+      .andWhere('si.invoiceDate BETWEEN :from AND :to', range)
+      .andWhere('ii.deletedAt IS NULL');
+    applyBranchScope(qb, 'si.branchId', scope);
+    if (q.branchId) qb.andWhere('si.branchId = :branchId', { branchId: q.branchId });
+    if (q.customerId) qb.andWhere('si.customerId = :customerId', { customerId: q.customerId });
+    if (q.warehouseId) qb.andWhere('COALESCE(ii.warehouseId, si.warehouseId) = :warehouseId', { warehouseId: q.warehouseId });
+    this.productFilters(qb, 'ii', q);
+    return qb.groupBy(groupExpr);
+  }
+
+  /** Σ delivery cost net of the invoice accrual it cleared (by actual delivery date). */
+  private deliveryCostQb(range: Range, q: ProductIncomeQueryDto, scope: BranchScope, groupExpr: string) {
+    const qb = this.dataSource
+      .createQueryBuilder()
+      .select(groupExpr, 'k')
+      .addSelect('COALESCE(SUM(di.lineCost - di.cogsAccrualSettled), 0)', 'v')
       .from(SalesDeliveryItem, 'di')
       .innerJoin(SalesDelivery, 'sd', 'sd.id = di.salesDeliveryId AND sd.deletedAt IS NULL')
-      .where('di.lineCost > 0')
+      .where('(di.lineCost > 0 OR di.cogsAccrualSettled > 0)')
       .andWhere('di.actualDeliveryDate BETWEEN :from AND :to', range)
       .andWhere('di.deletedAt IS NULL');
     applyBranchScope(qb, 'sd.branchId', scope);
     if (q.branchId) qb.andWhere('sd.branchId = :branchId', { branchId: q.branchId });
     if (q.warehouseId) qb.andWhere('COALESCE(di.warehouseId, sd.warehouseId) = :warehouseId', { warehouseId: q.warehouseId });
-    if (q.customerId) {
-      qb.innerJoin(SalesInvoice, 'si', 'si.id = sd.salesInvoiceId').andWhere('si.customerId = :customerId', { customerId: q.customerId });
-    }
+    if (q.customerId) qb.innerJoin(SalesInvoice, 'si', 'si.id = sd.salesInvoiceId').andWhere('si.customerId = :customerId', { customerId: q.customerId });
     this.productFilters(qb, 'di', q);
-    qb.groupBy('di.productId');
-    const raw = await qb.getRawMany<{ productId: string; qty: string; cogs: string }>();
-    return raw.map((r) => ({ productId: r.productId, qty: r3(n(r.qty)), cogs: r2(n(r.cogs)) }));
+    return qb.groupBy(groupExpr);
+  }
+
+  /** Σ accrual released by POSTED returns of never-delivered quantity (by return date). */
+  private releasedQb(range: Range, q: ProductIncomeQueryDto, scope: BranchScope, groupExpr: string) {
+    const qb = this.dataSource
+      .createQueryBuilder()
+      .select(groupExpr, 'k')
+      .addSelect('COALESCE(SUM(ri.cogsAccrualReleased), 0)', 'v')
+      .from(SalesReturnItem, 'ri')
+      .innerJoin(SalesReturn, 'sr', 'sr.id = ri.salesReturnId AND sr.deletedAt IS NULL')
+      .where('sr.status = :st', { st: POSTED })
+      .andWhere('ri.cogsAccrualReleased > 0')
+      .andWhere('sr.returnDate BETWEEN :from AND :to', range)
+      .andWhere('ri.deletedAt IS NULL');
+    applyBranchScope(qb, 'sr.branchId', scope);
+    if (q.branchId) qb.andWhere('sr.branchId = :branchId', { branchId: q.branchId });
+    if (q.customerId) qb.andWhere('sr.customerId = :customerId', { customerId: q.customerId });
+    if (q.warehouseId) qb.andWhere('COALESCE(ri.warehouseId, sr.warehouseId) = :warehouseId', { warehouseId: q.warehouseId });
+    this.productFilters(qb, 'ri', q);
+    return qb.groupBy(groupExpr);
   }
 
   /** Revenue / returns / COGS per day or month for the trend chart. */
@@ -352,32 +412,24 @@ export class ProductIncomeReportService {
     this.productFilters(retQb, 'ri', q);
     retQb.groupBy('bucket');
 
-    const cogsQb = this.dataSource
-      .createQueryBuilder()
-      .select(`DATE_FORMAT(di.actualDeliveryDate, '${fmt}')`, 'bucket')
-      .addSelect('COALESCE(SUM(di.lineCost), 0)', 'v')
-      .from(SalesDeliveryItem, 'di')
-      .innerJoin(SalesDelivery, 'sd', 'sd.id = di.salesDeliveryId AND sd.deletedAt IS NULL')
-      .where('di.lineCost > 0')
-      .andWhere('di.actualDeliveryDate BETWEEN :from AND :to', range)
-      .andWhere('di.deletedAt IS NULL');
-    applyBranchScope(cogsQb, 'sd.branchId', scope);
-    if (q.branchId) cogsQb.andWhere('sd.branchId = :branchId', { branchId: q.branchId });
-    if (q.warehouseId) cogsQb.andWhere('COALESCE(di.warehouseId, sd.warehouseId) = :warehouseId', { warehouseId: q.warehouseId });
-    if (q.customerId) cogsQb.innerJoin(SalesInvoice, 'si', 'si.id = sd.salesInvoiceId').andWhere('si.customerId = :customerId', { customerId: q.customerId });
-    this.productFilters(cogsQb, 'di', q);
-    cogsQb.groupBy('bucket');
+    const bAcc = `DATE_FORMAT(si.invoiceDate, '${fmt}')`;
+    const bDel = `DATE_FORMAT(di.actualDeliveryDate, '${fmt}')`;
+    const bRel = `DATE_FORMAT(sr.returnDate, '${fmt}')`;
 
-    const [s, r, c] = await Promise.all([
+    const [s, r, ca, cd, cr] = await Promise.all([
       salesQb.getRawMany<{ bucket: string; v: string }>(),
       retQb.getRawMany<{ bucket: string; v: string }>(),
-      cogsQb.getRawMany<{ bucket: string; v: string }>(),
+      this.accruedQb(range, q, scope, bAcc).getRawMany<{ k: string; v: string }>(),
+      this.deliveryCostQb(range, q, scope, bDel).getRawMany<{ k: string; v: string }>(),
+      this.releasedQb(range, q, scope, bRel).getRawMany<{ k: string; v: string }>(),
     ]);
     const map = new Map<string, { bucket: string; grossRevenue: number; returns: number; netRevenue: number; cogs: number }>();
     const get = (b: string) => map.get(b) ?? map.set(b, { bucket: b, grossRevenue: 0, returns: 0, netRevenue: 0, cogs: 0 }).get(b)!;
     for (const x of s) get(x.bucket).grossRevenue = r2(n(x.v));
     for (const x of r) get(x.bucket).returns = r2(n(x.v));
-    for (const x of c) get(x.bucket).cogs = r2(n(x.v));
+    for (const x of ca) get(x.k).cogs = r2(get(x.k).cogs + n(x.v));
+    for (const x of cd) get(x.k).cogs = r2(get(x.k).cogs + n(x.v));
+    for (const x of cr) get(x.k).cogs = r2(get(x.k).cogs - n(x.v));
     for (const e of map.values()) e.netRevenue = r2(e.grossRevenue - e.returns);
     return [...map.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
   }

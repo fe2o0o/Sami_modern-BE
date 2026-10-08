@@ -21,6 +21,7 @@ export class AccountingSettingSeeder implements Seeder {
       | 'finishedGoodsInventoryAccountId'
       | 'costOfGoodsSoldAccountId'
       | 'inventoryAdjustmentAccountId'
+      | 'goodsSoldNotDeliveredAccountId'
       | 'defaultCashAccountId'
       | 'defaultBankAccountId'
       | 'inputVatAccountId'
@@ -38,6 +39,7 @@ export class AccountingSettingSeeder implements Seeder {
     finishedGoodsInventoryAccountId: '133000',
     costOfGoodsSoldAccountId: '510000',
     inventoryAdjustmentAccountId: '612000',
+    goodsSoldNotDeliveredAccountId: '139000',
     defaultCashAccountId: '111000',
     defaultBankAccountId: '112000',
     inputVatAccountId: '122000',

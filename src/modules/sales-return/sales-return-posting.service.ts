@@ -34,6 +34,7 @@ import { Customer } from '../customer/entities/customer.entity';
 import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
 import { SalesDeliveryProgress } from '../sales-delivery/enums/sales-delivery.enum';
 import { SalesDelivery } from '../sales-delivery/entities/sales-delivery.entity';
+import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
 
 /**
  * Accounting/inventory side-effects of a sales return — the inverse of a sale
@@ -90,6 +91,9 @@ export class SalesReturnPostingService {
       const customer = await manager.getRepository(Customer).findOne({ where: { id: ret.customerId }, select: { id: true, name: true } });
       const customerName = customer?.name ?? '';
       const lines = this.buildJournalLines(ret, products, settings, number, customerName);
+      // Returned quantity that was never delivered still carries the invoice's cost
+      // accrual — release it (DR «بضاعة مباعة لم تُسلَّم» / CR COGS).
+      await this.releaseCostAccruals(ret, products, settings, number, lines, manager);
       // A zero-value return (e.g. a free service line) has nothing to book —
       // it still closes the returned quantity but creates no journal/ledger rows.
       const journalEntry = lines.length
@@ -279,6 +283,18 @@ export class SalesReturnPostingService {
         }
       }
 
+      // The reversal journal mirrors the release lines; put the accrual back on the invoice line.
+      for (const ri of ret.items ?? []) {
+        if (!(Number(ri.cogsAccrualReleased) > 0) || !ri.salesInvoiceItemId) continue;
+        const invRepo = manager.getRepository(SalesInvoiceItem);
+        const inv = await invRepo.findOne({ where: { id: ri.salesInvoiceItemId } });
+        if (inv) {
+          inv.cogsAccruedSettled = round2(Math.max(0, (Number(inv.cogsAccruedSettled) || 0) - Number(ri.cogsAccrualReleased)));
+          inv.cogsReleasedQty = round3(Math.max(0, (Number(inv.cogsReleasedQty) || 0) - (Number(ri.cogsAccrualReleasedQty) || 0)));
+          await invRepo.save(inv);
+        }
+      }
+
       ret.status = SalesReturnStatus.REVERSED;
       ret.reversedAt = new Date();
       ret.reversedBy = actorId ?? null;
@@ -331,6 +347,45 @@ export class SalesReturnPostingService {
     }
 
     return b.build();
+  }
+
+  /**
+   * For MANUFACTURING lines the return can cover quantity that was never delivered
+   * (e.g. a cancelled item). That quantity still sits in the invoice's cost accrual;
+   * release its share. Stock lines are only returnable once delivered, so their
+   * accrual is already cleared by the delivery.
+   */
+  private async releaseCostAccruals(
+    ret: SalesReturn,
+    products: Map<string, Product>,
+    settings: AccountingSetting,
+    number: string,
+    lines: JournalLineInput[],
+    manager: EntityManager,
+  ): Promise<void> {
+    const invRepo = manager.getRepository(SalesInvoiceItem);
+    for (const item of ret.items) {
+      if (item.lineType !== SalesLineType.MANUFACTURING || !item.salesInvoiceItemId) continue;
+      const inv = await invRepo.findOne({ where: { id: item.salesInvoiceItemId } });
+      if (!inv) continue;
+      const unsettled = round2((Number(inv.cogsAccrued) || 0) - (Number(inv.cogsAccruedSettled) || 0));
+      if (unsettled <= 0) continue;
+      const open = round3((Number(inv.quantity) || 0) - (Number(inv.deliveredQuantity) || 0) - (Number(inv.cogsReleasedQty) || 0));
+      const relQty = round3(Math.min(Number(item.quantity) || 0, open));
+      if (relQty <= 0) continue;
+      const amount = relQty + 1e-6 >= open ? unsettled : round2((unsettled * relQty) / open);
+      if (amount <= 0) continue;
+      if (!settings.goodsSoldNotDeliveredAccountId) throw new BadRequestException('حساب «بضاعة مباعة لم تُسلَّم» غير محدد في إعدادات المحاسبة');
+      const product = products.get(item.productId);
+      const cogs = product?.cogsAccountId ?? settings.costOfGoodsSoldAccountId!;
+      lines.push({ accountId: settings.goodsSoldNotDeliveredAccountId, debit: amount, credit: 0, productId: item.productId, description: `إلغاء تكلفة مقدّرة لصنف لم يُسلَّم — مردود مبيعات ${number}` });
+      lines.push({ accountId: cogs, debit: 0, credit: amount, productId: item.productId, description: `عكس تكلفة مبيعات صنف لم يُسلَّم — مردود مبيعات ${number}` });
+      item.cogsAccrualReleased = amount;
+      item.cogsAccrualReleasedQty = relQty;
+      inv.cogsAccruedSettled = round2((Number(inv.cogsAccruedSettled) || 0) + amount);
+      inv.cogsReleasedQty = round3((Number(inv.cogsReleasedQty) || 0) + relQty);
+      await invRepo.save(inv);
+    }
   }
 
   private validateAccounts(ret: SalesReturn, products: Map<string, Product>, settings: AccountingSetting): void {
@@ -435,4 +490,8 @@ export class SalesReturnPostingService {
     const d = new Date(date).getTime();
     if (d < new Date(start).getTime() || d > new Date(end).getTime()) throw new BadRequestException(message);
   }
+}
+
+function round3(v: number): number {
+  return Math.round((v + Number.EPSILON) * 1000) / 1000;
 }

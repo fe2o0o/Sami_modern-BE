@@ -113,6 +113,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: SeedAccountNode[] = [
             nameAr: 'مخزون المنتج التام',
             nameEn: 'Finished Goods Inventory',
           },
+          {
+            code: '139000',
+            nameAr: 'بضاعة مباعة لم تُسلَّم',
+            nameEn: 'Goods Sold Not Yet Delivered',
+            description: 'تكلفة البضاعة المفوترة ولم تُسلَّم بعد (رصيد دائن يخصم من المخزون)',
+          },
         ],
       },
     ],

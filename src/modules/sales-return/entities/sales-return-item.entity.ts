@@ -77,4 +77,11 @@ export class SalesReturnItem extends BaseEntity {
   /** Original weighted-average cost the line was sold at. */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   costAtPost!: number;
+
+  /** Invoice cost accrual released by this line (undelivered manufacturing qty). */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  cogsAccrualReleased!: number;
+
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  cogsAccrualReleasedQty!: number;
 }

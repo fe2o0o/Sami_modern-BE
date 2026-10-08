@@ -107,6 +107,19 @@ export class SalesInvoiceItem extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   costAtPost!: number;
 
+  /** Cost of sales booked WITH the invoice (estimate at posting: stock = avg cost,
+   *  manufacturing = components × current cost + fee). */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  cogsAccrued!: number;
+
+  /** Part of `cogsAccrued` already cleared by deliveries or released by returns. */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  cogsAccruedSettled!: number;
+
+  /** Undelivered quantity whose accrual was released by a return (manufacturing lines). */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  cogsReleasedQty!: number;
+
   /** How much of this line has been shipped via delivery notes (≤ quantity). */
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   deliveredQuantity!: number;

@@ -68,6 +68,14 @@ export const SETTING_ACCOUNT_RULES: SettingAccountRule[] = [
     subTypes: [AccountSubType.COGS],
   },
   {
+    // Contra-inventory clearing (credit balance): cost booked with the invoice
+    // for goods not yet delivered. Any asset account (usually under Inventory).
+    key: 'goodsSoldNotDeliveredAccountId',
+    label: 'حساب بضاعة مباعة لم تُسلَّم',
+    accountType: AccountType.ASSET,
+    subTypes: [],
+  },
+  {
     key: 'inventoryAdjustmentAccountId',
     label: 'حساب تسويات المخزون',
     accountType: AccountType.EXPENSE,

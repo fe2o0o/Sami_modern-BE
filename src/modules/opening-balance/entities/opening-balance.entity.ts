@@ -35,6 +35,16 @@ export class OpeningBalance extends BaseEntity {
   })
   status!: OpeningBalanceStatus;
 
+  /** 'primary' = the year's main opening balance (one active per year);
+   *  'supplementary' = an extra one (e.g. another branch) posted on top of it. */
+  @Column({ type: 'varchar', length: 20, default: 'primary' })
+  kind!: 'primary' | 'supplementary';
+
+  /** Branch the document belongs to (e.g. a supplementary one for a new branch):
+   *  its general-ledger lines get this branch dimension. Null = company-level. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  branchId!: string | null;
+
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
 
