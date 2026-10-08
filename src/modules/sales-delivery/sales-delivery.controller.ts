@@ -18,7 +18,7 @@ import { CreateSalesDeliveryDto } from './dto/create-sales-delivery.dto';
 import { UpdateSalesDeliveryDto } from './dto/update-sales-delivery.dto';
 import { SalesDeliveryQueryDto } from './dto/sales-delivery-query.dto';
 import { ReverseSalesDeliveryDto } from './dto/reverse-sales-delivery.dto';
-import { ConfirmLineDto, ReverseLineDto } from './dto/confirm-line.dto';
+import { CancelLineDto, ConfirmLineDto, ReverseLineDto } from './dto/confirm-line.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
@@ -131,6 +131,20 @@ export class SalesDeliveryController {
     @BranchScope() branchScope: string[] | null,
   ) {
     return this.posting.confirmLine(id, itemId, dto.quantity, dto.actualDeliveryDate, actorId, branchScope, dto.fromWarehouseId);
+  }
+
+  @Post(':id/items/:itemId/cancel')
+  @RequirePermissions('sales_deliveries.post', 'sales_returns.create', 'sales_returns.post')
+  @ResponseMessage('تم إلغاء الصنف وإصدار مردود بقيمته للعميل')
+  @ApiOperation({ summary: 'إلغاء سطر تصنيع لم يعد مطلوباً (مردود مُرحّل بالكمية المتبقية + إغلاق السطر)' })
+  cancelLine(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Body() dto: CancelLineDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.posting.cancelLine(id, itemId, { returnDate: dto.returnDate, reason: dto.reason ?? null }, actorId, branchScope);
   }
 
   @Post(':id/items/:itemId/manufacturing-order')

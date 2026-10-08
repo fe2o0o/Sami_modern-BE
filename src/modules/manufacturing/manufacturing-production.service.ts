@@ -265,14 +265,16 @@ export class ManufacturingProductionService {
       const date = dto.productionDate;
       const warehouseId = dto.warehouseId;
 
-      // Fee/supplier: locked once booked at start; otherwise the production-time values.
+      // Fee/supplier. Once the fee was booked at start the FACTORY is locked, but the
+      // final fee may still change at production (the actual price often differs):
+      // the difference is posted here as an adjustment (product cost ↔ supplier/fee acc).
       const feeBooked = !!order.feeJournalEntryId;
-      const fee = feeBooked ? round2(order.manufacturingFee ?? 0) : round2(dto.manufacturingFee ?? order.manufacturingFee ?? 0);
+      const bookedFee = feeBooked ? round2(order.manufacturingFee ?? 0) : 0;
+      const fee = round2(dto.manufacturingFee ?? order.manufacturingFee ?? 0);
+      const feeDiff = feeBooked ? round2(fee - bookedFee) : 0;
+      if (fee < 0) throw new BadRequestException('رسوم التصنيع لا يمكن أن تكون سالبة');
       const factoryId = feeBooked ? order.factorySupplierId : (dto.factorySupplierId ?? order.factorySupplierId ?? null);
       if (feeBooked) {
-        if (dto.manufacturingFee !== undefined && round2(dto.manufacturingFee) !== fee) {
-          throw new BadRequestException('رسوم التصنيع مُرحّلة على المورّد عند بدء التنفيذ ولا يمكن تغييرها هنا');
-        }
         if (dto.factorySupplierId !== undefined && (dto.factorySupplierId ?? null) !== factoryId) {
           throw new BadRequestException('المورّد مُرحّلة عليه الرسوم عند بدء التنفيذ ولا يمكن تغييره هنا');
         }
@@ -324,6 +326,13 @@ export class ManufacturingProductionService {
       // not yet booked → supplier control; in-house → manufacturing-fee account.
       const bookNow = !feeBooked && !!factoryId;
       const feeAcc = bookNow ? settings.supplierControlAccountId : settings.manufacturingFeeAccountId;
+      // Fee changed after it was booked at start → the difference hits the same
+      // counter-account the start posting used (supplier control for a factory,
+      // the internal manufacturing-fee account in-house).
+      const adjustAcc = factoryId ? settings.supplierControlAccountId : settings.manufacturingFeeAccountId;
+      if (Math.abs(feeDiff) >= 0.005 && !adjustAcc) {
+        throw new BadRequestException(factoryId ? 'حساب مراقبة الموردين غير محدد في إعدادات المحاسبة' : 'حساب رسوم التصنيع غير محدد في إعدادات المحاسبة');
+      }
       // Booked at start → already in the product's cost account; no fee account needed here.
       if (fee > 0 && !feeBooked && !feeAcc) {
         throw new BadRequestException(
@@ -377,7 +386,9 @@ export class ManufacturingProductionService {
       const orderRef = `أمر تصنيع ${order.orderNumber ?? ''}`;
       // The fee booked at start already sits in the product's cost account, so
       // production only moves the consumed components into finished goods.
-      const bookedIntoFinished = feeBooked ? componentCost : totalCost;
+      // A raised fee adds its difference to finished goods here; a lowered one is
+      // credited back out of finished goods (separate line below).
+      const bookedIntoFinished = feeBooked ? round2(componentCost + Math.max(feeDiff, 0)) : totalCost;
       const lines: JournalLineInput[] = [];
       if (bookedIntoFinished > 0) {
         lines.push({ accountId: finishedAcc, debit: bookedIntoFinished, credit: 0, productId: order.productId, warehouseId, description: `إنتاج ${order.productName ?? ''} (${order.quantity}) — ${orderRef}` });
@@ -401,7 +412,18 @@ export class ManufacturingProductionService {
           description: bookNow ? `رسوم تصنيع مستحقة للمورد — ${orderRef}` : `تحميل رسوم التصنيع على المنتج — ${orderRef}`,
         });
       }
-      // Fee-only order whose fee was booked at start → nothing left to post here.
+      if (feeBooked && Math.abs(feeDiff) >= 0.005) {
+        const ref = `فرق رسوم التصنيع (${bookedFee} ← ${fee}) — ${orderRef}`;
+        if (feeDiff > 0) {
+          // DR finished goods (in bookedIntoFinished above) / CR supplier (or fee account)
+          lines.push({ accountId: adjustAcc!, debit: 0, credit: feeDiff, supplierId: factoryId ?? undefined, description: `زيادة ${ref}` });
+        } else {
+          const back = Math.abs(feeDiff);
+          lines.push({ accountId: adjustAcc!, debit: back, credit: 0, supplierId: factoryId ?? undefined, description: `تخفيض ${ref}` });
+          lines.push({ accountId: finishedAcc, debit: 0, credit: back, productId: order.productId, warehouseId, description: `تخفيض تكلفة المنتج — ${ref}` });
+        }
+      }
+      // Fee-only order whose fee was booked at start (and unchanged) → nothing left to post here.
       const journal = lines.length
         ? await this.journalService.createSystemJournalEntry(
             {
@@ -433,6 +455,25 @@ export class ManufacturingProductionService {
             debit: 0,
             credit: fee,
             description: this.feeDescription(order),
+            actorId,
+          },
+          manager,
+        );
+      }
+
+      // 4b) Fee changed after start on a factory order → adjust the supplier's statement.
+      if (feeBooked && factoryId && Math.abs(feeDiff) >= 0.005) {
+        await this.supplierLedger.record(
+          {
+            supplierId: factoryId,
+            transactionDate: date,
+            type: SupplierTransactionType.ADJUSTMENT,
+            sourceType: JournalSourceType.MANUFACTURING,
+            sourceId: order.id,
+            sourceNumber: order.orderNumber,
+            debit: feeDiff < 0 ? Math.abs(feeDiff) : 0,
+            credit: feeDiff > 0 ? feeDiff : 0,
+            description: `تعديل رسوم التصنيع عند الإنتاج (${bookedFee} ← ${fee}) — ${this.feeDescription(order)}`,
             actorId,
           },
           manager,

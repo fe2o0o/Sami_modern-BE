@@ -330,6 +330,29 @@ export class SalesInvoiceService {
     };
   }
 
+  /** Invoice lines cancelled from the delivery order, with the credit note that covered them. */
+  private async cancelledLines(invoice: SalesInvoice): Promise<
+    { salesInvoiceItemId: string; quantity: number; amount: number; returnNumber: string | null }[]
+  > {
+    const ids = (invoice.items ?? []).map((i) => i.id);
+    if (!ids.length) return [];
+    const rows = (await this.dataSource.query(
+      `SELECT di.sales_invoice_item_id AS itemId, di.cancelled_quantity AS qty, r.return_number AS returnNumber,
+              COALESCE((SELECT SUM(ri.line_total) FROM sales_return_items ri
+                        WHERE ri.sales_return_id = r.id AND ri.sales_invoice_item_id = di.sales_invoice_item_id AND ri.deleted_at IS NULL), 0) AS amount
+         FROM sales_delivery_items di
+         JOIN sales_returns r ON r.id = di.cancel_return_id AND r.deleted_at IS NULL AND r.status = 'posted'
+        WHERE di.deleted_at IS NULL AND di.cancelled_quantity > 0 AND di.sales_invoice_item_id IN (${ids.map(() => '?').join(',')})`,
+      ids,
+    )) as Array<{ itemId: string; qty: string; returnNumber: string | null; amount: string }>;
+    return rows.map((r) => ({
+      salesInvoiceItemId: r.itemId,
+      quantity: Number(r.qty) || 0,
+      amount: round2(Number(r.amount) || 0),
+      returnNumber: r.returnNumber,
+    }));
+  }
+
   async findOne(id: string, branchScope: BranchScope = null): Promise<SalesInvoice> {
     const invoice = await this.invoiceRepository.findOne({
       where: { id },
@@ -358,8 +381,12 @@ export class SalesInvoiceService {
         this.userNames([invoice.createdBy, invoice.postedBy, invoice.reversedBy]),
       ]);
 
+    // Lines cancelled on the delivery order (credited by a posted return) — the
+    // printout hides them and shows the credit, so it matches what is owed.
+    const cancelledLines = await this.cancelledLines(invoice);
     return {
       ...invoice,
+      cancelledLines,
       customerName: customer?.name ?? null,
       warehouseName: warehouse?.name ?? null,
       branchName: branch?.name ?? null,

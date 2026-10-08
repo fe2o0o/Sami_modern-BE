@@ -35,10 +35,10 @@ const seeders: Seeder[] = [
   new TreasuryBankSeeder(),
   new UnitSeeder(),
   new BrandSeeder(),
-  new ProductCategorySeeder(),
-  new ProductSeeder(),
-  new CustomerSeeder(),
-  new SupplierSeeder(),
+  // new ProductCategorySeeder(),
+  // new ProductSeeder(),
+  // new CustomerSeeder(),
+  // new SupplierSeeder(),
 ];
 
 /**

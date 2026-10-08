@@ -31,6 +31,9 @@ import {
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { Customer } from '../customer/entities/customer.entity';
+import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
+import { SalesDeliveryProgress } from '../sales-delivery/enums/sales-delivery.enum';
+import { SalesDelivery } from '../sales-delivery/entities/sales-delivery.entity';
 
 /**
  * Accounting/inventory side-effects of a sales return — the inverse of a sale
@@ -255,6 +258,25 @@ export class SalesReturnPostingService {
           },
           manager,
         );
+      }
+
+      // A return that CANCELLED a delivery-order line: un-cancel it so the
+      // quantity is owed again (the customer was just re-charged by this reversal).
+      const cancelled = await manager.getRepository(SalesDeliveryItem).find({ where: { cancelReturnId: ret.id } });
+      for (const line of cancelled) {
+        const back = (ret.items ?? []).filter((i) => i.salesInvoiceItemId === line.salesInvoiceItemId).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+        line.cancelledQuantity = Math.max(0, Math.round(((Number(line.cancelledQuantity) || 0) - back) * 1000) / 1000);
+        line.cancelReturnId = null;
+        await manager.getRepository(SalesDeliveryItem).save(line);
+        const order = await manager.getRepository(SalesDelivery).findOne({ where: { id: line.salesDeliveryId }, relations: { items: true } });
+        if (order) {
+          const goods = order.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
+          const done = (i: SalesDeliveryItem) => (Number(i.deliveredQuantity) || 0) + (Number(i.cancelledQuantity) || 0) + 1e-6 >= (Number(i.orderedQuantity) || 0);
+          order.deliveryProgress = goods.length && goods.every(done)
+            ? SalesDeliveryProgress.DELIVERED
+            : goods.some((i) => (Number(i.deliveredQuantity) || 0) > 1e-6) ? SalesDeliveryProgress.PARTIAL : SalesDeliveryProgress.PENDING;
+          await manager.getRepository(SalesDelivery).save(order);
+        }
       }
 
       ret.status = SalesReturnStatus.REVERSED;

@@ -19,6 +19,7 @@ import { StockModule } from '../stock/stock.module';
 import { SequenceModule } from '../sequence/sequence.module';
 import { JournalEntryModule } from '../journal-entry/journal-entry.module';
 import { ManufacturingModule } from '../manufacturing/manufacturing.module';
+import { SalesReturnModule } from '../sales-return/sales-return.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { ManufacturingModule } from '../manufacturing/manufacturing.module';
     SequenceModule,
     JournalEntryModule,
     ManufacturingModule,
+    SalesReturnModule,
   ],
   controllers: [SalesDeliveryController],
   providers: [SalesDeliveryService, SalesDeliveryPostingService],

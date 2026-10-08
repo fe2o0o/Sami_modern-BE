@@ -18,6 +18,8 @@ import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
 import { SalesInvoiceItemComponent } from '../sales-invoice/entities/sales-invoice-item-component.entity';
 import { ManufacturingService } from '../manufacturing/manufacturing.service';
+import { SalesReturnService } from '../sales-return/sales-return.service';
+import { SalesReturnPostingService } from '../sales-return/sales-return-posting.service';
 import {
   SalesDeliveryStatus as InvoiceDeliveryStatus,
   SalesLineType,
@@ -55,6 +57,8 @@ export class SalesDeliveryPostingService {
     private readonly journalService: JournalEntryService,
     private readonly dataSource: DataSource,
     private readonly manufacturingService: ManufacturingService,
+    private readonly salesReturnService: SalesReturnService,
+    private readonly salesReturnPosting: SalesReturnPostingService,
   ) {}
 
   async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<SalesDelivery> {
@@ -278,7 +282,7 @@ export class SalesDeliveryPostingService {
         }
       }
       if (!item.warehouseId) throw new BadRequestException('لم يُحدَّد مخزن لهذا السطر');
-      const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0));
+      const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0) - (item.cancelledQuantity ?? 0));
       const qty = round3(quantity ?? remaining);
       if (qty <= 0) throw new BadRequestException('لا توجد كمية متبقية للتسليم');
       if (qty - remaining > 1e-6) throw new BadRequestException(`الكمية تتجاوز المتبقي (${remaining})`);
@@ -452,7 +456,7 @@ export class SalesDeliveryPostingService {
     const repo = manager.getRepository(ManufacturingOrder);
     const mo = await repo.findOne({ where: { id: item.manufacturingOrderId } });
     if (!mo) return;
-    const fullyDelivered = (item.deliveredQuantity ?? 0) + 1e-6 >= (item.orderedQuantity ?? 0);
+    const fullyDelivered = (item.deliveredQuantity ?? 0) + (item.cancelledQuantity ?? 0) + 1e-6 >= (item.orderedQuantity ?? 0);
     if (fullyDelivered && mo.status === ManufacturingOrderStatus.PRODUCED) {
       mo.status = ManufacturingOrderStatus.DONE;
       mo.doneAt = new Date();
@@ -472,7 +476,8 @@ export class SalesDeliveryPostingService {
     const stock = items.filter((i) => i.lineType !== SalesLineType.SERVICE);
     if (!stock.length) return SalesDeliveryProgress.PENDING;
     const anyDelivered = stock.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
-    const allDelivered = stock.every((i) => (i.deliveredQuantity ?? 0) + 1e-6 >= (i.orderedQuantity ?? 0));
+    // A cancelled quantity counts as closed (it will never ship).
+    const allDelivered = stock.every((i) => (i.deliveredQuantity ?? 0) + (i.cancelledQuantity ?? 0) + 1e-6 >= (i.orderedQuantity ?? 0));
     return allDelivered
       ? SalesDeliveryProgress.DELIVERED
       : anyDelivered
@@ -498,9 +503,21 @@ export class SalesDeliveryPostingService {
       await manager.getRepository(SalesInvoiceItem).save(inv);
     }
     const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
+    // Quantities cancelled on the delivery order (credited by a return) are closed too.
+    const cancelledRows = stockItems.length
+      ? await manager.getRepository(SalesDeliveryItem).find({
+          where: { salesInvoiceItemId: In(stockItems.map((i) => i.id)) },
+          select: { id: true, salesInvoiceItemId: true, cancelledQuantity: true },
+        })
+      : [];
+    const cancelledBy = new Map<string, number>();
+    for (const r of cancelledRows) {
+      if (r.salesInvoiceItemId) cancelledBy.set(r.salesInvoiceItemId, (cancelledBy.get(r.salesInvoiceItemId) ?? 0) + (Number(r.cancelledQuantity) || 0));
+    }
     const anyDelivered = stockItems.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
     const allDelivered =
-      stockItems.length > 0 && stockItems.every((i) => (i.deliveredQuantity ?? 0) + 1e-6 >= i.quantity);
+      stockItems.length > 0 &&
+      stockItems.every((i) => (i.deliveredQuantity ?? 0) + (cancelledBy.get(i.id) ?? 0) + 1e-6 >= i.quantity);
     invoice.deliveryStatus = !stockItems.length
       ? InvoiceDeliveryStatus.NOT_APPLICABLE
       : allDelivered
@@ -549,9 +566,21 @@ export class SalesDeliveryPostingService {
     await manager.getRepository(SalesInvoiceItem).save(invoice.items);
 
     const stockItems = invoice.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
+    // Quantities cancelled on the delivery order (credited by a return) are closed too.
+    const cancelledRows = stockItems.length
+      ? await manager.getRepository(SalesDeliveryItem).find({
+          where: { salesInvoiceItemId: In(stockItems.map((i) => i.id)) },
+          select: { id: true, salesInvoiceItemId: true, cancelledQuantity: true },
+        })
+      : [];
+    const cancelledBy = new Map<string, number>();
+    for (const r of cancelledRows) {
+      if (r.salesInvoiceItemId) cancelledBy.set(r.salesInvoiceItemId, (cancelledBy.get(r.salesInvoiceItemId) ?? 0) + (Number(r.cancelledQuantity) || 0));
+    }
     const anyDelivered = stockItems.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
     const allDelivered =
-      stockItems.length > 0 && stockItems.every((i) => (i.deliveredQuantity ?? 0) + 1e-6 >= i.quantity);
+      stockItems.length > 0 &&
+      stockItems.every((i) => (i.deliveredQuantity ?? 0) + (cancelledBy.get(i.id) ?? 0) + 1e-6 >= i.quantity);
     invoice.deliveryStatus = !stockItems.length
       ? InvoiceDeliveryStatus.NOT_APPLICABLE
       : allDelivered
@@ -687,7 +716,7 @@ export class SalesDeliveryPostingService {
       if (item.lineType !== SalesLineType.MANUFACTURING || !item.salesInvoiceItemId || !delivery.salesInvoiceId) {
         throw new BadRequestException('هذا الإجراء لأسطر التصنيع المرتبطة بفاتورة فقط');
       }
-      const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0));
+      const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0) - (item.cancelledQuantity ?? 0));
       if (remaining <= 0) throw new BadRequestException('تم تسليم السطر بالكامل — لا حاجة لأمر تصنيع');
 
       const moRepo = manager.getRepository(ManufacturingOrder);
@@ -738,6 +767,73 @@ export class SalesDeliveryPostingService {
       item.manufacturingOrderId = order.id;
       await manager.getRepository(SalesDeliveryItem).save(item);
       return order;
+    });
+  }
+  /**
+   * CANCEL a manufacturing line the customer no longer wants: its undelivered
+   * quantity is credited through a sales return that is created AND posted
+   * (reduces revenue + VAT and the customer's balance — see SalesReturnPostingService.post),
+   * then the line is closed on the order and hidden from the order and the prints.
+   * The posted invoice itself is never edited. Reversing that return re-opens the line.
+   */
+  async cancelLine(
+    deliveryId: string,
+    itemId: string,
+    input: { returnDate: string; reason?: string | null },
+    actorId?: string,
+    branchScope: string[] | null = null,
+  ): Promise<SalesDelivery> {
+    const delivery = await this.dataSource.getRepository(SalesDelivery).findOne({ where: { id: deliveryId }, relations: { items: true } });
+    if (!delivery || !isWithinBranchScope(delivery.branchId, branchScope)) throw new NotFoundException('لم يتم العثور على إذن التسليم');
+    const item = delivery.items.find((i) => i.id === itemId);
+    if (!item) throw new NotFoundException('السطر غير موجود في إذن التسليم');
+    if (item.lineType !== SalesLineType.MANUFACTURING || !item.salesInvoiceItemId || !delivery.salesInvoiceId) {
+      throw new BadRequestException('إلغاء السطر متاح لأصناف التصنيع المرتبطة بفاتورة فقط');
+    }
+    const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0) - (item.cancelledQuantity ?? 0));
+    if (remaining <= 0) throw new BadRequestException('لا توجد كمية متبقية لإلغائها');
+    if (item.manufacturingOrderId) {
+      const mo = await this.dataSource.getRepository(ManufacturingOrder).findOne({ where: { id: item.manufacturingOrderId } });
+      if (mo && mo.status !== ManufacturingOrderStatus.CANCELLED) {
+        throw new BadRequestException(`أمر التصنيع ${mo.orderNumber ?? ''} ما زال قائماً — ألغِه أو احذفه أولاً قبل إلغاء السطر`);
+      }
+    }
+    const { fiscalYear, period } = await this.resolvePostingContext(input.returnDate, this.dataSource.manager);
+
+    // 1) credit note for the cancelled quantity (draft → post). A failed post
+    //    leaves no orphan draft behind.
+    const draft = await this.salesReturnService.create(
+      {
+        salesInvoiceId: delivery.salesInvoiceId,
+        returnDate: input.returnDate,
+        fiscalYearId: fiscalYear.id,
+        accountingPeriodId: period.id,
+        notes: `إلغاء صنف «${item.productName ?? ''}» (${remaining}) من إذن التسليم${delivery.invoiceNumber ? ` — فاتورة ${delivery.invoiceNumber}` : ''}${input.reason ? ` — ${input.reason}` : ''}`,
+        items: [{ salesInvoiceItemId: item.salesInvoiceItemId, quantity: remaining }],
+      } as never,
+      actorId,
+      branchScope,
+    );
+    let posted: { id: string };
+    try {
+      posted = await this.salesReturnPosting.post(draft.id, actorId, branchScope);
+    } catch (err) {
+      await this.salesReturnService.remove(draft.id, actorId, branchScope).catch(() => undefined);
+      throw err;
+    }
+
+    // 2) close the line on the order (+ invoice delivery status)
+    return this.dataSource.transaction(async (manager) => {
+      const locked = await this.lock(manager, deliveryId);
+      const line = locked.items.find((i) => i.id === itemId)!;
+      line.cancelledQuantity = round3((line.cancelledQuantity ?? 0) + remaining);
+      line.cancelReturnId = posted.id;
+      await manager.getRepository(SalesDeliveryItem).save(line);
+      locked.deliveryProgress = this.computeProgress(locked.items);
+      locked.updatedBy = actorId ?? null;
+      await manager.getRepository(SalesDelivery).save(locked);
+      await this.applyInvoiceLineDelivery(manager, locked.salesInvoiceId!, line.salesInvoiceItemId!, 0);
+      return this.reload(manager, deliveryId);
     });
   }
 }

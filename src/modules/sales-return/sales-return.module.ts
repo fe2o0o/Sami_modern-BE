@@ -45,6 +45,6 @@ import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
   ],
   controllers: [SalesReturnController],
   providers: [SalesReturnService, SalesReturnPostingService],
-  exports: [SalesReturnService],
+  exports: [SalesReturnService, SalesReturnPostingService],
 })
 export class SalesReturnModule {}

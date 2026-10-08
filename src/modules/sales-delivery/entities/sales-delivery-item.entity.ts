@@ -54,6 +54,14 @@ export class SalesDeliveryItem extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   deliveredQuantity!: number;
 
+  /** Quantity cancelled (won't be delivered) — credited via the posted return `cancelReturnId`. */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  cancelledQuantity!: number;
+
+  /** The sales return (credit note) that credited the cancelled quantity. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  cancelReturnId!: string | null;
+
   /** Actual delivery date of the last confirmation on this line. */
   @Column({ type: 'date', nullable: true })
   actualDeliveryDate!: string | null;
