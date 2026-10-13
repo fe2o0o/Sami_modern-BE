@@ -38,6 +38,13 @@ export class ProductCategoryController {
     return this.categoryService.tree();
   }
 
+  @Get('summary')
+  @RequirePermissions('product_catalog.view')
+  @ApiOperation({ summary: 'ملخص التصنيفات: إجمالي المنتجات والمنتجات بدون تصنيف' })
+  summary() {
+    return this.categoryService.summary();
+  }
+
   @Get(':id')
   @RequirePermissions('product_catalog.view')
   @ApiOperation({ summary: 'عرض تصنيف' })

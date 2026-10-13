@@ -55,6 +55,8 @@ export interface SalesInvoiceListItem {
   totalAmount: number;
   remainingAmount: number;
   status: SalesInvoiceStatus;
+  /** Sales employees on the invoice (its commission lines). */
+  salesEmployees: string[];
 }
 
 /** A product row for the invoice product picker (image/price/available aware). */
@@ -242,6 +244,23 @@ export class SalesInvoiceService {
       this.warehouseRepository,
       items.map((i) => i.warehouseId).filter((v): v is string => !!v),
     );
+    // Sales employees per invoice (commission lines), in line order.
+    const reps = new Map<string, string[]>();
+    if (items.length) {
+      const lines = await this.dataSource
+        .getRepository(SalesInvoiceCommission)
+        .createQueryBuilder('c')
+        .select(['c.salesInvoiceId AS invoiceId', 'c.employeeName AS name'])
+        .where('c.salesInvoiceId IN (:...ids)', { ids: items.map((i) => i.id) })
+        .orderBy('c.lineNumber', 'ASC')
+        .getRawMany<{ invoiceId: string; name: string | null }>();
+      for (const l of lines) {
+        if (!l.name) continue;
+        const list = reps.get(l.invoiceId) ?? [];
+        if (!list.includes(l.name)) list.push(l.name);
+        reps.set(l.invoiceId, list);
+      }
+    }
 
     const rows: SalesInvoiceListItem[] = items.map((i) => ({
       id: i.id,
@@ -256,6 +275,7 @@ export class SalesInvoiceService {
       totalAmount: i.totalAmount,
       remainingAmount: i.remainingAmount,
       status: i.status,
+      salesEmployees: reps.get(i.id) ?? [],
     }));
 
     return paginate(rows, total, query.page, query.perPage);
@@ -287,6 +307,69 @@ export class SalesInvoiceService {
     if (query.status) qb.andWhere('si.status = :st', { st: query.status });
     if (query.dateFrom) qb.andWhere('si.invoiceDate >= :df', { df: query.dateFrom });
     if (query.dateTo) qb.andWhere('si.invoiceDate <= :dt', { dt: query.dateTo });
+    if (query.employeeId) {
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM sales_invoice_commissions sic WHERE sic.sales_invoice_id = si.id AND sic.employee_id = :emp AND sic.deleted_at IS NULL)',
+        { emp: query.employeeId },
+      );
+    }
+  }
+
+  /**
+   * Customer-ledger figures for the invoices page (not tied to single invoices):
+   *  - balance:  what customers owe now (Σ debit − credit), all time;
+   *  - payments: money received from customers in the period — receipt
+   *    vouchers + cash-invoice collections + manual entries that credited the
+   *    customer and moved cash into a treasury/bank — net of reversals.
+   * Respects the customer and date filters.
+   */
+  private async customerLedgerFigures(query: SalesInvoiceQueryDto): Promise<{ balance: number; payments: number }> {
+    const params: Record<string, unknown> = {};
+    let customer = '';
+    if (query.customerId) {
+      customer = ' AND ct.customer_id = :cu';
+      params.cu = query.customerId;
+    }
+    let period = '';
+    if (query.dateFrom) {
+      period += ' AND ct.transaction_date >= :df';
+      params.df = query.dateFrom;
+    }
+    if (query.dateTo) {
+      period += ' AND ct.transaction_date <= :dt';
+      params.dt = query.dateTo;
+    }
+    const [bal] = await this.dataSource.query(
+      ...this.bind(`SELECT COALESCE(SUM(ct.debit - ct.credit), 0) AS v FROM customer_transactions ct WHERE ct.deleted_at IS NULL${customer}`, params),
+    );
+    const [pay] = await this.dataSource.query(
+      ...this.bind(
+        `SELECT COALESCE(SUM(
+           CASE
+             WHEN ct.type = 'receipt' THEN ct.credit
+             WHEN ct.type = 'reversal' AND ct.source_type IN ('receipt_voucher', 'sales_invoice') THEN -ct.debit
+             WHEN ct.type IN ('adjustment', 'reversal') AND (
+               EXISTS (SELECT 1 FROM treasury_transactions tt WHERE tt.source_id = ct.source_id AND tt.deleted_at IS NULL)
+               OR EXISTS (SELECT 1 FROM bank_transactions bt WHERE bt.source_id = ct.source_id AND bt.deleted_at IS NULL)
+             ) THEN ct.credit - ct.debit
+             ELSE 0
+           END), 0) AS v
+         FROM customer_transactions ct
+         WHERE ct.deleted_at IS NULL${customer}${period}`,
+        params,
+      ),
+    );
+    return { balance: round2(Number(bal?.v ?? 0)), payments: round2(Number(pay?.v ?? 0)) };
+  }
+
+  /** Named params (:x) → positional (?) for a raw query. */
+  private bind(sql: string, params: Record<string, unknown>): [string, unknown[]] {
+    const values: unknown[] = [];
+    const text = sql.replace(/:(\w+)/g, (_m, k: string) => {
+      values.push(params[k]);
+      return '?';
+    });
+    return [text, values];
   }
 
   /**
@@ -312,6 +395,7 @@ export class SalesInvoiceService {
       .setParameter('basis', basis)
       .getRawOne<Record<string, string | null>>();
     const n = (k: string) => Number(raw?.[k] ?? 0) || 0;
+    const ledger = await this.customerLedgerFigures(query);
     const total = round2(n('total'));
     const basisCount = basis === SalesInvoiceStatus.POSTED ? n('posted') : n('cnt');
     return {
@@ -326,6 +410,8 @@ export class SalesInvoiceService {
       totalAmount: total,
       paidAmount: round2(n('paid')),
       remainingAmount: round2(n('remaining')),
+      customersBalance: ledger.balance,
+      customerPayments: ledger.payments,
       averageInvoice: basisCount ? round2(total / basisCount) : 0,
     };
   }

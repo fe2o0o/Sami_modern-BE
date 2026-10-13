@@ -44,4 +44,9 @@ export class SalesInvoiceQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsDateString()
   dateTo?: string;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'موظف المبيعات (من سطور العمولة)' })
+  @IsOptional()
+  @IsUUID('4', { message: 'معرّف الموظف غير صالح' })
+  employeeId?: string;
 }

@@ -31,6 +31,7 @@ import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/ex
 import { str, optStr, optNum, bool, enumFromLabel } from '../../common/excel/import.helpers';
 import { assertNotReferenced, PRODUCT_REFERENCES } from '../../common/utils/reference-guard';
 
+import { categorySubtreeIds } from '../product-category/category-subtree.util';
 /** Minimal shape of a Multer file (memory storage). Avoids a @types/multer dep. */
 export interface UploadedImage {
   originalname: string;
@@ -218,7 +219,8 @@ export class ProductService {
       .leftJoinAndSelect('product.unit', 'unit')
       .leftJoinAndSelect('product.images', 'images');
 
-    this.applyListFilters(qb, query);
+    const categoryIds = await categorySubtreeIds(this.productRepository.manager, query.categoryId);
+    this.applyListFilters(qb, query, categoryIds);
 
     const sortBy = SORTABLE.includes(query.sortBy ?? '') ? query.sortBy! : 'createdAt';
     qb.orderBy(`product.${sortBy}`, query.order);
@@ -230,15 +232,16 @@ export class ProductService {
   }
 
   /** The list's filters (alias `product`), shared by the page query and the summary cards. */
-  private applyListFilters(qb: SelectQueryBuilder<Product>, query: QueryProductDto): void {
+  private applyListFilters(qb: SelectQueryBuilder<Product>, query: QueryProductDto, categoryIds: string[] | null): void {
     if (query.search) {
       qb.andWhere(
         '(product.code LIKE :s OR product.name LIKE :s OR product.nameEn LIKE :s OR product.barcode LIKE :s)',
         { s: `%${query.search}%` },
       );
     }
-    if (query.categoryId) {
-      qb.andWhere('product.categoryId = :categoryId', { categoryId: query.categoryId });
+    // A parent category covers the products of all its subcategories.
+    if (categoryIds) {
+      qb.andWhere('product.categoryId IN (:...categoryIds)', { categoryIds });
     }
     if (query.brandId) {
       qb.andWhere('product.brandId = :brandId', { brandId: query.brandId });
@@ -257,8 +260,9 @@ export class ProductService {
    * products, limited to the caller's branch scope (warehouses of their branches).
    */
   async summary(query: QueryProductDto, branchScope: BranchScope = null) {
+    const categoryIds = await categorySubtreeIds(this.productRepository.manager, query.categoryId);
     const qb = this.productRepository.createQueryBuilder('product');
-    this.applyListFilters(qb, query);
+    this.applyListFilters(qb, query, categoryIds);
     const raw = await qb
       .select('COUNT(*)', 'cnt')
       .addSelect('SUM(CASE WHEN product.isActive = 1 THEN 1 ELSE 0 END)', 'active')
@@ -274,7 +278,7 @@ export class ProductService {
       .createQueryBuilder('product')
       .innerJoin(WarehouseStock, 'ws', 'ws.productId = product.id AND ws.deletedAt IS NULL')
       .innerJoin(Warehouse, 'w', 'w.id = ws.warehouseId AND w.deletedAt IS NULL');
-    this.applyListFilters(stockQb, query);
+    this.applyListFilters(stockQb, query, categoryIds);
     applyBranchScope(stockQb, 'w.branchId', branchScope);
     const stock = await stockQb
       .select('COALESCE(SUM(ws.quantity * ws.avgCost), 0)', 'value')

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { categorySubtreeIds } from '../product-category/category-subtree.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch } from "../../common/utils/branch-scope.util";
 import { EntityManager, Repository } from 'typeorm';
@@ -488,19 +489,20 @@ export class StockService {
     }
   }
 
-  /** Paginated on-hand balances, optionally filtered by warehouse. */
+  /** Paginated on-hand balances, optionally filtered by warehouse and category (incl. subcategories). */
   async findAll(
-    query: PaginationQueryDto,
+    query: PaginationQueryDto & { categoryId?: string },
     warehouseId?: string,
     branchScope: BranchScope = null,
   ): Promise<PaginatedResult<WarehouseStock>> {
+    const categoryIds = await this.categorySubtree(query.categoryId);
     const qb = this.stockRepository
       .createQueryBuilder('stock')
       .leftJoinAndSelect('stock.product', 'product')
       .leftJoinAndSelect('product.unit', 'unit')
       .leftJoinAndSelect('stock.warehouse', 'warehouse');
 
-    this.applyBalanceFilters(qb, { search: query.search, warehouseId }, branchScope);
+    this.applyBalanceFilters(qb, { search: query.search, warehouseId, categoryIds }, branchScope);
 
     qb.orderBy('product.code', query.order);
     qb.skip(query.skip).take(query.perPage);
@@ -515,7 +517,7 @@ export class StockService {
    */
   private applyBalanceFilters(
     qb: ReturnType<Repository<WarehouseStock>['createQueryBuilder']>,
-    query: { search?: string; warehouseId?: string },
+    query: { search?: string; warehouseId?: string; categoryIds?: string[] | null },
     branchScope: BranchScope,
   ): void {
     // Branch-restricted users only see stock in their own branch's warehouses.
@@ -528,6 +530,14 @@ export class StockService {
         s: `%${query.search}%`,
       });
     }
+    if (query.categoryIds) {
+      qb.andWhere('product.categoryId IN (:...categoryIds)', { categoryIds: query.categoryIds });
+    }
+  }
+
+  /** Category + all its subcategories (null when none selected). */
+  private categorySubtree(categoryId?: string | null): Promise<string[] | null> {
+    return categorySubtreeIds(this.stockRepository.manager, categoryId);
   }
 
   /**
@@ -540,7 +550,8 @@ export class StockService {
       .createQueryBuilder('stock')
       .leftJoin('stock.product', 'product')
       .leftJoin('stock.warehouse', 'warehouse');
-    this.applyBalanceFilters(qb, query, branchScope);
+    const categoryIds = await this.categorySubtree(query.categoryId);
+    this.applyBalanceFilters(qb, { search: query.search, warehouseId: query.warehouseId, categoryIds }, branchScope);
     const raw = await qb
       .select('COUNT(*)', 'cnt')
       .addSelect('COUNT(DISTINCT stock.productId)', 'products')

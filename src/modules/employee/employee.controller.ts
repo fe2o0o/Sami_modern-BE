@@ -20,6 +20,7 @@ import { StatusQueryDto } from '../../common/dto/status-query.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('Employees')
@@ -34,8 +35,19 @@ export class EmployeeController {
   @Get('commissions-report')
   @RequirePermissions('accounting_reports.view')
   @ApiOperation({ summary: 'تقرير عمولات الموظفين من الفواتير المرحّلة' })
-  commissionsReport(@Query() query: CommissionReportQueryDto) {
-    return this.commissionReport.generate(query);
+  commissionsReport(@Query() query: CommissionReportQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.commissionReport.generate(query, branchScope);
+  }
+
+  @Get('commissions-report/:employeeId')
+  @RequirePermissions('accounting_reports.view')
+  @ApiOperation({ summary: 'تفاصيل عمولات موظف: الفواتير والعمولة والنسبة لكل فاتورة' })
+  commissionDetails(
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Query() query: CommissionReportQueryDto,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.commissionReport.details(employeeId, query, branchScope);
   }
 
   @Post()

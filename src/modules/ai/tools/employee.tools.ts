@@ -73,7 +73,7 @@ export class EmployeeAiTools {
       {
         name: 'get_employee_commissions',
         description:
-          'تقرير عمولات الموظفين خلال فترة (من سطور العمولة في فواتير البيع المُرحّلة فقط): لكل موظف عدد الفواتير وإجمالي العمولة، مع الإجمالي العام. الفترة مطلوبة؛ إن لم يحددها المستخدم استخدم الشهر الحالي. يمكن تحديد موظف (معرّفه من get_employees).',
+          'تقرير عمولات الموظفين خلال فترة (من سطور العمولة في فواتير البيع المُرحّلة فقط): لكل موظف عدد الفواتير وإجمالي المبيعات وإجمالي العمولة ومتوسط النسبة المُدخلة (avgRate) والنسبة الفعلية (effectiveRate)، مع الإجمالي العام. الفترة مطلوبة؛ إن لم يحددها المستخدم استخدم الشهر الحالي. يمكن تحديد موظف (معرّفه من get_employees).',
         permission: 'accounting_reports.view',
         parameters: {
           type: 'object',
@@ -85,16 +85,44 @@ export class EmployeeAiTools {
           required: ['dateFrom', 'dateTo'],
           additionalProperties: false,
         },
-        handler: async (args) => {
+        handler: async (args, ctx) => {
           const dateFrom = normalizeDate(args.dateFrom, 'dateFrom');
           const dateTo = normalizeDate(args.dateTo, 'dateTo');
           if (!dateFrom || !dateTo) return { success: false, code: 'INVALID_ARGS', message: 'حدّد بداية ونهاية الفترة.' };
           const q = { dateFrom, dateTo, employeeId: optUuid(args.employeeId, 'employeeId') } as CommissionReportQueryDto;
-          const res = await this.commissions.generate(q);
+          const res = await this.commissions.generate(q, ctx.branchScope);
           return {
             success: true,
             presentation: 'report',
-            data: { title: 'تقرير عمولات الموظفين', currency: CURRENCY, period: res.period, totalCommission: res.total, commissions: res.rows },
+            data: { title: 'تقرير عمولات الموظفين', currency: CURRENCY, period: res.period, totalSales: res.totalSales, totalCommission: res.total, commissions: res.rows },
+          };
+        },
+      },
+      {
+        name: 'get_employee_commission_details',
+        description:
+          'تفاصيل عمولات موظف واحد خلال فترة: كل فاتورة بيع عليها عمولة له (رقم الفاتورة، التاريخ، العميل، الفرع، قيمة الفاتورة، نوع العمولة والنسبة/المبلغ، العمولة، الشركاء في العمولة، الحالة) مع ملخص (المبيعات، العمولة، متوسط النسبة، النسبة الفعلية) وتوزيع شهري. الملخص من الفواتير المرحّلة فقط؛ المسودات تظهر منفصلة. employeeId مطلوب (من get_employees).',
+        permission: 'accounting_reports.view',
+        parameters: {
+          type: 'object',
+          properties: {
+            employeeId: { type: 'string', description: 'معرّف الموظف (uuid)' },
+            dateFrom: dateProp('بداية الفترة'),
+            dateTo: dateProp('نهاية الفترة'),
+          },
+          required: ['employeeId', 'dateFrom', 'dateTo'],
+          additionalProperties: false,
+        },
+        handler: async (args, ctx) => {
+          const dateFrom = normalizeDate(args.dateFrom, 'dateFrom');
+          const dateTo = normalizeDate(args.dateTo, 'dateTo');
+          const employeeId = optUuid(args.employeeId, 'employeeId');
+          if (!dateFrom || !dateTo || !employeeId) return { success: false, code: 'INVALID_ARGS', message: 'حدّد الموظف وبداية ونهاية الفترة.' };
+          const res = await this.commissions.details(employeeId, { dateFrom, dateTo } as CommissionReportQueryDto, ctx.branchScope);
+          return {
+            success: true,
+            presentation: 'report',
+            data: { title: `عمولات ${res.employee.name}`, currency: CURRENCY, ...res, invoices: res.invoices.slice(0, 50) },
           };
         },
       },

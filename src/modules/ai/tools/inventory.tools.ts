@@ -62,6 +62,7 @@ export class InventoryAiTools {
           properties: {
             warehouseId: { type: 'string', description: 'مخزن محدد (uuid)' },
             search: { type: 'string', description: 'كود أو اسم المنتج' },
+            categoryId: { type: 'string', description: 'تصنيف (uuid) — يشمل كل التصنيفات الفرعية تحته' },
             page: { type: 'number' },
             perPage: { type: 'number' },
           },
@@ -71,6 +72,7 @@ export class InventoryAiTools {
           const warehouseId = optUuid(args.warehouseId, 'warehouseId');
           const query = listQuery(Number(args.page) || 1, Math.min(50, Number(args.perPage) || 15), {
             search: optStr(args.search),
+            categoryId: optUuid(args.categoryId, 'categoryId'),
           }) as unknown as StockQueryDto;
           const res = await this.stock.findAll(query, warehouseId, ctx.branchScope);
           return {
@@ -132,11 +134,16 @@ export class InventoryAiTools {
           properties: {
             warehouseId: { type: 'string', description: 'مخزن محدد (uuid)' },
             search: { type: 'string', description: 'كود أو اسم المنتج' },
+            categoryId: { type: 'string', description: 'تصنيف (uuid) — يشمل كل التصنيفات الفرعية تحته' },
           },
           additionalProperties: false,
         },
         handler: async (args, ctx) => {
-          const query = { warehouseId: optUuid(args.warehouseId, 'warehouseId'), search: optStr(args.search) } as StockQueryDto;
+          const query = {
+            warehouseId: optUuid(args.warehouseId, 'warehouseId'),
+            search: optStr(args.search),
+            categoryId: optUuid(args.categoryId, 'categoryId'),
+          } as StockQueryDto;
           const data = await this.stock.balancesSummary(query, ctx.branchScope);
           const availableQuantity = round3(data.totalQuantity - data.reservedQuantity);
           return { success: true, presentation: 'report', data: { title: 'ملخص أرصدة المخزون', currency: CURRENCY, ...data, availableQuantity } };

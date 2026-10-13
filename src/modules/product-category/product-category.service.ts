@@ -19,6 +19,14 @@ import { CodeSettingService } from '../code-setting/code-setting.service';
 /** ProductCategory node with its nested children (tree response). */
 export interface CategoryTreeNode extends ProductCategory {
   children: CategoryTreeNode[];
+  /** Products assigned directly to this category (not counting subcategories). */
+  productsCount: number;
+}
+
+export interface CategorySummary {
+  totalProducts: number;
+  categorizedProducts: number;
+  uncategorizedProducts: number;
 }
 
 const IMPORT_COLUMNS: ImportColumn[] = [
@@ -128,8 +136,16 @@ export class ProductCategoryService {
   /** Full nested tree, ordered by code at each level. */
   async tree(): Promise<CategoryTreeNode[]> {
     const all = await this.categoryRepository.find({ order: { code: 'ASC' } });
+    const counts = await this.productRepository
+      .createQueryBuilder('p')
+      .select('p.categoryId', 'categoryId')
+      .addSelect('COUNT(*)', 'cnt')
+      .where('p.categoryId IS NOT NULL')
+      .groupBy('p.categoryId')
+      .getRawMany<{ categoryId: string; cnt: string }>();
+    const countMap = new Map(counts.map((c) => [c.categoryId, Number(c.cnt)]));
     const byId = new Map<string, CategoryTreeNode>();
-    all.forEach((c) => byId.set(c.id, Object.assign(c, { children: [] })));
+    all.forEach((c) => byId.set(c.id, Object.assign(c, { children: [], productsCount: countMap.get(c.id) ?? 0 })));
 
     const roots: CategoryTreeNode[] = [];
     for (const node of byId.values()) {
@@ -140,6 +156,18 @@ export class ProductCategoryService {
       }
     }
     return roots;
+  }
+
+  /** Overview figures the tree itself can't give (products without a category). */
+  async summary(): Promise<CategorySummary> {
+    const raw = await this.productRepository
+      .createQueryBuilder('p')
+      .select('COUNT(*)', 'total')
+      .addSelect('SUM(CASE WHEN p.categoryId IS NULL THEN 1 ELSE 0 END)', 'uncategorized')
+      .getRawOne<{ total: string; uncategorized: string | null }>();
+    const total = Number(raw?.total ?? 0);
+    const uncategorized = Number(raw?.uncategorized ?? 0);
+    return { totalProducts: total, categorizedProducts: total - uncategorized, uncategorizedProducts: uncategorized };
   }
 
   async findOne(id: string): Promise<ProductCategory> {
