@@ -9,6 +9,7 @@ import {
 import { Request, Response } from 'express';
 import { QueryFailedError } from 'typeorm';
 import { ApiErrorResponse } from '../interfaces/api-response.interface';
+import { langFromHeader, translateMessage } from '../i18n/i18n';
 
 /**
  * Catches every unhandled exception and formats it into the unified error
@@ -24,7 +25,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const { status, message, error, details } = this.normalize(exception);
+    const lang = langFromHeader(request.headers['accept-language']);
+    const { status, message, error, details } = this.normalize(exception, (m) => translateMessage(m, lang));
 
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
@@ -46,7 +48,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     response.status(status).json(body);
   }
 
-  private normalize(exception: unknown): {
+  private normalize(exception: unknown, t: (m: string) => string = (m) => m): {
     status: number;
     message: string;
     error: string;
@@ -57,7 +59,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const res = exception.getResponse();
 
       if (typeof res === 'string') {
-        return { status, message: res, error: exception.name };
+        return { status, message: t(res), error: exception.name };
       }
 
       const resObj = res as Record<string, unknown>;
@@ -66,10 +68,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         status,
         message: Array.isArray(rawMessage)
-          ? (rawMessage as string[]).join(', ')
-          : String(rawMessage),
+          ? (rawMessage as string[]).map((m) => t(String(m))).join(', ')
+          : t(String(rawMessage)),
         error: (resObj['error'] as string) ?? exception.name,
-        details: Array.isArray(rawMessage) ? rawMessage : resObj['code'],
+        details: Array.isArray(rawMessage) ? (rawMessage as string[]).map((m) => t(String(m))) : resObj['code'],
       };
     }
 

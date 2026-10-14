@@ -132,6 +132,7 @@ export class LookupsService {
     return rows.map((e) => ({
       id: e.id,
       name: e.name,
+      nameEn: e.nameEn ?? null,
       code: e.code,
       commissionRate: e.commissionRate,
     }));
@@ -141,67 +142,72 @@ export class LookupsService {
   async products(): Promise<LookupItem[]> {
     const rows = await this.productRepository.find({
       where: { isActive: true },
-      select: { id: true, code: true, name: true },
+      select: { id: true, code: true, name: true, nameEn: true },
       order: { code: 'ASC' },
     });
-    return rows.map((r) => ({ id: r.id, name: `${r.code} - ${r.name}` }));
+    return rows.map((r) => ({
+      id: r.id,
+      name: `${r.code} - ${r.name}`,
+      nameEn: r.nameEn ? `${r.code} - ${r.nameEn}` : null,
+    }));
   }
 
   async customers(): Promise<LookupItem[]> {
     const rows = await this.customerRepository.find({
       where: { isActive: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true , nameEn: true },
       order: { name: 'ASC' },
     });
-    return rows.map((r) => ({ id: r.id, name: r.name }));
+    return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null }));
   }
 
   async suppliers(): Promise<LookupItem[]> {
     const rows = await this.supplierRepository.find({
       where: { isActive: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true , nameEn: true },
       order: { name: 'ASC' },
     });
-    return rows.map((r) => ({ id: r.id, name: r.name }));
+    return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null }));
   }
 
   async units(): Promise<LookupItem[]> {
     const rows = await this.unitRepository.find({
       where: { isActive: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true , nameEn: true },
       order: { name: 'ASC' },
     });
-    return rows.map((r) => ({ id: r.id, name: r.name }));
+    return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null }));
   }
 
   async brands(): Promise<LookupItem[]> {
     const rows = await this.brandRepository.find({
       where: { isActive: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true , nameEn: true },
       order: { name: 'ASC' },
     });
-    return rows.map((r) => ({ id: r.id, name: r.name }));
+    return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null }));
   }
 
   async productCategories(): Promise<LookupItem[]> {
     const rows = await this.categoryRepository.find({
       where: { isActive: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true , nameEn: true },
       order: { code: 'ASC' },
     });
-    return rows.map((r) => ({ id: r.id, name: r.name }));
+    return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null }));
   }
 
   /** Active leaf accounts that can receive postings. */
   async postingAccounts(): Promise<LookupItem[]> {
     const rows = await this.accountRepository.find({
       where: { allowPosting: true, isActive: true },
-      select: { id: true, accountCode: true, accountNameAr: true },
+      select: { id: true, accountCode: true, accountNameAr: true, accountNameEn: true },
       order: { accountCode: 'ASC' },
     });
     return rows.map((r) => ({
       id: r.id,
       name: `${r.accountCode} - ${r.accountNameAr}`,
+      nameEn: r.accountNameEn ? `${r.accountCode} - ${r.accountNameEn}` : null,
     }));
   }
 
@@ -227,22 +233,23 @@ export class LookupsService {
         accountType,
         accountSubType,
       },
-      select: { id: true, accountCode: true, accountNameAr: true },
+      select: { id: true, accountCode: true, accountNameAr: true, accountNameEn: true },
       order: { accountCode: 'ASC' },
     });
     return rows.map((r) => ({
       id: r.id,
       name: `${r.accountCode} - ${r.accountNameAr}`,
+      nameEn: r.accountNameEn ? `${r.accountCode} - ${r.accountNameEn}` : null,
     }));
   }
 
   async roles(): Promise<LookupItem[]> {
     const rows = await this.roleRepository.find({
       where: { isActive: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true , nameEn: true },
       order: { name: 'ASC' },
     });
-    return rows.map((r) => ({ id: r.id, name: r.name }));
+    return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null }));
   }
 
   async fiscalYears(): Promise<LookupItem[]> {

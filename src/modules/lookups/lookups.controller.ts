@@ -1,9 +1,11 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { LookupLanguageInterceptor } from './lookup-language.interceptor';
+import { Controller, Get, Query, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { LookupsService } from './lookups.service';
 
 @ApiTags('Lookups')
 @ApiBearerAuth('access-token')
+@UseInterceptors(LookupLanguageInterceptor)
 @Controller('lookups')
 export class LookupsController {
   constructor(private readonly lookupsService: LookupsService) {}

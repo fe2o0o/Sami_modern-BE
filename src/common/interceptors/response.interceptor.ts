@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { Request, Response } from 'express';
 import { Observable, map } from 'rxjs';
 import { RESPONSE_MESSAGE_KEY } from '../constants/app.constants';
+import { langFromHeader, translateMessage } from '../i18n/i18n';
 import {
   ApiResponse,
   PaginatedResult,
@@ -32,11 +33,13 @@ export class ResponseInterceptor<T>
     const request = http.getRequest<Request>();
     const response = http.getResponse<Response>();
 
-    const message =
+    const message = translateMessage(
       this.reflector.getAllAndOverride<string>(RESPONSE_MESSAGE_KEY, [
         context.getHandler(),
         context.getClass(),
-      ]) ?? 'Operation completed successfully';
+      ]) ?? 'Operation completed successfully',
+      langFromHeader(request.headers['accept-language']),
+    );
 
     return next.handle().pipe(
       map((payload): ApiResponse<T> => {
