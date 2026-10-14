@@ -252,9 +252,12 @@ export class ManufacturingProductionService {
         throw new NotFoundException('لم يتم العثور على أمر التصنيع');
       }
       if (order.status === ManufacturingOrderStatus.PRODUCED) throw new BadRequestException('تم إنتاج هذا الأمر بالفعل');
-      if (order.status === ManufacturingOrderStatus.DONE) throw new BadRequestException('الأمر منتهٍ');
+      // Repair path: older screens could mark an order «منتهٍ» without producing it
+      // (no stock in / components out). Such an order may still be produced.
+      const doneWithoutProduction = order.status === ManufacturingOrderStatus.DONE && !order.producedAt;
+      if (order.status === ManufacturingOrderStatus.DONE && !doneWithoutProduction) throw new BadRequestException('الأمر منتهٍ');
       if (order.status === ManufacturingOrderStatus.CANCELLED) throw new BadRequestException('الأمر ملغى');
-      if (order.status !== ManufacturingOrderStatus.IN_PROGRESS) {
+      if (order.status !== ManufacturingOrderStatus.IN_PROGRESS && !doneWithoutProduction) {
         throw new BadRequestException('ابدأ التنفيذ أولاً — تنفيذ الإنتاج متاح للأوامر قيد التنفيذ فقط');
       }
       if (order.quantity <= 0) throw new BadRequestException('كمية الإنتاج غير صالحة');

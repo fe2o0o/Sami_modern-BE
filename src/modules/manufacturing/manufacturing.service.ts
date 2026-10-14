@@ -262,6 +262,11 @@ export class ManufacturingService {
     if (status === ManufacturingOrderStatus.IN_PROGRESS && !order.startedAt) {
       order.startedAt = new Date();
     }
+    // «منتهٍ» only closes an order whose production was executed (warehouse,
+    // stock in, components out, cost). It can never stand in for production.
+    if (status === ManufacturingOrderStatus.DONE && order.status !== ManufacturingOrderStatus.PRODUCED) {
+      throw new BadRequestException('لا يمكن تحديد الأمر كمنتهٍ قبل تنفيذ الإنتاج — نفّذ الإنتاج أولاً من صفحة الأمر');
+    }
     if (status === ManufacturingOrderStatus.DONE && !order.doneAt) {
       order.doneAt = new Date();
     }
