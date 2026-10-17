@@ -173,4 +173,5 @@ export const sales: Record<string, string> = {
   'تاريخ البداية غير صحيح': 'Invalid start date',
   'تاريخ النهاية غير صحيح': 'Invalid end date',
   'الموظف غير موجود': 'Employee not found',
+  "حالة إذن التسليم غير صالحة": "Invalid delivery note status",
 };

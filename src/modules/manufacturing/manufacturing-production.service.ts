@@ -21,6 +21,8 @@ import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { SupplierLedgerService } from '../supplier/supplier-ledger.service';
 import { SupplierTransactionType } from '../supplier/enums/supplier-transaction.enum';
 import { missingAccountMessage } from '../product/product-accounts';
+import { JournalEntry } from '../journal-entry/entities/journal-entry.entity';
+import { JournalEntryStatus } from '../journal-entry/enums/journal-entry.enum';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
@@ -163,6 +165,118 @@ export class ManufacturingProductionService {
   }
 
   // =========================================================
+  // ADJUST BOOKED FEE — the fee changed while the order is in progress
+  // =========================================================
+  /**
+   * The fee was posted at start (product cost ↔ factory/internal fee account).
+   * Changing it before production posts ONLY the difference, immediately:
+   *   increase → DR product cost / CR factory (supplier) or internal fee account
+   *   decrease → the reverse
+   * plus an ADJUSTMENT row on the factory's statement. The order's fee becomes the
+   * new value, so production later compares against it (no double counting).
+   */
+  async adjustBookedFee(
+    orderId: string,
+    newFeeTotal: number,
+    actorId?: string,
+    branchScope: string[] | null = null,
+  ): Promise<ManufacturingOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const order = await manager.findOne(ManufacturingOrder, { where: { id: orderId }, lock: { mode: 'pessimistic_write' } });
+      if (!order || !isWithinBranchScope(order.branchId, branchScope)) throw new NotFoundException('لم يتم العثور على أمر التصنيع');
+      if (order.status !== ManufacturingOrderStatus.IN_PROGRESS || !order.feeJournalEntryId) {
+        throw new BadRequestException('تسوية رسوم التصنيع متاحة فقط لأمر قيد التنفيذ رُحّلت رسومه عند البدء');
+      }
+      const oldFee = round2(order.manufacturingFee ?? 0);
+      const newFee = round2(newFeeTotal);
+      if (newFee < 0) throw new BadRequestException('رسوم التصنيع لا يمكن أن تكون سالبة');
+      if (order.factorySupplierId && newFee <= 0) {
+        throw new BadRequestException('لا يمكن تصفير رسوم أمر تصنيع لدى مصنع خارجي — ألغِ الأمر بدلاً من ذلك');
+      }
+      const diff = round2(newFee - oldFee);
+      if (Math.abs(diff) < 0.005) return order;
+
+      const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+      if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
+      const product = await manager.getRepository(Product).findOne({ where: { id: order.productId } });
+      if (!product) throw new BadRequestException('المنتج المُصنّع غير موجود');
+      await applyEffectiveAccounts([product], manager);
+      const productCostAcc = product.inventoryAccountId ?? settings.finishedGoodsInventoryAccountId;
+      if (!productCostAcc) throw new BadRequestException(missingAccountMessage('inventory', product.name));
+      const supplierId = order.factorySupplierId;
+      const feeAcc = supplierId ? settings.supplierControlAccountId : settings.manufacturingFeeAccountId;
+      if (!feeAcc) {
+        throw new BadRequestException(
+          supplierId ? 'حساب مراقبة الموردين غير محدد في إعدادات المحاسبة' : 'حساب رسوم التصنيع (داخلي) غير محدد في إعدادات المحاسبة',
+        );
+      }
+
+      const date = todayIso();
+      const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
+      const productName = order.productName ?? product.name;
+      const orderNo = order.orderNumber ?? '';
+      const amount = Math.abs(diff);
+      const up = diff > 0;
+      const description =
+        `تسوية رسوم تصنيع — ${productName} — أمر تصنيع ${orderNo}: ` +
+        `من ${oldFee.toFixed(2)} إلى ${newFee.toFixed(2)} (${up ? 'زيادة' : 'تخفيض'} ${amount.toFixed(2)})` +
+        ` — العميل: ${order.customerName ?? '—'} — فاتورة: ${order.sourceNumber ?? '—'}`;
+      const costLine = up
+        ? `زيادة رسوم التصنيع على تكلفة ${productName} — أمر تصنيع ${orderNo}`
+        : `تخفيض رسوم التصنيع من تكلفة ${productName} — أمر تصنيع ${orderNo}`;
+      const feeLine = supplierId
+        ? `${up ? 'زيادة' : 'تخفيض'} رسوم تصنيع ${productName} المستحقة للمصنع — أمر تصنيع ${orderNo}`
+        : `${up ? 'زيادة' : 'تخفيض'} رسوم تصنيع داخلية — ${productName} — أمر تصنيع ${orderNo}`;
+
+      const lines: JournalLineInput[] = up
+        ? [
+            { accountId: productCostAcc, debit: amount, credit: 0, productId: order.productId, description: costLine },
+            { accountId: feeAcc, debit: 0, credit: amount, supplierId: supplierId ?? undefined, description: feeLine },
+          ]
+        : [
+            { accountId: feeAcc, debit: amount, credit: 0, supplierId: supplierId ?? undefined, description: feeLine },
+            { accountId: productCostAcc, debit: 0, credit: amount, productId: order.productId, description: costLine },
+          ];
+      await this.journalService.createSystemJournalEntry(
+        {
+          sourceType: JournalSourceType.MANUFACTURING,
+          sourceId: order.id,
+          sourceNumber: order.orderNumber,
+          entryDate: date,
+          fiscalYearId: fiscalYear.id,
+          accountingPeriodId: period.id,
+          branchId: order.branchId,
+          description,
+          lines,
+          actorId,
+        },
+        manager,
+      );
+      if (supplierId) {
+        await this.supplierLedger.record(
+          {
+            supplierId,
+            transactionDate: date,
+            type: SupplierTransactionType.ADJUSTMENT,
+            sourceType: JournalSourceType.MANUFACTURING,
+            sourceId: order.id,
+            sourceNumber: order.orderNumber,
+            debit: up ? 0 : amount,
+            credit: up ? amount : 0,
+            description,
+            actorId,
+          },
+          manager,
+        );
+      }
+
+      order.manufacturingFee = newFee;
+      order.updatedBy = actorId ?? null;
+      return manager.getRepository(ManufacturingOrder).save(order);
+    });
+  }
+
+  // =========================================================
   // CANCEL — reverses a booked fee first
   // =========================================================
   async cancel(orderId: string, actorId?: string, branchScope: string[] | null = null): Promise<ManufacturingOrder> {
@@ -177,37 +291,53 @@ export class ManufacturingProductionService {
       // Undo whatever "start" posted (fee → product cost / supplier or internal
       // fee account) by mirroring that journal, so the reversal always matches it.
       if (order.feeJournalEntryId) {
-        const original = await this.journalService.findWithLines(order.feeJournalEntryId);
-        if (!original) throw new BadRequestException('تعذّر إيجاد قيد رسوم التصنيع الأصلي');
-        const fee = round2(order.manufacturingFee ?? 0);
+        // The start entry plus any fee adjustments made while in progress — all
+        // posted, not-yet-reversed manufacturing entries of this (unproduced) order.
+        const feeEntries = await manager.getRepository(JournalEntry).find({
+          where: {
+            sourceType: JournalSourceType.MANUFACTURING,
+            sourceId: order.id,
+            status: JournalEntryStatus.POSTED,
+          },
+          order: { createdAt: 'ASC' },
+        });
+        const toReverse = feeEntries.filter((e) => !e.reversalOfJournalEntryId);
+        if (!toReverse.some((e) => e.id === order.feeJournalEntryId)) {
+          throw new BadRequestException('تعذّر إيجاد قيد رسوم التصنيع الأصلي');
+        }
+        const fee = round2(order.manufacturingFee ?? 0); // current fee = start fee ± adjustments
         const date = todayIso();
         const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
         const description = `إلغاء ${this.feeDescription(order)}`;
-        const reversal = await this.journalService.createSystemJournalEntry(
-          {
-            sourceType: JournalSourceType.MANUFACTURING,
-            sourceId: order.id,
-            sourceNumber: order.orderNumber,
-            entryDate: date,
-            fiscalYearId: fiscalYear.id,
-            accountingPeriodId: period.id,
-            branchId: order.branchId,
-            description,
-            lines: original.lines.map((l) => ({
-              accountId: l.accountId,
-              debit: l.credit,
-              credit: l.debit,
-              description: l.description ? `عكس: ${l.description}` : description,
-              supplierId: l.supplierId,
-              productId: l.productId,
-              warehouseId: l.warehouseId,
-            })),
-            actorId,
-            reversalOfJournalEntryId: order.feeJournalEntryId,
-          },
-          manager,
-        );
-        await this.journalService.markEntryReversed(original.id, reversal.id, 'إلغاء أمر التصنيع', actorId, manager);
+        for (const entry of toReverse) {
+          const original = await this.journalService.findWithLines(entry.id);
+          if (!original) throw new BadRequestException('تعذّر إيجاد قيد رسوم التصنيع الأصلي');
+          const reversal = await this.journalService.createSystemJournalEntry(
+            {
+              sourceType: JournalSourceType.MANUFACTURING,
+              sourceId: order.id,
+              sourceNumber: order.orderNumber,
+              entryDate: date,
+              fiscalYearId: fiscalYear.id,
+              accountingPeriodId: period.id,
+              branchId: order.branchId,
+              description,
+              lines: original.lines.map((l) => ({
+                accountId: l.accountId,
+                debit: l.credit,
+                credit: l.debit,
+                description: l.description ? `عكس: ${l.description}` : description,
+                supplierId: l.supplierId,
+                productId: l.productId,
+                warehouseId: l.warehouseId,
+              })),
+              actorId,
+              reversalOfJournalEntryId: original.id,
+            },
+            manager,
+          );
+          await this.journalService.markEntryReversed(original.id, reversal.id, 'إلغاء أمر التصنيع', actorId, manager);
+        }
         if (order.factorySupplierId) {
           await this.supplierLedger.record(
             {

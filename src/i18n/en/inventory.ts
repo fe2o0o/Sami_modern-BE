@@ -95,4 +95,6 @@ export const inventory: Record<string, string> = {
   'لا يمكن تعديل أمر تم إنتاجه أو منتهٍ أو ملغى': 'A produced, completed or cancelled order cannot be edited',
   'لا توجد سنة مالية — يجب إنشاء سنة مالية أولاً': 'There is no fiscal year — create a fiscal year first',
   'لا توجد سنة مالية': 'There is no fiscal year',
+  "تسوية رسوم التصنيع متاحة فقط لأمر قيد التنفيذ رُحّلت رسومه عند البدء": "A manufacturing fee adjustment is only available for an in-progress order whose fee was posted at start",
+  "لا يمكن تصفير رسوم أمر تصنيع لدى مصنع خارجي — ألغِ الأمر بدلاً من ذلك": "An external factory order's fee cannot be set to zero — cancel the order instead",
 };

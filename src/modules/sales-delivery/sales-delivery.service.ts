@@ -325,6 +325,14 @@ export class SalesDeliveryService {
     if (query.warehouseId) qb.andWhere('d.warehouseId = :wh', { wh: query.warehouseId });
     if (query.fiscalYearId) qb.andWhere('d.fiscalYearId = :fy', { fy: query.fiscalYearId });
     if (query.status) qb.andWhere('d.status = :st', { st: query.status });
+    // `state` = what the list's status column shows (see the DTO).
+    if (query.state === 'pending' || query.state === 'partial' || query.state === 'delivered') {
+      qb.andWhere(`d.source = 'invoice' AND d.status <> 'reversed' AND d.deliveryProgress = :pg`, { pg: query.state });
+    } else if (query.state === 'draft' || query.state === 'posted') {
+      qb.andWhere(`d.source = 'standalone' AND d.status = :sst`, { sst: query.state });
+    } else if (query.state === 'reversed') {
+      qb.andWhere(`d.status = 'reversed'`);
+    }
     if (query.dateFrom) qb.andWhere('d.deliveryDate >= :df', { df: query.dateFrom });
     if (query.dateTo) qb.andWhere('d.deliveryDate <= :dt', { dt: query.dateTo });
   }
@@ -339,8 +347,14 @@ export class SalesDeliveryService {
   async summary(query: SalesDeliveryQueryDto, branchScope: BranchScope = null) {
     const qb = this.repository.createQueryBuilder('d');
     this.applyListFilters(qb, query, branchScope);
-    const basis: SalesDeliveryStatus | 'active' = query.status ?? 'active';
-    const inBasis = query.status ? `d.status = :basis` : `d.status <> 'reversed'`;
+    // A document-status filter (status, or state draft/posted/reversed) sets the basis.
+    const statusBasis: SalesDeliveryStatus | undefined =
+      query.status ??
+      (query.state === 'draft' || query.state === 'posted' || query.state === 'reversed'
+        ? (query.state as SalesDeliveryStatus)
+        : undefined);
+    const basis: SalesDeliveryStatus | 'active' = statusBasis ?? 'active';
+    const inBasis = statusBasis ? `d.status = :basis` : `d.status <> 'reversed'`;
     // Pending = not fully delivered: an open (draft) order whose progress is not
     // yet DELIVERED (a posted standalone note was issued in full at post time).
     const pending = `d.status = 'draft' AND d.deliveryProgress <> 'delivered'`;
@@ -372,7 +386,7 @@ export class SalesDeliveryService {
       )
       .where(`it.salesDeliveryId IN (${ids.getQuery()})`)
       .andWhere(`it.lineType <> 'service'`)
-      .andWhere(query.status ? `h.status = :basis` : `h.status <> 'reversed'`)
+      .andWhere(statusBasis ? `h.status = :basis` : `h.status <> 'reversed'`)
       .setParameters({ ...ids.getParameters(), basis })
       .getRawOne<Record<string, string | null>>();
 

@@ -1,3 +1,4 @@
+import { ManufacturingProductionService } from './manufacturing-production.service';
 import {
   BadRequestException,
   Injectable,
@@ -108,6 +109,7 @@ export interface ManufacturingFromInvoiceInput {
 @Injectable()
 export class ManufacturingService {
   constructor(
+    private readonly production: ManufacturingProductionService,
     @InjectRepository(ManufacturingOrder)
     private readonly orderRepository: Repository<ManufacturingOrder>,
     @InjectRepository(Product)
@@ -181,6 +183,16 @@ export class ManufacturingService {
     actorId?: string,
     branchScope: BranchScope = null,
   ): Promise<ManufacturingOrder> {
+    // In progress with the fee already posted: a changed fee posts an adjustment
+    // for the difference first (product cost ↔ factory/internal fee account).
+    const current = await this.getEditable(id, branchScope);
+    if (
+      current.feeJournalEntryId &&
+      dto.manufacturingFee !== undefined &&
+      Math.abs((dto.manufacturingFee ?? 0) - (current.manufacturingFee ?? 0)) >= 0.005
+    ) {
+      await this.production.adjustBookedFee(id, dto.manufacturingFee ?? 0, actorId, branchScope);
+    }
     const order = await this.getEditable(id, branchScope);
 
     if (dto.productId && dto.productId !== order.productId) {
@@ -195,11 +207,9 @@ export class ManufacturingService {
         ? (await this.customerRepository.findOne({ where: { id: dto.customerId } }))?.name ?? null
         : null;
     }
-    // Once the fee is booked to the supplier (at start), fee/supplier are locked.
+    // Once the fee is booked to the supplier (at start) the FACTORY is locked;
+    // the fee itself may change (adjusted above).
     if (order.feeJournalEntryId) {
-      if (dto.manufacturingFee !== undefined && (dto.manufacturingFee ?? 0) !== order.manufacturingFee) {
-        throw new BadRequestException('رسوم التصنيع مُرحّلة على المورّد بالفعل عند بدء التنفيذ ولا يمكن تغييرها');
-      }
       if (dto.factorySupplierId !== undefined && (dto.factorySupplierId ?? null) !== order.factorySupplierId) {
         throw new BadRequestException('المورّد مُرحّلة عليه الرسوم بالفعل ولا يمكن تغييره بعد بدء التنفيذ');
       }
