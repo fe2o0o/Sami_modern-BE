@@ -1,3 +1,5 @@
+import { JournalEntry } from '../journal-entry/entities/journal-entry.entity';
+import { JournalEntryStatus } from '../journal-entry/enums/journal-entry.enum';
 import {
   BadRequestException,
   ConflictException,
@@ -230,6 +232,40 @@ export class SalesReturnPostingService {
           manager,
         );
         await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
+      }
+
+      // Correction entries posted later for this return (e.g. the one-off fix that
+      // restocked delivered manufactured items) are reversed with it too.
+      const extras = await manager.getRepository(JournalEntry).find({
+        where: { sourceType: JournalSourceType.SALES_RETURN, sourceId: ret.id, status: JournalEntryStatus.POSTED },
+      });
+      for (const extra of extras.filter((e) => e.id !== ret.journalEntryId && !e.reversalOfJournalEntryId)) {
+        const full = await this.journalService.findWithLines(extra.id);
+        if (!full) continue;
+        const rev = await this.journalService.createSystemJournalEntry(
+          {
+            sourceType: JournalSourceType.SALES_RETURN,
+            sourceId: ret.id,
+            sourceNumber: ret.returnNumber,
+            entryDate: dto.reversalDate,
+            fiscalYearId: period.fiscalYearId,
+            accountingPeriodId: period.id,
+            branchId: ret.branchId,
+            description: `عكس ${full.description ?? 'قيد تصحيح مردود'} — ${dto.reason}`,
+            reversalOfJournalEntryId: full.id,
+            lines: full.lines.map((l) => ({
+              accountId: l.accountId,
+              debit: l.credit,
+              credit: l.debit,
+              description: l.description ? `عكس: ${l.description}` : 'عكس قيد تصحيح مردود',
+              productId: l.productId,
+              warehouseId: l.warehouseId,
+            })),
+            actorId,
+          },
+          manager,
+        );
+        await this.journalService.markEntryReversed(full.id, rev.id, dto.reason, actorId, manager);
       }
 
       if (ret.totalAmount <= 0) {
