@@ -174,4 +174,6 @@ export const sales: Record<string, string> = {
   'تاريخ النهاية غير صحيح': 'Invalid end date',
   'الموظف غير موجود': 'Employee not found',
   "حالة إذن التسليم غير صالحة": "Invalid delivery note status",
+  "اختر المخزن الذي يعود إليه الصنف المُصنّع «{name}»": "Choose the warehouse the manufactured item «{name}» returns to",
+  "مخزن الإرجاع غير صحيح": "Invalid return warehouse",
 };

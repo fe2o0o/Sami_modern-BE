@@ -69,7 +69,12 @@ export interface SaleProductOption {
   unitName: string | null;
   sellingPrice: number;
   imageUrl: string | null;
+  /** On hand − reserved (can be negative when posted invoices reserved more than is in stock). */
   available: number;
+  /** Quantity physically in the warehouse. */
+  onHand: number;
+  /** Reserved by posted, undelivered invoices. */
+  reserved: number;
 }
 
 @Injectable()
@@ -505,6 +510,7 @@ export class SalesInvoiceService {
     const qtyByProduct = new Map(
       stocks.map((s): [string, number] => [s.productId, Math.round((s.quantity - (s.reservedQuantity || 0)) * 1000) / 1000]),
     );
+    const stockByProduct = new Map(stocks.map((s): [string, (typeof stocks)[number]] => [s.productId, s]));
     const imgByProduct = new Map(images.map((i): [string, string] => [i.productId, i.url]));
 
     return products.map((p) => ({
@@ -517,6 +523,8 @@ export class SalesInvoiceService {
       sellingPrice: p.sellingPrice,
       imageUrl: imgByProduct.get(p.id) ?? null,
       available: qtyByProduct.get(p.id) ?? 0,
+      onHand: Math.round(Number(stockByProduct.get(p.id)?.quantity ?? 0) * 1000) / 1000,
+      reserved: Math.round(Number(stockByProduct.get(p.id)?.reservedQuantity ?? 0) * 1000) / 1000,
     }));
   }
 

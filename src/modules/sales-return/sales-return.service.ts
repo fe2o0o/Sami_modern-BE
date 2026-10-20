@@ -56,6 +56,10 @@ export interface ReturnableLine {
   returnedQuantity: number;
   remainingQuantity: number;
   unitPrice: number;
+  /** Manufacturing lines: quantity physically delivered to the customer (returning it puts it back in stock). */
+  physicallyDeliveredQuantity?: number;
+  /** Manufacturing lines: warehouse the item was delivered from (default return warehouse). */
+  deliveredFromWarehouseId?: string | null;
   /** Why nothing can be returned on this line right now (null = returnable). */
   blockedReason: string | null;
 }
@@ -103,6 +107,7 @@ export class SalesReturnService {
     // to the invoiced quantity (they were "delivered" at invoicing).
     const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
     const ships = await this.shipsViaDeliveryByItem(invoice.items);
+    const fromWarehouse = await this.deliveredWarehouseByItem(invoice.items.map((i) => i.id));
     const lines: ReturnableLine[] = invoice.items.map((it) => {
       const returnedQty = returned.get(it.id) ?? 0;
       const shipsViaDelivery = ships.get(it.id) ?? false;
@@ -126,6 +131,12 @@ export class SalesReturnService {
         remainingQuantity: remaining,
         unitPrice: it.unitPrice,
         blockedReason,
+        ...(it.lineType === SalesLineType.MANUFACTURING
+          ? {
+              physicallyDeliveredQuantity: round3(delivered.get(it.id)?.qty ?? 0),
+              deliveredFromWarehouseId: fromWarehouse.get(it.id) ?? null,
+            }
+          : {}),
       };
     });
     return {
@@ -360,6 +371,7 @@ export class SalesReturnService {
     const alreadyReturned = await this.returnedQtyByItem(invoice.items.map((i) => i.id), excludeReturnId);
     const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
     const ships = await this.shipsViaDeliveryByItem(invoice.items);
+    const fromWarehouse = await this.deliveredWarehouseByItem(invoice.items.map((i) => i.id));
 
     // Aggregate requested qty per invoice item to validate against remaining.
     const requested = new Map<string, number>();
@@ -406,8 +418,15 @@ export class SalesReturnService {
       item.vatAmount = round2(src.vatAmount * ratio);
       item.lineTotal = round2(item.netBeforeTax + item.vatAmount);
       // Cost basis comes from the delivery note (COGS is booked at delivery, not
-      // at invoicing). Manufacturing lines carry no inventory cost.
+      // at invoicing).
       item.costAtPost = ships.get(src.id) ? (delivered.get(src.id)?.unitCost ?? 0) : 0;
+      if (src.lineType === SalesLineType.MANUFACTURING) {
+        // A delivered manufactured item went through stock (produced in, delivered
+        // out) — returning it puts it back at its delivery cost, into the warehouse
+        // the user picks (default: the one it was delivered from).
+        item.costAtPost = delivered.get(src.id)?.unitCost ?? 0;
+        item.warehouseId = d.warehouseId ?? fromWarehouse.get(src.id) ?? null;
+      }
       return item;
     });
   }
@@ -434,6 +453,23 @@ export class SalesReturnService {
   }
 
   /** Net delivered qty + weighted-average unit cost per invoice item (POSTED deliveries only). */
+  /** Warehouse each invoice line was delivered from (manufacturing lines' default return warehouse). */
+  private async deliveredWarehouseByItem(invoiceItemIds: string[]): Promise<Map<string, string>> {
+    if (!invoiceItemIds.length) return new Map();
+    const rows = await this.dataSource
+      .getRepository(SalesDeliveryItem)
+      .createQueryBuilder('di')
+      .innerJoin('di.salesDelivery', 'd')
+      .select('di.salesInvoiceItemId', 'itemId')
+      .addSelect('MAX(di.warehouseId)', 'warehouseId')
+      .where('di.salesInvoiceItemId IN (:...ids)', { ids: invoiceItemIds })
+      .andWhere('d.status <> :rev', { rev: SalesDeliveryStatus.REVERSED })
+      .andWhere('di.warehouseId IS NOT NULL')
+      .groupBy('di.salesInvoiceItemId')
+      .getRawMany<{ itemId: string; warehouseId: string }>();
+    return new Map(rows.map((r) => [r.itemId, r.warehouseId]));
+  }
+
   private async deliveredInfoByItem(
     invoiceItemIds: string[],
   ): Promise<Map<string, { qty: number; unitCost: number }>> {

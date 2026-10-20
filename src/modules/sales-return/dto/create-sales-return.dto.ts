@@ -21,6 +21,12 @@ export class SalesReturnItemDto {
   @IsNumber({}, { message: 'الكمية يجب أن تكون رقماً' })
   @Min(0.0001, { message: 'الكمية يجب أن تكون أكبر من صفر' })
   quantity!: number;
+
+  /** Manufacturing lines: the warehouse the delivered (manufactured) item goes back into. */
+  @ApiPropertyOptional({ format: 'uuid', description: 'مخزن إرجاع الصنف المُصنّع (لسطور التصنيع المُسلَّمة)' })
+  @IsOptional()
+  @IsUUID('4', { message: 'مخزن الإرجاع غير صحيح' })
+  warehouseId?: string | null;
 }
 
 /** Create a sales return against an original invoice (always starts DRAFT). */

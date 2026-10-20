@@ -74,10 +74,13 @@ export class SalesReturnPostingService {
 
       const number = await this.sequenceService.nextDocumentNumber('SR', fiscalYear, manager);
 
-      // Receive returned STOCK lines back at their original cost.
+      // How much of each line goes back INTO stock (manufacturing: delivered part only).
+      await this.assignRestockQuantities(ret, products, manager);
+
+      // Receive returned goods back at their original (delivery) cost.
       const stockLines: StockLineInput[] = ret.items
-        .filter((i) => this.touchesStock(i, products))
-        .map((i) => ({ warehouseId: (i.warehouseId ?? ret.warehouseId)!, productId: i.productId, quantity: i.quantity, unitCost: i.costAtPost }));
+        .filter((i) => Number(i.restockedQuantity) > 0)
+        .map((i) => ({ warehouseId: (i.warehouseId ?? ret.warehouseId)!, productId: i.productId, quantity: Number(i.restockedQuantity), unitCost: i.costAtPost }));
       if (stockLines.length) {
         await this.stockService.receive(stockLines, manager, {
           movementType: StockMovementType.SALE_RETURN,
@@ -183,10 +186,12 @@ export class SalesReturnPostingService {
       if (ret.journalEntryId && !original) throw new BadRequestException('تعذّر إيجاد القيد الأصلي للمردود');
 
       const products = await this.loadProducts(ret.items.map((i) => i.productId), manager);
-      // Reversing the return re-issues the stock back out.
+      // Reversing the return re-issues exactly what it put back into stock. (Returns
+      // posted before restockedQuantity existed fall back to the old rule.)
       const stockLines: StockLineInput[] = ret.items
-        .filter((i) => this.touchesStock(i, products))
-        .map((i) => ({ warehouseId: (i.warehouseId ?? ret.warehouseId)!, productId: i.productId, quantity: i.quantity }));
+        .map((i) => ({ i, qty: Number(i.restockedQuantity) > 0 ? Number(i.restockedQuantity) : this.touchesStock(i, products) ? i.quantity : 0 }))
+        .filter(({ qty }) => qty > 0)
+        .map(({ i, qty }) => ({ warehouseId: (i.warehouseId ?? ret.warehouseId)!, productId: i.productId, quantity: qty }));
       if (stockLines.length) {
         await this.stockService.issue(stockLines, manager, {
           movementType: StockMovementType.SALE_RETURN,
@@ -335,16 +340,19 @@ export class SalesReturnPostingService {
     }
     if (ret.vatAmount > 0) b.add(settings.outputVatAccountId!, ret.vatAmount, 0, `عكس ضريبة القيمة المضافة (مخرجات) — ${ref}`);
 
-    // Restore inventory + reverse COGS for returned stock lines.
+    // Restore inventory + reverse COGS for what goes back into stock (stock lines,
+    // and the delivered part of manufacturing lines).
     for (const item of ret.items) {
-      if (!this.touchesStock(item, products)) continue;
+      const qty = Number(item.restockedQuantity) || 0;
+      if (qty <= 0) continue;
       const product = products.get(item.productId)!;
-      const cost = round2(item.quantity * item.costAtPost);
+      const cost = round2(qty * item.costAtPost);
       if (cost <= 0) continue;
       const cogs = product.cogsAccountId ?? settings.costOfGoodsSoldAccountId!;
       const inventory = this.resolveInventoryAccount(product, settings)!;
-      b.add(inventory, cost, 0, `إعادة بضاعة مرتجعة للمخزون — ${ref}`, { warehouseId: ret.warehouseId });
-      b.add(cogs, 0, cost, `عكس تكلفة البضاعة المباعة — ${ref}`);
+      const what = item.lineType === SalesLineType.MANUFACTURING ? `صنف مُصنّع ${item.productName ?? ''} (${qty})` : `${item.productName ?? ''} (${qty})`;
+      b.add(inventory, cost, 0, `إعادة بضاعة مرتجعة للمخزون — ${what} — ${ref}`, { warehouseId: item.warehouseId ?? ret.warehouseId });
+      b.add(cogs, 0, cost, `عكس تكلفة البضاعة المباعة — ${what} — ${ref}`);
     }
 
     return b.build();
@@ -389,6 +397,35 @@ export class SalesReturnPostingService {
     }
   }
 
+  /**
+   * Restocked quantity per line, decided BEFORE the accrual release:
+   *  - stock lines of tracked products: the whole returned quantity;
+   *  - manufacturing lines: the returned quantity beyond what is still undelivered
+   *    (undelivered quantity releases the invoice's cost accrual instead). The
+   *    delivered part needs a return warehouse.
+   */
+  private async assignRestockQuantities(ret: SalesReturn, products: Map<string, Product>, manager: EntityManager): Promise<void> {
+    const invRepo = manager.getRepository(SalesInvoiceItem);
+    for (const item of ret.items) {
+      if (this.touchesStock(item, products)) {
+        item.restockedQuantity = Number(item.quantity) || 0;
+        continue;
+      }
+      item.restockedQuantity = 0;
+      if (item.lineType !== SalesLineType.MANUFACTURING || !item.salesInvoiceItemId) continue;
+      if (!products.get(item.productId)?.trackInventory) continue;
+      const inv = await invRepo.findOne({ where: { id: item.salesInvoiceItemId } });
+      if (!inv) continue;
+      const openUndelivered = Math.max(0, round3((Number(inv.quantity) || 0) - (Number(inv.deliveredQuantity) || 0) - (Number(inv.cogsReleasedQty) || 0)));
+      const restock = round3(Math.max(0, (Number(item.quantity) || 0) - openUndelivered));
+      if (restock <= 0) continue;
+      if (!item.warehouseId) {
+        throw new BadRequestException(`اختر المخزن الذي يعود إليه الصنف المُصنّع «${item.productName ?? ''}»`);
+      }
+      item.restockedQuantity = restock;
+    }
+  }
+
   private validateAccounts(ret: SalesReturn, products: Map<string, Product>, settings: AccountingSetting): void {
     const block = (msg: string): never => {
       throw new BadRequestException(`لا يمكن ترحيل مردود المبيعات لأن ${msg}`);
@@ -403,7 +440,9 @@ export class SalesReturnPostingService {
       if (!product) block('أحد المنتجات غير موجود.');
       const revenue = product!.salesAccountId ?? settings.salesRevenueAccountId;
       if (!revenue) block(missingAccountMessage('revenue', product!.name));
-      if (this.touchesStock(item, products)) {
+      // Goods that go back into stock (stock lines, and delivered manufactured items).
+      const mayRestock = this.touchesStock(item, products) || (item.lineType === SalesLineType.MANUFACTURING && !!product?.trackInventory);
+      if (mayRestock) {
         if (!(product!.cogsAccountId ?? settings.costOfGoodsSoldAccountId)) {
           block(missingAccountMessage('cogs', product!.name));
         }

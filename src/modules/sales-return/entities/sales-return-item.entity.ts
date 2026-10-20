@@ -84,4 +84,9 @@ export class SalesReturnItem extends BaseEntity {
 
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   cogsAccrualReleasedQty!: number;
+
+  /** Quantity that went back INTO stock (stock lines: all of it; manufacturing
+   *  lines: only the delivered part). Reversing the return re-issues this. */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  restockedQuantity!: number;
 }
