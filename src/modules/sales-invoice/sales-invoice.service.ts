@@ -121,7 +121,7 @@ export class SalesInvoiceService {
     await this.assertHeaderRefs({ ...dto, warehouseId: headerWarehouseId });
     const items = await this.buildItems(dto.items, headerWarehouseId);
     const { totals } = computeInvoice(this.toLineInputs(dto.items));
-    const commissions = await this.buildCommissions(dto.commissions ?? [], totals.taxableAmount);
+    const commissions = await this.buildCommissions(dto.commissions ?? [], this.commissionBase(items));
     const commissionTotal = round2(commissions.reduce((s, c) => s + c.amount, 0));
 
     const invoice = this.invoiceRepository.create({
@@ -211,9 +211,16 @@ export class SalesInvoiceService {
       }
       if (dto.commissions !== undefined) {
         await manager.delete(SalesInvoiceCommission, { salesInvoiceId: id });
-        const commissions = await this.buildCommissions(dto.commissions, invoice.taxableAmount);
+        const commissions = await this.buildCommissions(dto.commissions, this.commissionBase(invoice.items));
         invoice.commissions = commissions;
         invoice.commissionTotal = round2(commissions.reduce((s, c) => s + c.amount, 0));
+      } else if (dto.items && invoice.commissions?.length) {
+        // Lines changed but commissions were not resent: re-base the percentages.
+        const base = this.commissionBase(invoice.items);
+        for (const c of invoice.commissions) {
+          if (c.commissionType === SalesCommissionType.PERCENTAGE) c.amount = round2((base * (Number(c.value) || 0)) / 100);
+        }
+        invoice.commissionTotal = round2(invoice.commissions.reduce((s, c) => s + Number(c.amount), 0));
       }
       invoice.updatedBy = actorId ?? null;
       return manager.getRepository(SalesInvoice).save(invoice);
@@ -652,10 +659,23 @@ export class SalesInvoiceService {
     });
   }
 
-  /** Build commission rows; a percentage is computed on the taxable (net) total. */
+  /**
+   * Commission base = net (after discount, before VAT) of PRODUCT lines only —
+   * stock and manufacturing. Service lines (e.g. delivery/installation fees)
+   * never earn a commission.
+   */
+  private commissionBase(items: { lineType?: SalesLineType | null; netBeforeTax?: number | string | null }[]): number {
+    return round2(
+      items
+        .filter((i) => (i.lineType ?? SalesLineType.STOCK) !== SalesLineType.SERVICE)
+        .reduce((s, i) => s + (Number(i.netBeforeTax) || 0), 0),
+    );
+  }
+
+  /** Build commission rows; a percentage is computed on the commission base (product lines' net). */
   private async buildCommissions(
     dtos: SalesInvoiceCommissionDto[],
-    taxableAmount: number,
+    commissionBase: number,
   ): Promise<SalesInvoiceCommission[]> {
     if (!dtos.length) return [];
     const ids = [...new Set(dtos.map((d) => d.employeeId))];
@@ -672,7 +692,7 @@ export class SalesInvoiceService {
       c.value = d.value;
       c.amount =
         d.commissionType === SalesCommissionType.PERCENTAGE
-          ? round2((taxableAmount * (d.value || 0)) / 100)
+          ? round2((commissionBase * (d.value || 0)) / 100)
           : round2(d.value || 0);
       return c;
     });

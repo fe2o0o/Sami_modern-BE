@@ -13,6 +13,8 @@ import { TrialBalanceService } from './trial-balance.service';
 import { FinancialStatementsService } from './financial-statements.service';
 import { TreasuryCashReportService } from './treasury-cash-report.service';
 import { ProductIncomeReportService } from './product-income-report.service';
+import { ProfitLossReportService } from './profit-loss-report.service';
+import { ProductSalesDetailService } from './product-sales-detail.service';
 import { AccountingReportController } from './accounting-report.controller';
 
 /**
@@ -34,7 +36,7 @@ import { AccountingReportController } from './accounting-report.controller';
     ]),
   ],
   controllers: [AccountingReportController],
-  providers: [GeneralLedgerService, TrialBalanceService, FinancialStatementsService, TreasuryCashReportService, ProductIncomeReportService],
-  exports: [GeneralLedgerService, TrialBalanceService, FinancialStatementsService, TreasuryCashReportService, ProductIncomeReportService],
+  providers: [GeneralLedgerService, TrialBalanceService, FinancialStatementsService, TreasuryCashReportService, ProductIncomeReportService, ProfitLossReportService, ProductSalesDetailService],
+  exports: [GeneralLedgerService, TrialBalanceService, FinancialStatementsService, TreasuryCashReportService, ProductIncomeReportService, ProfitLossReportService, ProductSalesDetailService],
 })
 export class AccountingReportModule {}

@@ -41,6 +41,6 @@ import { SupplierModule } from '../supplier/supplier.module';
   ],
   controllers: [ManufacturingController],
   providers: [ManufacturingService, ManufacturingProductionService],
-  exports: [ManufacturingService],
+  exports: [ManufacturingService, ManufacturingProductionService],
 })
 export class ManufacturingModule {}

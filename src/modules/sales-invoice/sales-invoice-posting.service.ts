@@ -28,6 +28,13 @@ import { CustomerLedgerService } from '../customer/customer-ledger.service';
 import { CustomerTransactionType } from '../customer/enums/customer-transaction.enum';
 import { CashSubledgerService } from '../cash-subledger/cash-subledger.service';
 import { ManufacturingService } from '../manufacturing/manufacturing.service';
+import { ManufacturingProductionService } from '../manufacturing/manufacturing-production.service';
+import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
+import { ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
+import { SalesDelivery } from '../sales-delivery/entities/sales-delivery.entity';
+import { SalesDeliveryStatus as DeliveryNoteStatus } from '../sales-delivery/enums/sales-delivery.enum';
+import { SalesReturn } from '../sales-return/entities/sales-return.entity';
+import { SalesReturnStatus } from '../sales-return/enums/sales-return.enum';
 import {
   JournalEntryService,
   JournalLineInput,
@@ -58,7 +65,44 @@ export class SalesInvoicePostingService {
     private readonly journalService: JournalEntryService,
     private readonly salesDeliveryService: SalesDeliveryService,
     private readonly dataSource: DataSource,
+    private readonly manufacturingProduction: ManufacturingProductionService,
   ) {}
+
+  // =========================================================
+  // REVERSAL IMPACT — what reversing would touch (drives the confirm dialog)
+  // =========================================================
+  async reversalImpact(id: string, branchScope: string[] | null = null) {
+    const invoice = await this.dataSource.getRepository(SalesInvoice).findOne({ where: { id }, relations: { items: true } });
+    if (!invoice || !isWithinBranchScope(invoice.branchId, branchScope)) {
+      throw new NotFoundException('لم يتم العثور على فاتورة المبيعات');
+    }
+    const deliveredQuantity = invoice.items.reduce((s, i) => s + (Number(i.deliveredQuantity) || 0), 0);
+    const [deliveries, orders, returns] = await Promise.all([
+      this.dataSource.getRepository(SalesDelivery).find({ where: { salesInvoiceId: id } }),
+      this.dataSource.getRepository(ManufacturingOrder).find({ where: { sourceType: JournalSourceType.SALES_INVOICE, sourceId: id } }),
+      this.dataSource.getRepository(SalesReturn).find({ where: { salesInvoiceId: id, status: SalesReturnStatus.POSTED } }),
+    ]);
+    return {
+      invoiceId: id,
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      deliveredQuantity: Math.round(deliveredQuantity * 1000) / 1000,
+      postedReturns: returns.map((r) => ({ id: r.id, returnNumber: r.returnNumber })),
+      deliveryNotes: deliveries.map((d) => ({ id: d.id, deliveryNumber: d.deliveryNumber, status: d.status })),
+      manufacturingOrders: orders.map((o) => ({
+        id: o.id,
+        orderNumber: o.orderNumber,
+        productName: o.productName,
+        quantity: o.quantity,
+        status: o.status,
+        manufacturingFee: o.manufacturingFee,
+        feeBooked: !!o.feeJournalEntryId,
+        factorySupplierName: o.factorySupplierName,
+        /** NEW / IN PROGRESS need a decision (cancel or keep). */
+        needsDecision: o.status === ManufacturingOrderStatus.NEW || o.status === ManufacturingOrderStatus.IN_PROGRESS,
+      })),
+    };
+  }
 
   // =========================================================
   // POST
@@ -342,6 +386,29 @@ export class SalesInvoicePostingService {
           'لا يمكن عكس فاتورة تم تسليم جزء منها — يجب عكس أذون التسليم المرتبطة بها أولاً',
         );
       }
+      // A posted return already credited the customer for part of this invoice —
+      // reversing the whole invoice on top of it would credit twice.
+      const postedReturn = await manager.getRepository(SalesReturn).findOne({
+        where: { salesInvoiceId: invoice.id, status: SalesReturnStatus.POSTED },
+      });
+      if (postedReturn) {
+        throw new BadRequestException(
+          `لا يمكن عكس فاتورة عليها مردود مُرحّل (${postedReturn.returnNumber ?? ''}) — اعكس المردود أولاً`,
+        );
+      }
+      // Every open (NEW / IN-PROGRESS) manufacturing order needs an explicit decision.
+      const linkedOrders = await manager.getRepository(ManufacturingOrder).find({
+        where: { sourceType: JournalSourceType.SALES_INVOICE, sourceId: invoice.id },
+      });
+      const decisions = new Map((dto.manufacturingDecisions ?? []).map((d) => [d.orderId, d.action]));
+      const undecided = linkedOrders.filter(
+        (o) => (o.status === ManufacturingOrderStatus.NEW || o.status === ManufacturingOrderStatus.IN_PROGRESS) && !decisions.has(o.id),
+      );
+      if (undecided.length) {
+        throw new BadRequestException(
+          `حدّد مصير أوامر التصنيع المرتبطة بالفاتورة (إلغاء أو استمرار): ${undecided.map((o) => o.orderNumber ?? '').join('، ')}`,
+        );
+      }
       const products = await this.loadProducts(invoice.items.map((i) => i.productId), manager);
       const stockLines: StockLineInput[] = invoice.items
         .filter(
@@ -448,6 +515,41 @@ export class SalesInvoicePostingService {
           },
           manager,
         );
+      }
+
+      // ── Linked documents ──
+      const reasonNote = `عكس فاتورة المبيعات ${invoice.invoiceNumber ?? ''}: ${dto.reason}`;
+      // 1) The open delivery note has nothing delivered (checked above) — cancel it.
+      const deliveries = await manager.getRepository(SalesDelivery).find({ where: { salesInvoiceId: invoice.id } });
+      for (const d of deliveries) {
+        if (d.status !== DeliveryNoteStatus.DRAFT) continue;
+        d.status = DeliveryNoteStatus.REVERSED;
+        d.reversedAt = new Date();
+        d.reversedBy = actorId ?? null;
+        d.reversalReason = reasonNote;
+        await manager.getRepository(SalesDelivery).save(d);
+      }
+      // 2) Manufacturing orders.
+      for (const o of linkedOrders) {
+        if (o.status === ManufacturingOrderStatus.CANCELLED) continue;
+        const open = o.status === ManufacturingOrderStatus.NEW || o.status === ManufacturingOrderStatus.IN_PROGRESS;
+        if (open && decisions.get(o.id) === 'cancel') {
+          // Reverses the fee posted at start (+ any adjustments) and the factory's balance.
+          await this.manufacturingProduction.cancelWithin(o.id, manager, {
+            actorId,
+            date: dto.reversalDate,
+            reason: reasonNote,
+          });
+          continue;
+        }
+        // Keep (or already produced): the order carries on / its goods stay in stock
+        // as normal inventory — detach it from the reversed invoice and its delivery.
+        o.salesInvoiceItemId = null;
+        o.notes = [o.notes, `${reasonNote} — ${open ? 'يستمر التنفيذ ويدخل المنتج المخزون' : 'المنتج المُصنّع يبقى في المخزون'}`]
+          .filter(Boolean)
+          .join(' — ');
+        o.updatedBy = actorId ?? null;
+        await manager.getRepository(ManufacturingOrder).save(o);
       }
 
       invoice.status = SalesInvoiceStatus.REVERSED;

@@ -280,7 +280,22 @@ export class ManufacturingProductionService {
   // CANCEL — reverses a booked fee first
   // =========================================================
   async cancel(orderId: string, actorId?: string, branchScope: string[] | null = null): Promise<ManufacturingOrder> {
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction((manager) => this.cancelWithin(orderId, manager, { actorId, branchScope }));
+  }
+
+  /**
+   * Cancel inside the CALLER's transaction (e.g. reversing the sales invoice that
+   * created the order). Reverses the start fee entry and every fee adjustment,
+   * and the factory's ledger, dated `date` (default today).
+   */
+  async cancelWithin(
+    orderId: string,
+    manager: EntityManager,
+    opts: { actorId?: string; branchScope?: string[] | null; date?: string; reason?: string } = {},
+  ): Promise<ManufacturingOrder> {
+    const actorId = opts.actorId;
+    const branchScope = opts.branchScope ?? null;
+    {
       const order = await manager.findOne(ManufacturingOrder, { where: { id: orderId }, lock: { mode: 'pessimistic_write' } });
       if (!order || !isWithinBranchScope(order.branchId, branchScope)) throw new NotFoundException('لم يتم العثور على أمر التصنيع');
       if (order.status === ManufacturingOrderStatus.CANCELLED) throw new BadRequestException('الأمر ملغى بالفعل');
@@ -306,9 +321,9 @@ export class ManufacturingProductionService {
           throw new BadRequestException('تعذّر إيجاد قيد رسوم التصنيع الأصلي');
         }
         const fee = round2(order.manufacturingFee ?? 0); // current fee = start fee ± adjustments
-        const date = todayIso();
+        const date = opts.date ?? todayIso();
         const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
-        const description = `إلغاء ${this.feeDescription(order)}`;
+        const description = `إلغاء ${this.feeDescription(order)}${opts.reason ? ' — ' + opts.reason : ''}`;
         for (const entry of toReverse) {
           const original = await this.journalService.findWithLines(entry.id);
           if (!original) throw new BadRequestException('تعذّر إيجاد قيد رسوم التصنيع الأصلي');
@@ -359,8 +374,9 @@ export class ManufacturingProductionService {
 
       order.status = ManufacturingOrderStatus.CANCELLED;
       order.updatedBy = actorId ?? null;
+      if (opts.reason) order.notes = [order.notes, opts.reason].filter(Boolean).join(' — ');
       return manager.getRepository(ManufacturingOrder).save(order);
-    });
+    }
   }
 
   // =========================================================

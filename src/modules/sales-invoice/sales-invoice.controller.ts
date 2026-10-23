@@ -108,6 +108,13 @@ export class SalesInvoiceController {
     return this.posting.post(id, actorId, branchScope);
   }
 
+  @Get(':id/reversal-impact')
+  @RequirePermissions('sales_invoices.reverse')
+  @ApiOperation({ summary: 'ما الذي سيتأثر بعكس الفاتورة (تسليم، أوامر تصنيع، مردودات)' })
+  reversalImpact(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
+    return this.posting.reversalImpact(id, branchScope);
+  }
+
   @Post(':id/reverse')
   @RequirePermissions('sales_invoices.reverse')
   @ResponseMessage('تم عكس فاتورة المبيعات بنجاح')

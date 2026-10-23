@@ -10,6 +10,10 @@ import { FinancialStatementQueryDto } from './dto/financial-statement-query.dto'
 import { CashAccountsReportQueryDto } from './dto/cash-accounts-report-query.dto';
 import { ProductIncomeReportService } from './product-income-report.service';
 import { ProductIncomeQueryDto } from './dto/product-income-query.dto';
+import { ProfitLossReportService } from './profit-loss-report.service';
+import { ProfitLossQueryDto } from './dto/profit-loss-query.dto';
+import { ProductSalesDetailService } from './product-sales-detail.service';
+import { ProductSalesDetailQueryDto } from './dto/product-sales-detail-query.dto';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 
@@ -24,6 +28,8 @@ import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 @Controller('accounting')
 export class AccountingReportController {
   constructor(
+    private readonly profitLoss: ProfitLossReportService,
+    private readonly productSalesDetail: ProductSalesDetailService,
     private readonly generalLedger: GeneralLedgerService,
     private readonly trialBalance: TrialBalanceService,
     private readonly financialStatements: FinancialStatementsService,
@@ -86,5 +92,19 @@ export class AccountingReportController {
       throw new BadRequestException('نوع الحساب غير صالح');
     }
     return this.treasuryCashReport.statement(kind as CashAccountKind, id, query, branchScope);
+  }
+
+  @Get('profit-loss')
+  @RequirePermissions('accounting_reports.view')
+  @ApiOperation({ summary: 'الأرباح والخسائر — تحليل تفصيلي حسب الحساب والشهر والفرع والمبيعات مع المقارنة' })
+  getProfitLoss(@Query() query: ProfitLossQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.profitLoss.report(query, branchScope);
+  }
+
+  @Get('products/sales-detail')
+  @RequirePermissions('accounting_reports.view')
+  @ApiOperation({ summary: 'دخل المنتجات التفصيلي — كل بند مبيع بتكلفته وربحه (بدون تجميع)' })
+  getProductSalesDetail(@Query() query: ProductSalesDetailQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.productSalesDetail.report(query, branchScope);
   }
 }

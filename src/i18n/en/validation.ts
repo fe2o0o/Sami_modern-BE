@@ -183,4 +183,9 @@ export const validation: Record<string, string> = {
   // ── AI assistant ────────────────────────────────────────────────────────
   'الرسالة مطلوبة': 'Message is required',
   'الرسالة طويلة جداً': 'Message is too long',
+  'نوع المقارنة غير صحيح': 'Invalid comparison type',
+  'الموظف غير صحيح': 'Invalid employee',
+  'التصنيف غير صحيح': 'Invalid category',
+  'نوع البند غير صحيح': 'Invalid line type',
+  'المصنع غير صحيح': 'Invalid factory',
 };

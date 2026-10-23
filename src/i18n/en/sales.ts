@@ -176,4 +176,8 @@ export const sales: Record<string, string> = {
   "حالة إذن التسليم غير صالحة": "Invalid delivery note status",
   "اختر المخزن الذي يعود إليه الصنف المُصنّع «{name}»": "Choose the warehouse the manufactured item «{name}» returns to",
   "مخزن الإرجاع غير صحيح": "Invalid return warehouse",
+  "لا يمكن عكس فاتورة عليها مردود مُرحّل ({n}) — اعكس المردود أولاً": "Cannot reverse an invoice with a posted return ({n}) — reverse the return first",
+  "حدّد مصير أوامر التصنيع المرتبطة بالفاتورة (إلغاء أو استمرار): {list}": "Decide the invoice's linked manufacturing orders (cancel or keep): {list}",
+  "أمر التصنيع غير صحيح": "Invalid manufacturing order",
+  "اختر إلغاء أمر التصنيع أو استمراره": "Choose to cancel or keep the manufacturing order",
 };
