@@ -228,4 +228,12 @@ export const finance: Record<string, string> = {
   'فاتورة المشتريات الأصلية غير موجودة': 'Original purchase invoice not found',
   'لا يمكن إنشاء مردود إلا من فاتورة مشتريات مُرحّلة': 'A return can only be created from a posted purchase invoice',
   'لا يمكن تعديل أو حذف مردود مُرحّل — استخدم العكس': 'A posted return cannot be edited or deleted — use reversal',
+  'حساب العهد والسلف يتطلب اختيار الموظف': 'The custody & advances account requires choosing the employee',
+  'حساب المخزون يتطلب اختيار المنتج': 'The inventory account requires choosing the product',
+  'أحد الموظفين المختارين غير موجود': 'One of the selected employees was not found',
+  'قيمة «يتطلب اختيار الموظف» يجب أن تكون منطقية': '"Requires employee" must be a boolean',
+  '{label}: لا يمكن ربط موظف مع عميل أو مورد أو خزينة في نفس السطر': '{label}: cannot link an employee together with a customer, supplier or treasury on the same line',
+  '{label}: لا يمكن ربط موظف إلا بحساب عهد/سلف (حساب يتطلب اختيار الموظف)': '{label}: an employee can only be linked to a custody/advances account (one that requires an employee)',
+  '{label}: حساب العهد والسلف يتطلب اختيار الموظف': '{label}: the custody & advances account requires choosing the employee',
+  '{label}: حساب المخزون يتطلب اختيار المنتج': '{label}: the inventory account requires choosing the product',
 };

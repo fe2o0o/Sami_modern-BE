@@ -40,6 +40,11 @@ export class JournalEntryLineDto {
   @IsUUID()
   supplierId?: string | null;
 
+  @ApiPropertyOptional({ format: 'uuid', description: 'الموظف (لحسابات العهد والسلف)' })
+  @IsOptional()
+  @IsUUID()
+  employeeId?: string | null;
+
   @ApiPropertyOptional({ format: 'uuid', description: 'الخزينة (لحساب خزينة تشترك فيه أكثر من خزينة)' })
   @IsOptional()
   @IsUUID()

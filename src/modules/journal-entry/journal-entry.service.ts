@@ -82,9 +82,12 @@ export interface DetailedLine {
   description: string | null;
   customerId: string | null;
   supplierId: string | null;
+  employeeId: string | null;
+  warehouseId: string | null;
+  productId: string | null;
   treasuryId: string | null;
   bankAccountId: string | null;
-  /** Subledger the line is mirrored on (customer/supplier/treasury/bank), if any. */
+  /** Party of the line: customer/supplier/employee/treasury/bank, or the product of an inventory line. */
   partyType: JournalPartyKind | null;
   partyId: string | null;
   partyName: string | null;
@@ -436,6 +439,9 @@ export class JournalEntryService {
         description: l.description,
         customerId: l.customerId ?? null,
         supplierId: l.supplierId ?? null,
+        employeeId: l.employeeId ?? null,
+        warehouseId: l.warehouseId ?? null,
+        productId: l.productId ?? null,
         treasuryId: l.treasuryId ?? null,
         bankAccountId: l.bankAccountId ?? null,
         ...parties[i],
@@ -763,6 +769,7 @@ export class JournalEntryService {
     entity.branchId = line.branchId ?? fallbackBranchId ?? null;
     entity.customerId = line.customerId ?? null;
     entity.supplierId = line.supplierId ?? null;
+    entity.employeeId = line.employeeId ?? null;
     entity.treasuryId = line.treasuryId ?? null;
     entity.bankAccountId = line.bankAccountId ?? null;
     entity.warehouseId = line.warehouseId ?? null;
@@ -781,6 +788,7 @@ export class JournalEntryService {
       branchId: l.branchId ?? null,
       customerId: l.customerId ?? null,
       supplierId: l.supplierId ?? null,
+      employeeId: l.employeeId ?? null,
       treasuryId: l.treasuryId ?? null,
       bankAccountId: l.bankAccountId ?? null,
       warehouseId: l.warehouseId ?? null,

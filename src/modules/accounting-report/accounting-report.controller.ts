@@ -14,6 +14,8 @@ import { ProfitLossReportService } from './profit-loss-report.service';
 import { ProfitLossQueryDto } from './dto/profit-loss-query.dto';
 import { ProductSalesDetailService } from './product-sales-detail.service';
 import { ProductSalesDetailQueryDto } from './dto/product-sales-detail-query.dto';
+import { DeliveredItemsService } from './delivered-items.service';
+import { DeliveredItemsQueryDto } from './dto/delivered-items-query.dto';
 import { RequirePermissions } from '../permissions/decorators/require-permissions.decorator';
 import { BranchScope } from '../auth/decorators/branch-scope.decorator';
 
@@ -30,6 +32,7 @@ export class AccountingReportController {
   constructor(
     private readonly profitLoss: ProfitLossReportService,
     private readonly productSalesDetail: ProductSalesDetailService,
+    private readonly deliveredItems: DeliveredItemsService,
     private readonly generalLedger: GeneralLedgerService,
     private readonly trialBalance: TrialBalanceService,
     private readonly financialStatements: FinancialStatementsService,
@@ -106,5 +109,12 @@ export class AccountingReportController {
   @ApiOperation({ summary: 'دخل المنتجات التفصيلي — كل بند مبيع بتكلفته وربحه (بدون تجميع)' })
   getProductSalesDetail(@Query() query: ProductSalesDetailQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.productSalesDetail.report(query, branchScope);
+  }
+
+  @Get('products/delivered-detail')
+  @RequirePermissions('accounting_reports.view')
+  @ApiOperation({ summary: 'المنتجات المُسلَّمة التفصيلي — كل بند تسليم بمخزنه أو مصنعه وتكلفته (بدون تجميع)' })
+  getDeliveredItems(@Query() query: DeliveredItemsQueryDto, @BranchScope() branchScope: string[] | null) {
+    return this.deliveredItems.report(query, branchScope);
   }
 }

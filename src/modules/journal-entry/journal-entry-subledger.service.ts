@@ -3,6 +3,11 @@ import { EntityManager, In } from 'typeorm';
 import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
 import { Customer } from '../customer/entities/customer.entity';
 import { Supplier } from '../supplier/entities/supplier.entity';
+import { Employee } from '../employee/entities/employee.entity';
+import { Product } from '../product/entities/product.entity';
+import { Warehouse } from '../warehouse/entities/warehouse.entity';
+import { ChartOfAccount } from '../chart-of-account/entities/chart-of-account.entity';
+import { AccountSubType } from '../chart-of-account/enums/account.enum';
 import { Treasury } from '../treasury/entities/treasury.entity';
 import { BankAccount } from '../bank-account/entities/bank-account.entity';
 import { CustomerLedgerService } from '../customer/customer-ledger.service';
@@ -18,7 +23,10 @@ import { JournalEntryLine } from './entities/journal-entry-line.entity';
 import { JournalLineInput } from './journal-entry.rules';
 
 /** Subledger a journal line belongs to, resolved from its account/party. */
-export type JournalPartyKind = 'customer' | 'supplier' | 'treasury' | 'bank';
+export type JournalPartyKind = 'customer' | 'supplier' | 'employee' | 'product' | 'treasury' | 'bank';
+
+/** Inventory sub-types: a manual line on such an account names the product. */
+export const INVENTORY_SUB_TYPES = [AccountSubType.INVENTORY_RAW_MATERIAL, AccountSubType.INVENTORY_WIP, AccountSubType.INVENTORY_FINISHED_GOODS];
 
 export interface LinePartyInfo {
   partyType: JournalPartyKind | null;
@@ -41,7 +49,13 @@ export const MANUAL_JOURNAL_SOURCE = 'journal_entry';
  *  - on post, every party line is mirrored as an ADJUSTMENT row on that party's
  *    ledger, and cash/bank lines are mirrored on the treasury/bank ledger whose
  *    GL account they hit (resolved exactly like {@link CashSubledgerService});
- *  - on reversal the mirrored rows are written again with the sides swapped.
+ *  - on reversal the mirrored rows are written again with the sides swapped;
+ *  - a line on an account flagged «requiresEmployee» (custody / advances) MUST
+ *    name an employee, and an employee may only be named there (no employee
+ *    ledger table yet — the employee's movements are read from these lines);
+ *  - a line on an INVENTORY account MUST name the product (warehouse optional).
+ *    It tags the value only: quantities / average cost move through inventory
+ *    adjustments, never through a manual journal.
  *
  * Everything joins the caller's transaction.
  */
@@ -62,11 +76,24 @@ export class JournalEntrySubledgerService {
     const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
     const customerControl = settings?.customerControlAccountId ?? null;
     const supplierControl = settings?.supplierControlAccountId ?? null;
+    const { employeeAccounts, inventoryAccounts } = await this.partyAccounts(lines.map((l) => l.accountId), manager);
 
     lines.forEach((line, index) => {
       const label = `السطر ${index + 1}`;
       if (line.customerId && line.supplierId) {
         throw new BadRequestException(`${label}: لا يمكن ربط عميل ومورد في نفس السطر`);
+      }
+      if (line.employeeId && (line.customerId || line.supplierId || line.treasuryId || line.bankAccountId)) {
+        throw new BadRequestException(`${label}: لا يمكن ربط موظف مع عميل أو مورد أو خزينة في نفس السطر`);
+      }
+      if (line.employeeId && !employeeAccounts.has(line.accountId)) {
+        throw new BadRequestException(`${label}: لا يمكن ربط موظف إلا بحساب عهد/سلف (حساب يتطلب اختيار الموظف)`);
+      }
+      if (opts.requireParty && employeeAccounts.has(line.accountId) && !line.employeeId) {
+        throw new BadRequestException(`${label}: حساب العهد والسلف يتطلب اختيار الموظف`);
+      }
+      if (opts.requireParty && inventoryAccounts.has(line.accountId) && !line.productId) {
+        throw new BadRequestException(`${label}: حساب المخزون يتطلب اختيار المنتج`);
       }
       if (line.customerId) {
         if (!customerControl) throw new BadRequestException('حساب مراقبة العملاء غير محدد في إعدادات المحاسبة');
@@ -133,6 +160,38 @@ export class JournalEntrySubledgerService {
       const found = await manager.getRepository(Supplier).count({ where: { id: In(supplierIds) } });
       if (found !== supplierIds.length) throw new BadRequestException('أحد الموردين المختارين غير موجود');
     }
+    const employeeIds = [...new Set(lines.map((l) => l.employeeId).filter((v): v is string => !!v))];
+    if (employeeIds.length) {
+      const found = await manager.getRepository(Employee).count({ where: { id: In(employeeIds) } });
+      if (found !== employeeIds.length) throw new BadRequestException('أحد الموظفين المختارين غير موجود');
+    }
+    const productIds = [...new Set(lines.map((l) => l.productId).filter((v): v is string => !!v))];
+    if (productIds.length) {
+      const found = await manager.getRepository(Product).count({ where: { id: In(productIds) } });
+      if (found !== productIds.length) throw new BadRequestException('أحد المنتجات المختارة غير موجود');
+    }
+    const warehouseIds = [...new Set(lines.map((l) => l.warehouseId).filter((v): v is string => !!v))];
+    if (warehouseIds.length) {
+      const found = await manager.getRepository(Warehouse).count({ where: { id: In(warehouseIds) } });
+      if (found !== warehouseIds.length) throw new BadRequestException('أحد المخازن المختارة غير موجود');
+    }
+  }
+
+  /** Which of these accounts need an employee (custody / advances) or a product (inventory). */
+  async partyAccounts(accountIds: string[], manager: EntityManager): Promise<{ employeeAccounts: Set<string>; inventoryAccounts: Set<string> }> {
+    const ids = [...new Set(accountIds)];
+    if (!ids.length) return { employeeAccounts: new Set(), inventoryAccounts: new Set() };
+    const [settings, accounts] = await Promise.all([
+      manager.getRepository(AccountingSetting).findOne({ where: {} }),
+      manager.getRepository(ChartOfAccount).find({ where: { id: In(ids) }, select: { id: true, requiresEmployee: true, accountSubType: true } }),
+    ]);
+    const settingsInventory = new Set([settings?.rawMaterialInventoryAccountId, settings?.finishedGoodsInventoryAccountId].filter((v): v is string => !!v));
+    return {
+      employeeAccounts: new Set(accounts.filter((a) => a.requiresEmployee).map((a) => a.id)),
+      inventoryAccounts: new Set(
+        accounts.filter((a) => settingsInventory.has(a.id) || (a.accountSubType && INVENTORY_SUB_TYPES.includes(a.accountSubType))).map((a) => a.id),
+      ),
+    };
   }
 
   /**
@@ -186,6 +245,8 @@ export class JournalEntrySubledgerService {
         );
         continue;
       }
+      // Employee / product lines carry their party on the journal line itself.
+      if (line.employeeId || line.productId) continue;
       // An explicitly chosen treasury/bank wins; otherwise resolve by the GL account.
       const cash = line.treasuryId
         ? { treasuryId: line.treasuryId }
@@ -211,10 +272,21 @@ export class JournalEntrySubledgerService {
   async describe(lines: JournalEntryLine[], manager: EntityManager): Promise<LinePartyInfo[]> {
     const customerIds = [...new Set(lines.map((l) => l.customerId).filter((v): v is string => !!v))];
     const supplierIds = [...new Set(lines.map((l) => l.supplierId).filter((v): v is string => !!v))];
-    const accountIds = [...new Set(lines.filter((l) => !l.customerId && !l.supplierId).map((l) => l.accountId))];
+    const employeeIds = [...new Set(lines.map((l) => l.employeeId).filter((v): v is string => !!v))];
+    const productIds = [...new Set(lines.map((l) => l.productId).filter((v): v is string => !!v))];
+    const warehouseIds = [...new Set(lines.map((l) => l.warehouseId).filter((v): v is string => !!v))];
+    const accountIds = [...new Set(lines.filter((l) => !l.customerId && !l.supplierId && !l.employeeId).map((l) => l.accountId))];
     const treasuryIds = [...new Set(lines.map((l) => l.treasuryId).filter((v): v is string => !!v))];
     const bankIds = [...new Set(lines.map((l) => l.bankAccountId).filter((v): v is string => !!v))];
 
+    const [employees, products, warehouses] = await Promise.all([
+      employeeIds.length ? manager.getRepository(Employee).find({ where: { id: In(employeeIds) }, select: { id: true, name: true }, withDeleted: true }) : Promise.resolve([] as Employee[]),
+      productIds.length ? manager.getRepository(Product).find({ where: { id: In(productIds) }, select: { id: true, name: true }, withDeleted: true }) : Promise.resolve([] as Product[]),
+      warehouseIds.length ? manager.getRepository(Warehouse).find({ where: { id: In(warehouseIds) }, select: { id: true, name: true }, withDeleted: true }) : Promise.resolve([] as Warehouse[]),
+    ]);
+    const eName = new Map<string, string>(employees.map((e) => [e.id, e.name]));
+    const pName = new Map<string, string>(products.map((p) => [p.id, p.name]));
+    const wName = new Map<string, string>(warehouses.map((w) => [w.id, w.name]));
     const [customers, suppliers, treasuries, banks, chosenTreasuries, chosenBanks] = await Promise.all([
       customerIds.length ? manager.getRepository(Customer).find({ where: { id: In(customerIds) }, select: { id: true, name: true }, withDeleted: true }) : Promise.resolve([] as Customer[]),
       supplierIds.length ? manager.getRepository(Supplier).find({ where: { id: In(supplierIds) }, select: { id: true, name: true }, withDeleted: true }) : Promise.resolve([] as Supplier[]),
@@ -233,6 +305,7 @@ export class JournalEntrySubledgerService {
     return lines.map((l): LinePartyInfo => {
       if (l.customerId) return { partyType: 'customer', partyId: l.customerId, partyName: cName.get(l.customerId) ?? null };
       if (l.supplierId) return { partyType: 'supplier', partyId: l.supplierId, partyName: sName.get(l.supplierId) ?? null };
+      if (l.employeeId) return { partyType: 'employee', partyId: l.employeeId, partyName: eName.get(l.employeeId) ?? null };
       if (l.treasuryId) return { partyType: 'treasury', partyId: l.treasuryId, partyName: tById.get(l.treasuryId)?.name ?? null };
       if (l.bankAccountId) {
         const cb = bById.get(l.bankAccountId);
@@ -242,6 +315,10 @@ export class JournalEntrySubledgerService {
       if (t) return { partyType: 'treasury', partyId: t.id, partyName: t.name };
       const b = bByAcc.get(l.accountId);
       if (b) return { partyType: 'bank', partyId: b.id, partyName: `${b.bankName} - ${b.accountName}` };
+      if (l.productId) {
+        const w = l.warehouseId ? wName.get(l.warehouseId) : null;
+        return { partyType: 'product', partyId: l.productId, partyName: `${pName.get(l.productId) ?? '—'}${w ? ` — ${w}` : ''}` };
+      }
       return { partyType: null, partyId: null, partyName: null };
     });
   }

@@ -10,6 +10,7 @@ export interface JournalLineInput {
   branchId?: string | null;
   customerId?: string | null;
   supplierId?: string | null;
+  employeeId?: string | null;
   treasuryId?: string | null;
   bankAccountId?: string | null;
   warehouseId?: string | null;
@@ -135,6 +136,7 @@ export function buildReversalLines(
     branchId: line.branchId ?? null,
     customerId: line.customerId ?? null,
     supplierId: line.supplierId ?? null,
+    employeeId: line.employeeId ?? null,
     warehouseId: line.warehouseId ?? null,
     productId: line.productId ?? null,
   }));

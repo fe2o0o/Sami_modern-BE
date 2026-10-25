@@ -48,6 +48,10 @@ export class ChartOfAccount extends BaseEntity {
   @Column({ type: 'boolean', default: true })
   isActive!: boolean;
 
+  /** Employee account (custody / advances): manual journal lines on it must name an employee. */
+  @Column({ type: 'boolean', default: false })
+  requiresEmployee!: boolean;
+
   /** Default root accounts — protected from deletion. */
   @Column({ type: 'boolean', default: false })
   isSystem!: boolean;

@@ -58,6 +58,12 @@ export class CreateChartOfAccountDto {
   @IsBoolean({ message: 'قيمة السماح بالترحيل يجب أن تكون منطقية' })
   allowPosting?: boolean;
 
+  /** Custody / advances account — every manual journal line on it names an employee. */
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  @IsBoolean({ message: 'قيمة «يتطلب اختيار الموظف» يجب أن تكون منطقية' })
+  requiresEmployee?: boolean;
+
   @ApiPropertyOptional({ default: true })
   @IsOptional()
   @IsBoolean({ message: 'حالة التفعيل يجب أن تكون قيمة منطقية' })

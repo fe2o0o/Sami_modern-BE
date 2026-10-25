@@ -6,6 +6,7 @@ import { Warehouse } from '../warehouse/entities/warehouse.entity';
 import { Role } from '../role/entities/role.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { ChartOfAccount } from '../chart-of-account/entities/chart-of-account.entity';
+import { INVENTORY_SUB_TYPES } from '../journal-entry/journal-entry-subledger.service';
 import { Unit } from '../unit/entities/unit.entity';
 import { Brand } from '../brand/entities/brand.entity';
 import { ProductCategory } from '../product-category/entities/product-category.entity';
@@ -57,6 +58,10 @@ export interface CashEntityLookupItem extends LookupItem {
 export interface SubledgerAccountsLookup {
   customerControlAccountId: string | null;
   supplierControlAccountId: string | null;
+  /** Accounts whose journal lines must name an employee (custody / advances). */
+  employeeAccountIds: string[];
+  /** Inventory accounts: journal lines on them name the product. */
+  inventoryAccountIds: string[];
   treasuries: CashEntityLookupItem[];
   bankAccounts: CashEntityLookupItem[];
 }
@@ -97,14 +102,20 @@ export class LookupsService {
   ) {}
 
   async subledgerAccounts(): Promise<SubledgerAccountsLookup> {
-    const [settings, treasuries, banks] = await Promise.all([
+    const [settings, treasuries, banks, partyAccounts] = await Promise.all([
       this.settingsRepository.findOne({ where: {} }),
       this.treasuryRepository.find({ where: { isActive: true }, select: { id: true, name: true, accountId: true }, order: { name: 'ASC' } }),
       this.bankAccountRepository.find({ where: { isActive: true }, select: { id: true, bankName: true, accountName: true, accountId: true }, order: { bankName: 'ASC' } }),
+      this.accountRepository.find({ where: { allowPosting: true }, select: { id: true, requiresEmployee: true, accountSubType: true } }),
     ]);
+    const settingsInventory = new Set([settings?.rawMaterialInventoryAccountId, settings?.finishedGoodsInventoryAccountId].filter(Boolean));
     return {
       customerControlAccountId: settings?.customerControlAccountId ?? null,
       supplierControlAccountId: settings?.supplierControlAccountId ?? null,
+      employeeAccountIds: partyAccounts.filter((a) => a.requiresEmployee).map((a) => a.id),
+      inventoryAccountIds: partyAccounts
+        .filter((a) => settingsInventory.has(a.id) || (a.accountSubType && INVENTORY_SUB_TYPES.includes(a.accountSubType)))
+        .map((a) => a.id),
       treasuries: treasuries.map((t) => ({ id: t.id, name: t.name, accountId: t.accountId })),
       bankAccounts: banks.map((b) => ({ id: b.id, name: `${b.bankName} - ${b.accountName}`, accountId: b.accountId })),
     };

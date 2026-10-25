@@ -69,6 +69,11 @@ export class JournalEntryLine extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   supplierId!: string | null;
 
+  /** Employee party (custody / advances accounts flagged «requiresEmployee»). */
+  @Index()
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  employeeId!: string | null;
+
   /** Treasury explicitly chosen for a cash-account line (several treasuries may
    *  share one GL account) — the cashbook the line is mirrored on. */
   @Column({ type: 'uuid', nullable: true })
