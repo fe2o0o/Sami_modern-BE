@@ -1,6 +1,7 @@
 import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { Branch } from '../../branch/entities/branch.entity';
+import { Employee } from '../../employee/entities/employee.entity';
 import { WarehouseType } from '../enums/warehouse-type.enum';
 
 @Entity('warehouses')
@@ -18,8 +19,17 @@ export class Warehouse extends BaseEntity {
   })
   type!: WarehouseType;
 
+  /** Display snapshot of the manager's name (kept in sync with `managerEmployee`). */
   @Column({ type: 'varchar', length: 255, nullable: true })
   managerName!: string | null;
+
+  /** Manager = an employee (links branches/warehouses to HR). */
+  @ManyToOne(() => Employee, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'manager_employee_id' })
+  managerEmployee!: Employee | null;
+
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  managerEmployeeId!: string | null;
 
   @Column({ type: 'varchar', length: 30, nullable: true })
   phone!: string | null;

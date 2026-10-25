@@ -19,6 +19,7 @@ import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, bool, enumFromLabel } from '../../common/excel/import.helpers';
 import { CodeSettingService } from '../code-setting/code-setting.service';
+import { matchManagerEmployee, resolveManagerEmployee } from '../employee/employee-manager.util';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', example: 'WH-010', note: 'كود فريد للمخزن' },
@@ -97,6 +98,7 @@ export class WarehouseService {
           branchId,
           type: enumFromLabel<WarehouseType>(v.type, WAREHOUSE_TYPE_LABELS, 'النوع', WarehouseType.STORE),
           managerName: optStr(v.managerName),
+          managerEmployeeId: await matchManagerEmployee(manager, optStr(v.managerName)),
           phone: optStr(v.phone),
           email: optStr(v.email),
           address: optStr(v.address),
@@ -114,7 +116,8 @@ export class WarehouseService {
     if (dto.branchId) await this.ensureBranchExists(dto.branchId);
     await this.ensureCodeUnique(code);
 
-    const warehouse = this.warehouseRepository.create({ ...dto, branchId: dto.branchId ?? null, code });
+    const mgr = await resolveManagerEmployee(this.warehouseRepository.manager, dto.managerEmployeeId);
+    const warehouse = this.warehouseRepository.create({ ...dto, ...(mgr ?? {}), branchId: dto.branchId ?? null, code });
 
     // The "default" flag is unique per branch; a branchless warehouse is exempt.
     if (dto.isDefault && dto.branchId) {
@@ -178,7 +181,8 @@ export class WarehouseService {
       await this.clearDefaultFlag(targetBranchId, id);
     }
 
-    Object.assign(warehouse, dto);
+    const mgr = await resolveManagerEmployee(this.warehouseRepository.manager, dto.managerEmployeeId);
+    Object.assign(warehouse, dto, mgr ?? {});
     return this.warehouseRepository.save(warehouse);
   }
 

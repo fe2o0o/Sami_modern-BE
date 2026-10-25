@@ -23,6 +23,7 @@ import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, bool } from '../../common/excel/import.helpers';
 import { CodeSettingService } from '../code-setting/code-setting.service';
+import { matchManagerEmployee, resolveManagerEmployee } from '../employee/employee-manager.util';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', example: 'BR-002', note: 'كود فريد للفرع' },
@@ -93,6 +94,7 @@ export class BranchService {
           code,
           name: str(v.name, 'الاسم'),
           managerName: optStr(v.managerName),
+          managerEmployeeId: await matchManagerEmployee(manager, optStr(v.managerName)),
           phone: optStr(v.phone),
           mobile: optStr(v.mobile),
           email: optStr(v.email),
@@ -139,7 +141,8 @@ export class BranchService {
       }
 
       const branchRepo = manager.getRepository(Branch);
-      const branch = await branchRepo.save(branchRepo.create({ ...dto, companyId, code }));
+      const mgr = await resolveManagerEmployee(manager, dto.managerEmployeeId);
+      const branch = await branchRepo.save(branchRepo.create({ ...dto, ...(mgr ?? {}), companyId, code }));
 
       const warehouseRepo = manager.getRepository(Warehouse);
       const warehouse = await warehouseRepo.save(
@@ -198,7 +201,8 @@ export class BranchService {
       await this.clearMainFlag(branch.companyId, id);
     }
 
-    Object.assign(branch, dto);
+    const mgr = await resolveManagerEmployee(this.branchRepository.manager, dto.managerEmployeeId);
+    Object.assign(branch, dto, mgr ?? {});
     return this.branchRepository.save(branch);
   }
 

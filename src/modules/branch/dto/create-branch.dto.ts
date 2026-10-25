@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
 } from 'class-validator';
 
@@ -20,10 +21,11 @@ export class CreateBranchDto {
   @MaxLength(255, { message: 'اسم الفرع يجب ألا يتجاوز 255 حرفاً' })
   name!: string;
 
-  @ApiPropertyOptional()
+  /** Manager picked from the employees list (null clears it). */
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @IsOptional()
-  @IsString({ message: 'اسم المدير يجب أن يكون نصاً' })
-  managerName?: string;
+  @IsUUID('4', { message: 'الموظف المختار كمدير غير صحيح' })
+  managerEmployeeId?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()

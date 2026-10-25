@@ -188,4 +188,6 @@ export const validation: Record<string, string> = {
   'التصنيف غير صحيح': 'Invalid category',
   'نوع البند غير صحيح': 'Invalid line type',
   'المصنع غير صحيح': 'Invalid factory',
+  'الموظف المختار كمدير غير صحيح': 'Invalid manager employee',
+  'الموظف المختار كمدير غير موجود': 'The selected manager employee was not found',
 };
