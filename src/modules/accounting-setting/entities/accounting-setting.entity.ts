@@ -72,6 +72,19 @@ export class AccountingSetting extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   commissionPayableAccountId!: string | null;
 
+  // ── Employees (HR) ─────────────────────────────────────
+  /** Employee advances (سلف) — lines on it carry the employee. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  employeeAdvancesAccountId!: string | null;
+
+  /** Employee custody (عُهد) — lines on it carry the employee. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  employeeCustodyAccountId!: string | null;
+
+  /** Optional ceiling: an advance may not exceed this × the employee's net salary. */
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
+  maxAdvanceSalaryMultiple!: string | null;
+
   // ── Opening Balances ───────────────────────────────────
   /** Equity account used to auto-balance opening balances. */
   @Column({ type: 'uuid', nullable: true })

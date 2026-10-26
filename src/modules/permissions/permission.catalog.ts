@@ -15,6 +15,7 @@ export enum PermissionAction {
   POST = 'post',
   REVERSE = 'reverse',
   MANAGE = 'manage',
+  APPROVE = 'approve',
 }
 
 export const PERMISSION_ACTION_LABELS: Record<PermissionAction, string> = {
@@ -25,6 +26,7 @@ export const PERMISSION_ACTION_LABELS: Record<PermissionAction, string> = {
   [PermissionAction.POST]: 'ترحيل',
   [PermissionAction.REVERSE]: 'عكس',
   [PermissionAction.MANAGE]: 'إدارة',
+  [PermissionAction.APPROVE]: 'اعتماد',
 };
 
 export interface PermissionModuleDef {
@@ -76,8 +78,19 @@ export const PERMISSION_CATALOG: PermissionGroupDef[] = [
       { module: 'products', labelAr: 'المنتجات', actions: CRUD },
       { module: 'customers', labelAr: 'العملاء', actions: CRUD },
       { module: 'suppliers', labelAr: 'الموردون', actions: CRUD },
-      { module: 'employees', labelAr: 'الموظفون', actions: CRUD },
       { module: 'product_catalog', labelAr: 'الوحدات والعلامات والفئات', actions: [A.VIEW, A.MANAGE] },
+    ],
+  },
+  {
+    group: 'hr',
+    labelAr: 'الموارد البشرية',
+    modules: [
+      { module: 'employees', labelAr: 'الموظفون', actions: CRUD },
+      { module: 'hr', labelAr: 'الأقسام والدرجات الوظيفية', actions: [A.VIEW, A.MANAGE] },
+      { module: 'hr_documents', labelAr: 'مستندات الموظفين', actions: [A.VIEW, A.MANAGE] },
+      { module: 'hr_salary', labelAr: 'رواتب الموظفين وبنود الراتب', actions: [A.VIEW, A.MANAGE] },
+      { module: 'advances', labelAr: 'سلف الموظفين', actions: [A.VIEW, A.CREATE, A.EDIT, A.DELETE, A.APPROVE, A.POST, A.REVERSE] },
+      { module: 'custody', labelAr: 'عُهد الموظفين', actions: DOC },
     ],
   },
   {

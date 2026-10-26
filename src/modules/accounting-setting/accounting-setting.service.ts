@@ -39,9 +39,16 @@ export class AccountingSettingService {
   /** Update the settings record after validating every selected account. */
   async update(dto: UpdateAccountingSettingDto): Promise<AccountingSetting> {
     await this.validateAccounts(dto);
+    if (dto.employeeAdvancesAccountId && dto.employeeAdvancesAccountId === dto.employeeCustodyAccountId) {
+      throw new BadRequestException('حساب سلف الموظفين وحساب عُهد الموظفين يجب أن يكونا حسابين مختلفين');
+    }
     const setting = await this.get();
     Object.assign(setting, dto);
-    return this.settingRepository.save(setting);
+    const saved = await this.settingRepository.save(setting);
+    // employee accounts always ask for the employee on manual journal lines
+    const flag = [saved.employeeAdvancesAccountId, saved.employeeCustodyAccountId].filter((v): v is string => !!v);
+    if (flag.length) await this.settingRepository.manager.update(ChartOfAccount, flag, { requiresEmployee: true });
+    return saved;
   }
 
   /**

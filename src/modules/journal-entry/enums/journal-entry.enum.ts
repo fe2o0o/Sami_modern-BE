@@ -36,6 +36,8 @@ export enum JournalSourceType {
   INVENTORY_ADJUSTMENT = 'inventory_adjustment',
   MANUFACTURING = 'manufacturing',
   PAYROLL = 'payroll',
+  EMPLOYEE_ADVANCE = 'employee_advance',
+  EMPLOYEE_CUSTODY = 'employee_custody',
 }
 
 export const JOURNAL_ENTRY_STATUS_LABELS: Record<JournalEntryStatus, string> = {
@@ -60,6 +62,8 @@ export const JOURNAL_SOURCE_TYPE_LABELS: Record<JournalSourceType, string> = {
   [JournalSourceType.INVENTORY_ADJUSTMENT]: 'تسوية مخزون',
   [JournalSourceType.MANUFACTURING]: 'أمر تصنيع',
   [JournalSourceType.PAYROLL]: 'رواتب',
+  [JournalSourceType.EMPLOYEE_ADVANCE]: 'سلفة موظف',
+  [JournalSourceType.EMPLOYEE_CUSTODY]: 'عهدة موظف',
 };
 
 /**

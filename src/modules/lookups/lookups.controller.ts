@@ -95,6 +95,24 @@ export class LookupsController {
     return this.lookupsService.employees(branchId);
   }
 
+  @Get('departments')
+  @ApiOperation({ summary: 'قائمة الأقسام' })
+  departments() {
+    return this.lookupsService.departments();
+  }
+
+  @Get('job-grades')
+  @ApiOperation({ summary: 'قائمة الدرجات الوظيفية' })
+  jobGrades() {
+    return this.lookupsService.jobGrades();
+  }
+
+  @Get('users')
+  @ApiOperation({ summary: 'قائمة مستخدمي النظام (لربط الموظف بمستخدم)' })
+  users() {
+    return this.lookupsService.users();
+  }
+
   @Get('warehouses')
   @ApiQuery({ name: 'branchId', required: false })
   @ApiOperation({ summary: 'قائمة المخازن (اختياريًا حسب الفرع)' })

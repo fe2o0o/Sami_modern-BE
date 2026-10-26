@@ -3,6 +3,7 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsEnum,
   IsNumber,
   IsOptional,
   IsString,
@@ -10,6 +11,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { ContractType, Gender, MaritalStatus } from '../../hr/enums/hr.enum';
 
 export class CreateEmployeeDto {
   @ApiPropertyOptional({ example: 'EMP-001', description: 'اختياري عند تفعيل التوليد التلقائي' })
@@ -81,8 +83,113 @@ export class CreateEmployeeDto {
   @IsString()
   notes?: string | null;
 
+  /** Initial status on create only — later changes go through POST /employees/:id/status. */
   @ApiPropertyOptional({ default: true })
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  // ── HR profile ──
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @IsOptional()
+  @IsUUID('4', { message: 'القسم غير صحيح' })
+  departmentId?: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @IsOptional()
+  @IsUUID('4', { message: 'الدرجة الوظيفية غير صحيحة' })
+  jobGradeId?: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @IsOptional()
+  @IsUUID('4', { message: 'المدير المباشر غير صحيح' })
+  directManagerId?: string | null;
+
+  @ApiPropertyOptional({ enum: ContractType, nullable: true })
+  @IsOptional()
+  @IsEnum(ContractType, { message: 'نوع العقد غير صحيح' })
+  contractType?: ContractType | null;
+
+  @ApiPropertyOptional({ format: 'date', nullable: true })
+  @IsOptional()
+  @IsDateString({}, { message: 'تاريخ بداية العقد غير صحيح' })
+  contractStart?: string | null;
+
+  @ApiPropertyOptional({ format: 'date', nullable: true })
+  @IsOptional()
+  @IsDateString({}, { message: 'تاريخ نهاية العقد غير صحيح' })
+  contractEnd?: string | null;
+
+  @ApiPropertyOptional({ format: 'date', nullable: true })
+  @IsOptional()
+  @IsDateString({}, { message: 'تاريخ الميلاد غير صحيح' })
+  birthDate?: string | null;
+
+  @ApiPropertyOptional({ enum: Gender, nullable: true })
+  @IsOptional()
+  @IsEnum(Gender, { message: 'النوع غير صحيح' })
+  gender?: Gender | null;
+
+  @ApiPropertyOptional({ enum: MaritalStatus, nullable: true })
+  @IsOptional()
+  @IsEnum(MaritalStatus, { message: 'الحالة الاجتماعية غير صحيحة' })
+  maritalStatus?: MaritalStatus | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  address?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  qualification?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  socialInsuranceNumber?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  bankName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  bankAccountNumber?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  iban?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  emergencyContactName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  emergencyContactRelation?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  emergencyContactMobile?: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @IsOptional()
+  @IsUUID('4', { message: 'مستخدم النظام غير صحيح' })
+  userId?: string | null;
 }
