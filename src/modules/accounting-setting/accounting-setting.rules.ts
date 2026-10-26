@@ -128,6 +128,18 @@ export const SETTING_ACCOUNT_RULES: SettingAccountRule[] = [
     subTypes: [AccountSubType.SALARY_PAYABLE, AccountSubType.OTHER_PAYABLE],
   },
   {
+    key: 'employeeAdvancesAccountId',
+    label: 'حساب سلف الموظفين',
+    accountType: AccountType.ASSET,
+    subTypes: [],
+  },
+  {
+    key: 'employeeCustodyAccountId',
+    label: 'حساب عُهد الموظفين',
+    accountType: AccountType.ASSET,
+    subTypes: [],
+  },
+  {
     key: 'openingBalanceEquityAccountId',
     label: 'حساب موازنة الأرصدة الافتتاحية',
     accountType: AccountType.EQUITY,

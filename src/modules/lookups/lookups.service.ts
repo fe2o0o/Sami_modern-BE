@@ -17,6 +17,9 @@ import { Product } from '../product/entities/product.entity';
 import { AccountingSetting } from '../accounting-setting/entities/accounting-setting.entity';
 import { Treasury } from '../treasury/entities/treasury.entity';
 import { BankAccount } from '../bank-account/entities/bank-account.entity';
+import { Department } from '../hr/entities/department.entity';
+import { JobGrade } from '../hr/entities/job-grade.entity';
+import { User } from '../user/entities/user.entity';
 import {
   WAREHOUSE_TYPE_LABELS,
   WarehouseType,
@@ -122,14 +125,16 @@ export class LookupsService {
   }
 
   /**
-   * Active employees with their default commission rate (for invoice pickers).
+   * Employees for pickers (invoice sales employee, managers…) with their default
+   * commission rate: active ones, plus resigned / terminated ones until their exit
+   * date has passed.
    * When `branchId` is given, returns employees serving that branch PLUS
    * employees with no branch (available to all branches).
    */
   async employees(branchId?: string): Promise<EmployeeLookupItem[]> {
     const qb = this.employeeRepository
       .createQueryBuilder('e')
-      .where('e.isActive = :a', { a: true });
+      .where(`(e.isActive = 1 OR (e.employmentStatus IN ('resigned','terminated') AND e.exitDate >= CURDATE()))`);
     if (branchId) {
       qb.andWhere(
         `(EXISTS (SELECT 1 FROM employee_branches eb
@@ -147,6 +152,27 @@ export class LookupsService {
       code: e.code,
       commissionRate: e.commissionRate,
     }));
+  }
+
+  /** Active departments (HR). */
+  async departments(): Promise<LookupItem[]> {
+    const rows = await this.employeeRepository.manager.getRepository(Department).find({ where: { isActive: true }, order: { code: 'ASC' } });
+    return rows.map((r) => ({ id: r.id, name: r.name, nameEn: r.nameEn ?? null }) as LookupItem);
+  }
+
+  /** Active job grades ordered by level (HR). */
+  async jobGrades(): Promise<LookupItem[]> {
+    const rows = await this.employeeRepository.manager.getRepository(JobGrade).find({ where: { isActive: true }, order: { level: 'ASC', code: 'ASC' } });
+    return rows.map((r) => ({ id: r.id, name: r.name, nameEn: r.nameEn ?? null }) as LookupItem);
+  }
+
+  /** System users (to link an employee to a login). */
+  async users(): Promise<LookupItem[]> {
+    const rows = await this.employeeRepository.manager.getRepository(User).find({
+      select: { id: true, fullName: true, username: true },
+      order: { fullName: 'ASC' },
+    });
+    return rows.map((r) => ({ id: r.id, name: `${r.fullName} (${r.username})` }));
   }
 
   /** Active products labelled `code - name` (for inventory/document lines). */

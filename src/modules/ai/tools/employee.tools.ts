@@ -30,17 +30,20 @@ export class EmployeeAiTools {
           },
           additionalProperties: false,
         },
-        handler: async (args) => {
+        handler: async (args, ctx) => {
           const { page, perPage } = pageArgs(args, 20, 50);
           const query = listQuery(page, perPage, { search: optStr(args.search), isActive: optBool(args.isActive) }) as unknown as StatusQueryDto;
-          const res = await this.employees.findAll(query);
+          const res = await this.employees.findAll(query, ctx.branchScope ?? null);
+          const seeSalary = ctx.isSuperAdmin || ctx.permissions.includes('hr_salary.view');
           const rows = res.items.map((e) => ({
             id: e.id,
             code: e.code,
             name: e.name,
             jobTitle: e.jobTitle,
             mobile: e.mobile,
-            netSalary: e.netSalary,
+            netSalary: seeSalary ? e.netSalary : null,
+            department: e.department?.name ?? null,
+            employmentStatus: e.employmentStatus,
             commissionRate: e.commissionRate,
             branches: e.branches?.length ? e.branches.map((b) => b.name).join('، ') : 'كل الفروع',
             isActive: e.isActive,
@@ -66,7 +69,8 @@ export class EmployeeAiTools {
           // Same rule as EmployeeController.summary: commissions only for report viewers.
           const canSeeCommissions = ctx.isSuperAdmin || ctx.permissions.includes('accounting_reports.view');
           const query = { search: optStr(args.search), isActive: optBool(args.isActive) } as StatusQueryDto;
-          const data = await this.employees.summary(query, canSeeCommissions);
+          const has = (k: string) => ctx.isSuperAdmin || ctx.permissions.includes(k);
+          const data = await this.employees.summary(query, { withCommissions: canSeeCommissions, withSalaries: has('hr_salary.view'), withDocuments: has('hr_documents.view') });
           return { success: true, presentation: 'report', data: { title: 'ملخص الموظفين', currency: CURRENCY, ...data } };
         },
       },

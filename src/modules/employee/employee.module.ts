@@ -7,9 +7,10 @@ import { EmployeeCommissionReportService } from './employee-commission-report.se
 import { EmployeeController } from './employee.controller';
 import { SalesInvoiceCommission } from '../sales-invoice/entities/sales-invoice-commission.entity';
 import { CodeSettingModule } from '../code-setting/code-setting.module';
+import { HrModule } from '../hr/hr.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Employee, SalesInvoiceCommission, Branch]), CodeSettingModule],
+  imports: [TypeOrmModule.forFeature([Employee, SalesInvoiceCommission, Branch]), CodeSettingModule, HrModule],
   controllers: [EmployeeController],
   providers: [EmployeeService, EmployeeCommissionReportService],
   exports: [EmployeeService, EmployeeCommissionReportService, TypeOrmModule],

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsUUID, ValidateIf } from 'class-validator';
+import { IsNumber, IsOptional, IsUUID, Min, ValidateIf } from 'class-validator';
 import { applyDecorators } from '@nestjs/common';
 
 /**
@@ -72,6 +72,20 @@ export class UpdateAccountingSettingDto {
 
   @AccountId()
   commissionPayableAccountId?: string | null;
+
+  // ── Employees (HR) ──
+  @AccountId()
+  employeeAdvancesAccountId?: string | null;
+
+  @AccountId()
+  employeeCustodyAccountId?: string | null;
+
+  /** Max advance = X × net salary (empty = no ceiling). */
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsNumber({}, { message: 'الحد الأقصى للسلفة يجب أن يكون رقماً' })
+  @Min(0.1, { message: 'الحد الأقصى للسلفة يجب أن يكون أكبر من صفر' })
+  maxAdvanceSalaryMultiple?: number | null;
 
   // ── Opening Balances ──
   @AccountId()

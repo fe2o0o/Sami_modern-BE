@@ -21,6 +21,9 @@ export const CODE_ENTITIES: CodeEntityDef[] = [
   { key: 'unit', labelAr: 'وحدات القياس', prefix: 'UNT' },
   { key: 'brand', labelAr: 'العلامات التجارية', prefix: 'BRD' },
   { key: 'product_category', labelAr: 'فئات المنتجات', prefix: 'CAT' },
+  { key: 'department', labelAr: 'الأقسام', prefix: 'DEP' },
+  { key: 'job_grade', labelAr: 'الدرجات الوظيفية', prefix: 'GRD' },
+  { key: 'pay_component', labelAr: 'بنود الراتب', prefix: 'PAY' },
 ];
 
 export const CODE_ENTITY_KEYS = CODE_ENTITIES.map((e) => e.key);
