@@ -4,6 +4,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsDateString,
+  IsEnum,
   IsNumber,
   IsOptional,
   IsString,
@@ -11,6 +12,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { ReturnManufacturingAction } from '../enums/sales-return.enum';
 
 export class SalesReturnItemDto {
   @ApiProperty({ format: 'uuid', description: 'سطر الفاتورة الأصلية المُرتجَع منه' })
@@ -27,6 +29,12 @@ export class SalesReturnItemDto {
   @IsOptional()
   @IsUUID('4', { message: 'مخزن الإرجاع غير صحيح' })
   warehouseId?: string | null;
+
+  /** Manufacturing lines not delivered yet: stop the production order, or let it finish into stock. */
+  @ApiPropertyOptional({ enum: ReturnManufacturingAction, description: 'صنف تصنيع لم يُسلَّم: إيقاف التصنيع أم استكماله واستلامه في المخزن' })
+  @IsOptional()
+  @IsEnum(ReturnManufacturingAction, { message: 'اختر: إيقاف التصنيع أو استكماله واستلامه في المخزن' })
+  manufacturingAction?: ReturnManufacturingAction | null;
 }
 
 /** Create a sales return against an original invoice (always starts DRAFT). */

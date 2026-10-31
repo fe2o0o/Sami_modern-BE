@@ -873,7 +873,8 @@ export class SalesDeliveryPostingService {
     return this.dataSource.transaction(async (manager) => {
       const locked = await this.lock(manager, deliveryId);
       const line = locked.items.find((i) => i.id === itemId)!;
-      line.cancelledQuantity = round3((line.cancelledQuantity ?? 0) + remaining);
+      // Posting the return already closed `remaining` on this line (see
+      // SalesReturnPostingService.syncClosedQuantities) — only link it here.
       line.cancelReturnId = posted.id;
       await manager.getRepository(SalesDeliveryItem).save(line);
       locked.deliveryProgress = this.computeProgress(locked.items);

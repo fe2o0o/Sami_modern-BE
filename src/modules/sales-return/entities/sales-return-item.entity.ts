@@ -3,6 +3,7 @@ import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
 import { SalesDiscountType, SalesLineType } from '../../sales-invoice/enums/sales-invoice.enum';
 import { SalesReturn } from './sales-return.entity';
+import { ReturnManufacturingAction } from '../enums/sales-return.enum';
 
 /**
  * One returned line, mirroring an original sales-invoice line's pricing at the
@@ -89,4 +90,13 @@ export class SalesReturnItem extends BaseEntity {
    *  lines: only the delivered part). Reversing the return re-issues this. */
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   restockedQuantity!: number;
+
+  /** Manufacturing lines: undelivered quantity this return closed on the delivery
+   *  order (it will never ship). Reversing the return re-opens exactly this. */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  closedQuantity!: number;
+
+  /** Manufacturing lines not delivered yet: stop the production order or let it finish into stock. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  manufacturingAction!: ReturnManufacturingAction | null;
 }

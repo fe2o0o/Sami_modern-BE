@@ -18,6 +18,7 @@ import { SalesInvoiceStatus, SalesLineType } from '../sales-invoice/enums/sales-
 import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
 import { Product } from '../product/entities/product.entity';
 import { SalesDeliveryStatus } from '../sales-delivery/enums/sales-delivery.enum';
+import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
 import { round2 } from '../sales-invoice/sales-math';
 import { Customer } from '../customer/entities/customer.entity';
 import { Warehouse } from '../warehouse/entities/warehouse.entity';
@@ -60,6 +61,12 @@ export interface ReturnableLine {
   physicallyDeliveredQuantity?: number;
   /** Manufacturing lines: warehouse the item was delivered from (default return warehouse). */
   deliveredFromWarehouseId?: string | null;
+  /** Manufacturing lines: quantity still owed to the customer (not delivered, not closed). */
+  undeliveredQuantity?: number;
+  /** Manufacturing lines: the production order of the line, when there is one. */
+  manufacturingOrder?: { id: string; orderNumber: string | null; status: string; quantity: number } | null;
+  /** True when returning undelivered quantity must say whether production stops or continues into stock. */
+  needsManufacturingDecision?: boolean;
   /** Why nothing can be returned on this line right now (null = returnable). */
   blockedReason: string | null;
 }
@@ -108,6 +115,7 @@ export class SalesReturnService {
     const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
     const ships = await this.shipsViaDeliveryByItem(invoice.items);
     const fromWarehouse = await this.deliveredWarehouseByItem(invoice.items.map((i) => i.id));
+    const mfg = await this.manufacturingInfoByItem(invoice.items.filter((i) => i.lineType === SalesLineType.MANUFACTURING).map((i) => i.id));
     const lines: ReturnableLine[] = invoice.items.map((it) => {
       const returnedQty = returned.get(it.id) ?? 0;
       const shipsViaDelivery = ships.get(it.id) ?? false;
@@ -135,6 +143,11 @@ export class SalesReturnService {
           ? {
               physicallyDeliveredQuantity: round3(delivered.get(it.id)?.qty ?? 0),
               deliveredFromWarehouseId: fromWarehouse.get(it.id) ?? null,
+              undeliveredQuantity: mfg.get(it.id)?.open ?? 0,
+              manufacturingOrder: mfg.get(it.id)?.order ?? null,
+              needsManufacturingDecision:
+                (mfg.get(it.id)?.open ?? 0) > 0 &&
+                ['new', 'in_progress'].includes(mfg.get(it.id)?.order?.status ?? ''),
             }
           : {}),
       };
@@ -426,6 +439,7 @@ export class SalesReturnService {
         // the user picks (default: the one it was delivered from).
         item.costAtPost = delivered.get(src.id)?.unitCost ?? 0;
         item.warehouseId = d.warehouseId ?? fromWarehouse.get(src.id) ?? null;
+        item.manufacturingAction = d.manufacturingAction ?? null;
       }
       return item;
     });
@@ -453,6 +467,35 @@ export class SalesReturnService {
   }
 
   /** Net delivered qty + weighted-average unit cost per invoice item (POSTED deliveries only). */
+  /** Manufacturing lines: quantity still owed on the delivery order + the line's production order. */
+  private async manufacturingInfoByItem(
+    invoiceItemIds: string[],
+  ): Promise<Map<string, { open: number; order: { id: string; orderNumber: string | null; status: string; quantity: number } | null }>> {
+    const out = new Map<string, { open: number; order: { id: string; orderNumber: string | null; status: string; quantity: number } | null }>();
+    if (!invoiceItemIds.length) return out;
+    const rows = await this.dataSource
+      .getRepository(SalesDeliveryItem)
+      .createQueryBuilder('di')
+      .innerJoin('di.salesDelivery', 'd')
+      .leftJoin(ManufacturingOrder, 'mo', 'mo.id = di.manufacturingOrderId AND mo.deletedAt IS NULL')
+      .select('di.salesInvoiceItemId', 'itemId')
+      .addSelect('di.orderedQuantity - di.deliveredQuantity - di.cancelledQuantity', 'open')
+      .addSelect('mo.id', 'moId')
+      .addSelect('mo.orderNumber', 'moNumber')
+      .addSelect('mo.status', 'moStatus')
+      .addSelect('mo.quantity', 'moQty')
+      .where('di.salesInvoiceItemId IN (:...ids)', { ids: invoiceItemIds })
+      .andWhere('d.status <> :rev', { rev: SalesDeliveryStatus.REVERSED })
+      .getRawMany<{ itemId: string; open: string; moId: string | null; moNumber: string | null; moStatus: string | null; moQty: string | null }>();
+    for (const r of rows) {
+      const cur = out.get(r.itemId) ?? { open: 0, order: null };
+      cur.open = round3(cur.open + Math.max(0, Number(r.open) || 0));
+      if (r.moId && !cur.order) cur.order = { id: r.moId, orderNumber: r.moNumber, status: r.moStatus ?? '', quantity: Number(r.moQty) || 0 };
+      out.set(r.itemId, cur);
+    }
+    return out;
+  }
+
   /** Warehouse each invoice line was delivered from (manufacturing lines' default return warehouse). */
   private async deliveredWarehouseByItem(invoiceItemIds: string[]): Promise<Map<string, string>> {
     if (!invoiceItemIds.length) return new Map();

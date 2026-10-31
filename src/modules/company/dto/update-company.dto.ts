@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
@@ -61,8 +62,10 @@ export class UpdateCompanyDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  // An empty field from the form means "no email" — only a filled-in value is validated.
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
   @IsEmail({}, { message: 'صيغة البريد الإلكتروني غير صحيحة' })
-  email?: string;
+  email?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()

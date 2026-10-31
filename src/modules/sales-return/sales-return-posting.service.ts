@@ -10,9 +10,13 @@ import { DataSource, EntityManager, In } from 'typeorm';
 import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { SalesReturn } from './entities/sales-return.entity';
 import { SalesReturnItem } from './entities/sales-return-item.entity';
-import { SalesReturnStatus } from './enums/sales-return.enum';
+import { ReturnManufacturingAction, SalesReturnStatus } from './enums/sales-return.enum';
 import { ReverseSalesReturnDto } from './dto/reverse-sales-return.dto';
-import { SalesLineType, SalesPaymentType } from '../sales-invoice/enums/sales-invoice.enum';
+import { SalesDeliveryStatus as InvoiceDeliveryStatus, SalesLineType, SalesPaymentType } from '../sales-invoice/enums/sales-invoice.enum';
+import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
+import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
+import { ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
+import { ManufacturingProductionService } from '../manufacturing/manufacturing-production.service';
 import { round2 } from '../sales-invoice/sales-math';
 import { Product } from '../product/entities/product.entity';
 import { applyEffectiveAccounts } from '../product/product-accounts';
@@ -34,7 +38,7 @@ import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { Customer } from '../customer/entities/customer.entity';
 import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
-import { SalesDeliveryProgress } from '../sales-delivery/enums/sales-delivery.enum';
+import { SalesDeliveryProgress, SalesDeliveryStatus } from '../sales-delivery/enums/sales-delivery.enum';
 import { SalesDelivery } from '../sales-delivery/entities/sales-delivery.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
 import { missingAccountMessage } from '../product/product-accounts';
@@ -54,6 +58,7 @@ export class SalesReturnPostingService {
     private readonly customerLedger: CustomerLedgerService,
     private readonly cashSubledger: CashSubledgerService,
     private readonly journalService: JournalEntryService,
+    private readonly production: ManufacturingProductionService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -100,6 +105,10 @@ export class SalesReturnPostingService {
       // Returned quantity that was never delivered still carries the invoice's cost
       // accrual — release it (DR «بضاعة مباعة لم تُسلَّم» / CR COGS).
       await this.releaseCostAccruals(ret, products, settings, number, lines, manager);
+      // The credited undelivered quantity must never ship: close it on the
+      // delivery order (and shrink a production order that has not started).
+      ret.returnNumber = number;
+      await this.syncClosedQuantities(ret, 1, ret.returnDate, actorId, manager);
       // A zero-value return (e.g. a free service line) has nothing to book —
       // it still closes the returned quantity but creates no journal/ledger rows.
       const journalEntry = lines.length
@@ -306,11 +315,17 @@ export class SalesReturnPostingService {
         );
       }
 
-      // A return that CANCELLED a delivery-order line: un-cancel it so the
-      // quantity is owed again (the customer was just re-charged by this reversal).
+      // The quantity this return closed on the delivery order is owed again (the
+      // customer was just re-charged by this reversal).
+      await this.syncClosedQuantities(ret, -1, dto.reversalDate, actorId, manager);
+
+      // Returns posted before `closedQuantity` existed: the «إلغاء الصنف» path
+      // closed the line itself — un-cancel it the old way.
       const cancelled = await manager.getRepository(SalesDeliveryItem).find({ where: { cancelReturnId: ret.id } });
       for (const line of cancelled) {
-        const back = (ret.items ?? []).filter((i) => i.salesInvoiceItemId === line.salesInvoiceItemId).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+        const back = (ret.items ?? [])
+          .filter((i) => i.salesInvoiceItemId === line.salesInvoiceItemId && !(Number(i.closedQuantity) > 0))
+          .reduce((s, i) => s + (Number(i.quantity) || 0), 0);
         line.cancelledQuantity = Math.max(0, Math.round(((Number(line.cancelledQuantity) || 0) - back) * 1000) / 1000);
         line.cancelReturnId = null;
         await manager.getRepository(SalesDeliveryItem).save(line);
@@ -416,7 +431,7 @@ export class SalesReturnPostingService {
       const unsettled = round2((Number(inv.cogsAccrued) || 0) - (Number(inv.cogsAccruedSettled) || 0));
       if (unsettled <= 0) continue;
       const open = round3((Number(inv.quantity) || 0) - (Number(inv.deliveredQuantity) || 0) - (Number(inv.cogsReleasedQty) || 0));
-      const relQty = round3(Math.min(Number(item.quantity) || 0, open));
+      const relQty = round3(Math.min(Number(item.closedQuantity) || 0, open));
       if (relQty <= 0) continue;
       const amount = relQty + 1e-6 >= open ? unsettled : round2((unsettled * relQty) / open);
       if (amount <= 0) continue;
@@ -434,32 +449,208 @@ export class SalesReturnPostingService {
   }
 
   /**
-   * Restocked quantity per line, decided BEFORE the accrual release:
-   *  - stock lines of tracked products: the whole returned quantity;
-   *  - manufacturing lines: the returned quantity beyond what is still undelivered
-   *    (undelivered quantity releases the invoice's cost accrual instead). The
-   *    delivered part needs a return warehouse.
+   * Restocked / closed quantity per line, decided BEFORE the accrual release:
+   *  - stock lines of tracked products: the whole returned quantity is restocked;
+   *  - manufacturing lines: the part still undelivered is CLOSED (it must never
+   *    ship after being credited); only the rest — the delivered part — goes back
+   *    into stock and needs a return warehouse.
    */
   private async assignRestockQuantities(ret: SalesReturn, products: Map<string, Product>, manager: EntityManager): Promise<void> {
     const invRepo = manager.getRepository(SalesInvoiceItem);
+    // Several lines of one return may hit the same invoice line.
+    const taken = new Map<string, number>();
     for (const item of ret.items) {
+      item.closedQuantity = 0;
       if (this.touchesStock(item, products)) {
         item.restockedQuantity = Number(item.quantity) || 0;
         continue;
       }
       item.restockedQuantity = 0;
       if (item.lineType !== SalesLineType.MANUFACTURING || !item.salesInvoiceItemId) continue;
-      if (!products.get(item.productId)?.trackInventory) continue;
       const inv = await invRepo.findOne({ where: { id: item.salesInvoiceItemId } });
       if (!inv) continue;
-      const openUndelivered = Math.max(0, round3((Number(inv.quantity) || 0) - (Number(inv.deliveredQuantity) || 0) - (Number(inv.cogsReleasedQty) || 0)));
-      const restock = round3(Math.max(0, (Number(item.quantity) || 0) - openUndelivered));
+      const already = taken.get(inv.id) ?? 0;
+      const openUndelivered = Math.max(0, round3((await this.openUndelivered(inv, manager)) - already));
+      const qty = Number(item.quantity) || 0;
+      item.closedQuantity = round3(Math.min(qty, openUndelivered));
+      taken.set(inv.id, round3(already + item.closedQuantity));
+      if (!products.get(item.productId)?.trackInventory) continue;
+      const restock = round3(Math.max(0, qty - item.closedQuantity));
       if (restock <= 0) continue;
       if (!item.warehouseId) {
         throw new BadRequestException(`اختر المخزن الذي يعود إليه الصنف المُصنّع «${item.productName ?? ''}»`);
       }
       item.restockedQuantity = restock;
     }
+  }
+
+  /**
+   * Quantity of an invoice line still owed to the customer: open on its delivery
+   * order lines (ordered − delivered − cancelled). An invoice without a delivery
+   * order falls back to the invoice's own counters.
+   */
+  private async openUndelivered(inv: SalesInvoiceItem, manager: EntityManager): Promise<number> {
+    const lines = await this.deliveryLinesOf(inv.id, manager);
+    if (!lines.length) {
+      return Math.max(0, round3((Number(inv.quantity) || 0) - (Number(inv.deliveredQuantity) || 0) - (Number(inv.cogsReleasedQty) || 0)));
+    }
+    return round3(lines.reduce((s, l) => s + Math.max(0, this.lineOpen(l)), 0));
+  }
+
+  /** Delivery order lines of an invoice line (reversed delivery notes excluded). */
+  private deliveryLinesOf(salesInvoiceItemId: string, manager: EntityManager): Promise<SalesDeliveryItem[]> {
+    return manager
+      .getRepository(SalesDeliveryItem)
+      .createQueryBuilder('di')
+      .innerJoin(SalesDelivery, 'sd', 'sd.id = di.salesDeliveryId AND sd.deletedAt IS NULL')
+      .where('di.salesInvoiceItemId = :id', { id: salesInvoiceItemId })
+      .andWhere('sd.status <> :rev', { rev: SalesDeliveryStatus.REVERSED })
+      .orderBy('di.createdAt', 'ASC')
+      .getMany();
+  }
+
+  private lineOpen(l: SalesDeliveryItem): number {
+    return round3((Number(l.orderedQuantity) || 0) - (Number(l.deliveredQuantity) || 0) - (Number(l.cancelledQuantity) || 0));
+  }
+
+  /**
+   * Close (sign +1, on post) or re-open (sign −1, on reversal) each line's
+   * `closedQuantity` on its delivery order lines, keep a still-NEW production
+   * order in step with what is owed, then refresh the order / invoice progress.
+   */
+  private async syncClosedQuantities(ret: SalesReturn, sign: 1 | -1, date: string, actorId: string | undefined, manager: EntityManager): Promise<void> {
+    const itemRepo = manager.getRepository(SalesDeliveryItem);
+    const touched = new Set<string>();
+    for (const item of ret.items ?? []) {
+      let left = round3(Number(item.closedQuantity) || 0);
+      if (left <= 0 || !item.salesInvoiceItemId) continue;
+      const lines = await this.deliveryLinesOf(item.salesInvoiceItemId, manager);
+      for (const line of sign === 1 ? lines : [...lines].reverse()) {
+        if (left <= 0) break;
+        const room = sign === 1 ? Math.max(0, this.lineOpen(line)) : Number(line.cancelledQuantity) || 0;
+        const take = round3(Math.min(room, left));
+        if (take <= 0) continue;
+        line.cancelledQuantity = round3((Number(line.cancelledQuantity) || 0) + sign * take);
+        await itemRepo.save(line);
+        left = round3(left - take);
+        touched.add(line.salesDeliveryId);
+        if (line.manufacturingOrderId) await this.followOrder(line.manufacturingOrderId, item, sign, take, ret, date, actorId, manager);
+      }
+    }
+    for (const deliveryId of touched) await this.refreshDelivery(deliveryId, actorId, manager);
+    if (touched.size) await this.refreshInvoiceDeliveryStatus(ret.salesInvoiceId, manager);
+  }
+
+  /**
+   * What the return does to the line's production order (the user's choice per line):
+   *  - CONTINUE: nothing — the order finishes and the item stays in the warehouse.
+   *  - STOP:     a NEW order shrinks proportionally (quantity, components, fee) or
+   *              is cancelled when nothing is owed; an IN_PROGRESS order has its
+   *              fee booked to the factory reduced (or the whole order cancelled,
+   *              reversing that fee). Reversing the return grows it back while the
+   *              order is still open; a cancelled order stays cancelled — the line
+   *              then needs a new order (or delivery from stock) from the delivery order.
+   * Produced / finished orders are never touched: the item is already in stock.
+   */
+  private async followOrder(
+    orderId: string,
+    item: SalesReturnItem,
+    sign: 1 | -1,
+    qty: number,
+    ret: SalesReturn,
+    date: string,
+    actorId: string | undefined,
+    manager: EntityManager,
+  ): Promise<void> {
+    const repo = manager.getRepository(ManufacturingOrder);
+    const mo = await repo.findOne({ where: { id: orderId }, relations: { components: true } });
+    if (!mo || (mo.status !== ManufacturingOrderStatus.NEW && mo.status !== ManufacturingOrderStatus.IN_PROGRESS)) return;
+    if (!item.manufacturingAction) {
+      if (sign === -1) return;
+      throw new BadRequestException(
+        `الصنف «${item.productName ?? ''}» له أمر تصنيع ${mo.orderNumber ?? ''} لم يُنتَج بعد — حدد: إيقاف التصنيع، أم استكماله واستلامه في المخزن`,
+      );
+    }
+    if (item.manufacturingAction !== ReturnManufacturingAction.STOP) return;
+
+    const ref = `مردود مبيعات ${ret.returnNumber ?? ''}`;
+    const reason = sign === 1 ? `إيقاف تصنيع ${qty} — العميل أرجع الصنف قبل التسليم (${ref})` : `إعادة تصنيع ${qty} — عكس ${ref}`;
+    const oldQty = Number(mo.quantity) || 0;
+    const newQty = round3(oldQty - sign * qty);
+    if (newQty <= 0) {
+      if (mo.status === ManufacturingOrderStatus.IN_PROGRESS) {
+        // reverses the fee booked to the factory at start
+        await this.production.cancelWithin(mo.id, manager, { actorId, date, reason });
+        return;
+      }
+      mo.status = ManufacturingOrderStatus.CANCELLED;
+      mo.notes = [mo.notes, reason].filter(Boolean).join(' — ');
+      mo.updatedBy = actorId ?? null;
+      await repo.save(mo);
+      return;
+    }
+    if (oldQty <= 0) return;
+    const ratio = newQty / oldQty;
+    const newFee = round2((Number(mo.manufacturingFee) || 0) * ratio);
+    if (mo.status === ManufacturingOrderStatus.IN_PROGRESS && mo.feeJournalEntryId) {
+      // books the fee difference to the factory (supplier ledger + journal)
+      await this.production.adjustBookedFeeWithin(mo.id, newFee, manager, { actorId, date, reason });
+    }
+    const fresh = (await repo.findOne({ where: { id: orderId }, relations: { components: true } }))!;
+    for (const c of fresh.components ?? []) c.quantity = round3((Number(c.quantity) || 0) * ratio);
+    fresh.manufacturingFee = newFee;
+    fresh.quantity = newQty;
+    fresh.notes = [fresh.notes, `${reason}: الكمية ${oldQty} ← ${newQty}`].filter(Boolean).join(' — ');
+    fresh.updatedBy = actorId ?? null;
+    await repo.save(fresh);
+  }
+
+  /** Delivery order progress (+ its produced orders' DONE state) after closing / re-opening quantities. */
+  private async refreshDelivery(deliveryId: string, actorId: string | undefined, manager: EntityManager): Promise<void> {
+    const order = await manager.getRepository(SalesDelivery).findOne({ where: { id: deliveryId }, relations: { items: true } });
+    if (!order) return;
+    const done = (i: SalesDeliveryItem) => (Number(i.deliveredQuantity) || 0) + (Number(i.cancelledQuantity) || 0) + 1e-6 >= (Number(i.orderedQuantity) || 0);
+    const goods = order.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
+    order.deliveryProgress = goods.length && goods.every(done)
+      ? SalesDeliveryProgress.DELIVERED
+      : goods.some((i) => (Number(i.deliveredQuantity) || 0) > 1e-6) ? SalesDeliveryProgress.PARTIAL : SalesDeliveryProgress.PENDING;
+    order.updatedBy = actorId ?? null;
+    await manager.getRepository(SalesDelivery).save(order);
+    // A produced order whose line is now fully closed is finished (and vice versa).
+    const moRepo = manager.getRepository(ManufacturingOrder);
+    for (const line of goods) {
+      if (line.lineType !== SalesLineType.MANUFACTURING || !line.manufacturingOrderId) continue;
+      const mo = await moRepo.findOne({ where: { id: line.manufacturingOrderId } });
+      if (!mo) continue;
+      if (done(line) && mo.status === ManufacturingOrderStatus.PRODUCED) {
+        mo.status = ManufacturingOrderStatus.DONE;
+        mo.doneAt = new Date();
+      } else if (!done(line) && mo.status === ManufacturingOrderStatus.DONE) {
+        mo.status = ManufacturingOrderStatus.PRODUCED;
+        mo.doneAt = null;
+      } else continue;
+      mo.updatedBy = actorId ?? null;
+      await moRepo.save(mo);
+    }
+  }
+
+  /** Invoice delivery status from delivered + closed quantities of its goods lines. */
+  private async refreshInvoiceDeliveryStatus(invoiceId: string | null, manager: EntityManager): Promise<void> {
+    if (!invoiceId) return;
+    const invoice = await manager.getRepository(SalesInvoice).findOne({ where: { id: invoiceId }, relations: { items: true } });
+    if (!invoice) return;
+    const goods = invoice.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
+    const rows = goods.length
+      ? await manager.getRepository(SalesDeliveryItem).find({ where: { salesInvoiceItemId: In(goods.map((i) => i.id)) }, select: { id: true, salesInvoiceItemId: true, cancelledQuantity: true } })
+      : [];
+    const closed = new Map<string, number>();
+    for (const r of rows) if (r.salesInvoiceItemId) closed.set(r.salesInvoiceItemId, (closed.get(r.salesInvoiceItemId) ?? 0) + (Number(r.cancelledQuantity) || 0));
+    const anyDelivered = goods.some((i) => (Number(i.deliveredQuantity) || 0) > 1e-6);
+    const allDone = goods.length > 0 && goods.every((i) => (Number(i.deliveredQuantity) || 0) + (closed.get(i.id) ?? 0) + 1e-6 >= (Number(i.quantity) || 0));
+    invoice.deliveryStatus = !goods.length
+      ? InvoiceDeliveryStatus.NOT_APPLICABLE
+      : allDone ? InvoiceDeliveryStatus.DELIVERED : anyDelivered ? InvoiceDeliveryStatus.PARTIAL : InvoiceDeliveryStatus.PENDING;
+    await manager.getRepository(SalesInvoice).save(invoice);
   }
 
   private validateAccounts(ret: SalesReturn, products: Map<string, Product>, settings: AccountingSetting): void {

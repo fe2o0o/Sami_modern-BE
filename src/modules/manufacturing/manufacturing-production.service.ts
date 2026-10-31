@@ -181,7 +181,19 @@ export class ManufacturingProductionService {
     actorId?: string,
     branchScope: string[] | null = null,
   ): Promise<ManufacturingOrder> {
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction((manager) => this.adjustBookedFeeWithin(orderId, newFeeTotal, manager, { actorId, branchScope }));
+  }
+
+  /** Same as adjustBookedFee, inside the CALLER's transaction (e.g. a sales return that stops part of the order). */
+  async adjustBookedFeeWithin(
+    orderId: string,
+    newFeeTotal: number,
+    manager: EntityManager,
+    opts: { actorId?: string; branchScope?: string[] | null; date?: string; reason?: string } = {},
+  ): Promise<ManufacturingOrder> {
+    const actorId = opts.actorId;
+    const branchScope = opts.branchScope ?? null;
+    {
       const order = await manager.findOne(ManufacturingOrder, { where: { id: orderId }, lock: { mode: 'pessimistic_write' } });
       if (!order || !isWithinBranchScope(order.branchId, branchScope)) throw new NotFoundException('لم يتم العثور على أمر التصنيع');
       if (order.status !== ManufacturingOrderStatus.IN_PROGRESS || !order.feeJournalEntryId) {
@@ -211,7 +223,7 @@ export class ManufacturingProductionService {
         );
       }
 
-      const date = todayIso();
+      const date = opts.date ?? todayIso();
       const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
       const productName = order.productName ?? product.name;
       const orderNo = order.orderNumber ?? '';
@@ -220,7 +232,8 @@ export class ManufacturingProductionService {
       const description =
         `تسوية رسوم تصنيع — ${productName} — أمر تصنيع ${orderNo}: ` +
         `من ${oldFee.toFixed(2)} إلى ${newFee.toFixed(2)} (${up ? 'زيادة' : 'تخفيض'} ${amount.toFixed(2)})` +
-        ` — العميل: ${order.customerName ?? '—'} — فاتورة: ${order.sourceNumber ?? '—'}`;
+        ` — العميل: ${order.customerName ?? '—'} — فاتورة: ${order.sourceNumber ?? '—'}` +
+        (opts.reason ? ` — ${opts.reason}` : '');
       const costLine = up
         ? `زيادة رسوم التصنيع على تكلفة ${productName} — أمر تصنيع ${orderNo}`
         : `تخفيض رسوم التصنيع من تكلفة ${productName} — أمر تصنيع ${orderNo}`;
@@ -273,7 +286,7 @@ export class ManufacturingProductionService {
       order.manufacturingFee = newFee;
       order.updatedBy = actorId ?? null;
       return manager.getRepository(ManufacturingOrder).save(order);
-    });
+    }
   }
 
   // =========================================================
@@ -645,8 +658,15 @@ export class ManufacturingProductionService {
       order.updatedBy = actorId ?? null;
       await manager.getRepository(ManufacturingOrder).save(order);
 
-      // 6) Hand the produced goods to the linked delivery line.
-      await this.linkDeliveryLine(order, warehouseId, manager);
+      // 6) Hand the produced goods to the linked delivery line. When the customer
+      //    already returned that quantity (closed on the delivery order, production
+      //    continued into stock) there is nothing to deliver — the order is finished.
+      const owed = await this.linkDeliveryLine(order, warehouseId, manager);
+      if (owed === 0) {
+        order.status = ManufacturingOrderStatus.DONE;
+        order.doneAt = new Date();
+        await manager.getRepository(ManufacturingOrder).save(order);
+      }
 
       return manager.findOne(ManufacturingOrder, {
         where: { id: orderId },
@@ -682,8 +702,8 @@ export class ManufacturingProductionService {
 
   /** Assign the produced warehouse to the manufacturing delivery line so it can
    *  now be confirmed (issued) like a stock line. */
-  private async linkDeliveryLine(order: ManufacturingOrder, warehouseId: string, manager: EntityManager): Promise<void> {
-    if (!order.salesInvoiceItemId) return;
+  private async linkDeliveryLine(order: ManufacturingOrder, warehouseId: string, manager: EntityManager): Promise<number | null> {
+    if (!order.salesInvoiceItemId) return null;
     const repo = manager.getRepository(SalesDeliveryItem);
     const items = await repo.find({
       where: { salesInvoiceItemId: order.salesInvoiceItemId, lineType: SalesLineType.MANUFACTURING },
@@ -692,7 +712,10 @@ export class ManufacturingProductionService {
       it.warehouseId = warehouseId;
       it.manufacturingOrderId = order.id;
     }
-    if (items.length) await repo.save(items);
+    if (!items.length) return null;
+    await repo.save(items);
+    // quantity still owed to the customer on those lines
+    return round3(items.reduce((sum, it) => sum + Math.max(0, (Number(it.orderedQuantity) || 0) - (Number(it.deliveredQuantity) || 0) - (Number(it.cancelledQuantity) || 0)), 0));
   }
 
   private async resolvePostingContext(

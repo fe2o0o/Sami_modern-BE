@@ -20,6 +20,7 @@ import { SequenceModule } from '../sequence/sequence.module';
 import { CustomerModule } from '../customer/customer.module';
 import { JournalEntryModule } from '../journal-entry/journal-entry.module';
 import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
+import { ManufacturingModule } from '../manufacturing/manufacturing.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
     CustomerModule,
     JournalEntryModule,
     CashSubledgerModule,
+    ManufacturingModule,
   ],
   controllers: [SalesReturnController],
   providers: [SalesReturnService, SalesReturnPostingService],
