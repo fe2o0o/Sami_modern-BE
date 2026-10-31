@@ -30,12 +30,15 @@ export enum SalesDeliveryProgress {
   PARTIAL = 'partial',
   /** Every stock line fully delivered. */
   DELIVERED = 'delivered',
+  /** Every line closed by a sales return before anything was delivered. */
+  CANCELLED = 'cancelled',
 }
 
 export const SALES_DELIVERY_PROGRESS_LABELS: Record<SalesDeliveryProgress, string> = {
   [SalesDeliveryProgress.PENDING]: 'غير مسلّم',
   [SalesDeliveryProgress.PARTIAL]: 'مسلّم جزئياً',
   [SalesDeliveryProgress.DELIVERED]: 'تم التسليم',
+  [SalesDeliveryProgress.CANCELLED]: 'ملغى بالمرتجع',
 };
 
 /** Where a delivery note's lines come from. */

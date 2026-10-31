@@ -70,6 +70,10 @@ export class SalesReturn extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   totalAmount!: number;
 
+  /** Employees' sales commission taken back by this return (see SalesReturnCommission). */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  commissionReturned!: number;
+
   @Index()
   @Column({ type: 'enum', enum: SalesReturnStatus, default: SalesReturnStatus.DRAFT })
   status!: SalesReturnStatus;

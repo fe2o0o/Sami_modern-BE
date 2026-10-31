@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { fulfilmentState } from './delivery-progress.util';
 import { DataSource, EntityManager, In, Not } from 'typeorm';
 import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { SalesDelivery } from './entities/sales-delivery.entity';
@@ -520,16 +521,13 @@ export class SalesDeliveryPostingService {
   /** Order progress from its stock lines' delivered vs ordered quantities. */
   private computeProgress(items: SalesDeliveryItem[]): SalesDeliveryProgress {
     // Deliverable goods = stock + manufacturing lines (service lines don't ship).
-    const stock = items.filter((i) => i.lineType !== SalesLineType.SERVICE);
-    if (!stock.length) return SalesDeliveryProgress.PENDING;
-    const anyDelivered = stock.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
     // A cancelled quantity counts as closed (it will never ship).
-    const allDelivered = stock.every((i) => (i.deliveredQuantity ?? 0) + (i.cancelledQuantity ?? 0) + 1e-6 >= (i.orderedQuantity ?? 0));
-    return allDelivered
-      ? SalesDeliveryProgress.DELIVERED
-      : anyDelivered
-        ? SalesDeliveryProgress.PARTIAL
-        : SalesDeliveryProgress.PENDING;
+    const state = fulfilmentState(
+      items
+        .filter((i) => i.lineType !== SalesLineType.SERVICE)
+        .map((i) => ({ ordered: i.orderedQuantity ?? 0, delivered: i.deliveredQuantity ?? 0, closed: i.cancelledQuantity ?? 0 })),
+    );
+    return (state ?? SalesDeliveryProgress.PENDING) as SalesDeliveryProgress;
   }
 
   /** Bump one invoice line's delivered quantity and recompute the invoice's status. */
@@ -561,17 +559,10 @@ export class SalesDeliveryPostingService {
     for (const r of cancelledRows) {
       if (r.salesInvoiceItemId) cancelledBy.set(r.salesInvoiceItemId, (cancelledBy.get(r.salesInvoiceItemId) ?? 0) + (Number(r.cancelledQuantity) || 0));
     }
-    const anyDelivered = stockItems.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
-    const allDelivered =
-      stockItems.length > 0 &&
-      stockItems.every((i) => (i.deliveredQuantity ?? 0) + (cancelledBy.get(i.id) ?? 0) + 1e-6 >= i.quantity);
-    invoice.deliveryStatus = !stockItems.length
-      ? InvoiceDeliveryStatus.NOT_APPLICABLE
-      : allDelivered
-        ? InvoiceDeliveryStatus.DELIVERED
-        : anyDelivered
-          ? InvoiceDeliveryStatus.PARTIAL
-          : InvoiceDeliveryStatus.PENDING;
+    const state = fulfilmentState(
+      stockItems.map((i) => ({ ordered: i.quantity, delivered: i.deliveredQuantity ?? 0, closed: cancelledBy.get(i.id) ?? 0 })),
+    );
+    invoice.deliveryStatus = (state ?? InvoiceDeliveryStatus.NOT_APPLICABLE) as InvoiceDeliveryStatus;
     await manager.getRepository(SalesInvoice).save(invoice);
   }
 
@@ -624,17 +615,10 @@ export class SalesDeliveryPostingService {
     for (const r of cancelledRows) {
       if (r.salesInvoiceItemId) cancelledBy.set(r.salesInvoiceItemId, (cancelledBy.get(r.salesInvoiceItemId) ?? 0) + (Number(r.cancelledQuantity) || 0));
     }
-    const anyDelivered = stockItems.some((i) => (i.deliveredQuantity ?? 0) > 1e-6);
-    const allDelivered =
-      stockItems.length > 0 &&
-      stockItems.every((i) => (i.deliveredQuantity ?? 0) + (cancelledBy.get(i.id) ?? 0) + 1e-6 >= i.quantity);
-    invoice.deliveryStatus = !stockItems.length
-      ? InvoiceDeliveryStatus.NOT_APPLICABLE
-      : allDelivered
-        ? InvoiceDeliveryStatus.DELIVERED
-        : anyDelivered
-          ? InvoiceDeliveryStatus.PARTIAL
-          : InvoiceDeliveryStatus.PENDING;
+    const state = fulfilmentState(
+      stockItems.map((i) => ({ ordered: i.quantity, delivered: i.deliveredQuantity ?? 0, closed: cancelledBy.get(i.id) ?? 0 })),
+    );
+    invoice.deliveryStatus = (state ?? InvoiceDeliveryStatus.NOT_APPLICABLE) as InvoiceDeliveryStatus;
     await manager.getRepository(SalesInvoice).save(invoice);
   }
 

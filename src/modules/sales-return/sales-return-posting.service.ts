@@ -11,8 +11,10 @@ import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { SalesReturn } from './entities/sales-return.entity';
 import { SalesReturnItem } from './entities/sales-return-item.entity';
 import { ReturnManufacturingAction, SalesReturnStatus } from './enums/sales-return.enum';
+import { SalesReturnCommission } from './entities/sales-return-commission.entity';
+import { SalesInvoiceCommission } from '../sales-invoice/entities/sales-invoice-commission.entity';
 import { ReverseSalesReturnDto } from './dto/reverse-sales-return.dto';
-import { SalesDeliveryStatus as InvoiceDeliveryStatus, SalesLineType, SalesPaymentType } from '../sales-invoice/enums/sales-invoice.enum';
+import { SalesCommissionType, SalesDeliveryStatus as InvoiceDeliveryStatus, SalesLineType, SalesPaymentType } from '../sales-invoice/enums/sales-invoice.enum';
 import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
 import { ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
@@ -39,6 +41,7 @@ import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { Customer } from '../customer/entities/customer.entity';
 import { SalesDeliveryItem } from '../sales-delivery/entities/sales-delivery-item.entity';
 import { SalesDeliveryProgress, SalesDeliveryStatus } from '../sales-delivery/enums/sales-delivery.enum';
+import { fulfilmentState } from '../sales-delivery/delivery-progress.util';
 import { SalesDelivery } from '../sales-delivery/entities/sales-delivery.entity';
 import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
 import { missingAccountMessage } from '../product/product-accounts';
@@ -109,6 +112,8 @@ export class SalesReturnPostingService {
       // delivery order (and shrink a production order that has not started).
       ret.returnNumber = number;
       await this.syncClosedQuantities(ret, 1, ret.returnDate, actorId, manager);
+      // The employees' commission on the returned products is taken back too.
+      await this.takeBackCommissions(ret, settings, number, lines, manager);
       // A zero-value return (e.g. a free service line) has nothing to book —
       // it still closes the returned quantity but creates no journal/ledger rows.
       const journalEntry = lines.length
@@ -331,11 +336,7 @@ export class SalesReturnPostingService {
         await manager.getRepository(SalesDeliveryItem).save(line);
         const order = await manager.getRepository(SalesDelivery).findOne({ where: { id: line.salesDeliveryId }, relations: { items: true } });
         if (order) {
-          const goods = order.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
-          const done = (i: SalesDeliveryItem) => (Number(i.deliveredQuantity) || 0) + (Number(i.cancelledQuantity) || 0) + 1e-6 >= (Number(i.orderedQuantity) || 0);
-          order.deliveryProgress = goods.length && goods.every(done)
-            ? SalesDeliveryProgress.DELIVERED
-            : goods.some((i) => (Number(i.deliveredQuantity) || 0) > 1e-6) ? SalesDeliveryProgress.PARTIAL : SalesDeliveryProgress.PENDING;
+          order.deliveryProgress = this.progressOf(order.items);
           await manager.getRepository(SalesDelivery).save(order);
         }
       }
@@ -407,6 +408,96 @@ export class SalesReturnPostingService {
     }
 
     return b.build();
+  }
+
+  /**
+   * Take back the sales commission earned on the returned products, per invoice
+   * commission line (rows in sales_return_commissions + DR commission payable /
+   * CR commission expense on the return's journal):
+   *  - percentage: rate × returned product net (services excluded, like the invoice base);
+   *  - fixed:      kept in full while any product of the invoice is still sold;
+   *                taken back whole by the return that completes the invoice's return.
+   * Once the invoice's products are fully returned, what is left of each line is
+   * taken back, so rounding never leaves a residue. Reversing the return mirrors
+   * the journal; its rows stop counting with its status.
+   */
+  private async takeBackCommissions(
+    ret: SalesReturn,
+    settings: AccountingSetting,
+    number: string,
+    lines: JournalLineInput[],
+    manager: EntityManager,
+  ): Promise<void> {
+    ret.commissionReturned = 0;
+    if (!ret.salesInvoiceId) return;
+    const commissions = await manager.getRepository(SalesInvoiceCommission).find({ where: { salesInvoiceId: ret.salesInvoiceId } });
+    if (!commissions.some((c) => Number(c.amount) > 0)) return;
+
+    const isProduct = (t: SalesLineType | null | undefined) => (t ?? SalesLineType.STOCK) !== SalesLineType.SERVICE;
+    const invoiceItems = await manager.getRepository(SalesInvoiceItem).find({ where: { salesInvoiceId: ret.salesInvoiceId } });
+    const invoiceBase = round2(invoiceItems.filter((i) => isProduct(i.lineType)).reduce((t, i) => t + (Number(i.netBeforeTax) || 0), 0));
+    const returnedBase = round2(ret.items.filter((i) => isProduct(i.lineType)).reduce((t, i) => t + (Number(i.netBeforeTax) || 0), 0));
+    if (invoiceBase <= 0 || returnedBase <= 0) return;
+
+    // What earlier POSTED returns of this invoice already took back.
+    const prior = await manager
+      .getRepository(SalesReturnCommission)
+      .createQueryBuilder('rc')
+      .innerJoin(SalesReturn, 'sr', 'sr.id = rc.salesReturnId AND sr.deletedAt IS NULL')
+      .select('rc.salesInvoiceCommissionId', 'id')
+      .addSelect('SUM(rc.amount)', 'amount')
+      .where('rc.salesInvoiceId = :inv', { inv: ret.salesInvoiceId })
+      .andWhere('sr.status = :posted', { posted: SalesReturnStatus.POSTED })
+      .andWhere('sr.id <> :me', { me: ret.id })
+      .groupBy('rc.salesInvoiceCommissionId')
+      .getRawMany<{ id: string; amount: string }>();
+    const already = new Map(prior.map((r): [string, number] => [r.id, Number(r.amount) || 0]));
+    const priorBaseRow = await manager
+      .getRepository(SalesReturnItem)
+      .createQueryBuilder('ri')
+      .innerJoin(SalesReturn, 'sr', 'sr.id = ri.salesReturnId AND sr.deletedAt IS NULL')
+      .select('COALESCE(SUM(ri.netBeforeTax), 0)', 'base')
+      .where('sr.salesInvoiceId = :inv', { inv: ret.salesInvoiceId })
+      .andWhere('sr.status = :posted', { posted: SalesReturnStatus.POSTED })
+      .andWhere('sr.id <> :me', { me: ret.id })
+      .andWhere('ri.lineType <> :svc', { svc: SalesLineType.SERVICE })
+      .getRawOne<{ base: string }>();
+    const fullyReturned = round2(Number(priorBaseRow?.base ?? 0) + returnedBase) >= invoiceBase - 0.005;
+
+    const rows: SalesReturnCommission[] = [];
+    for (const c of commissions) {
+      const earned = round2(Number(c.amount) || 0);
+      const left = round2(earned - (already.get(c.id) ?? 0));
+      if (left <= 0) continue;
+      // A fixed commission stays whole until the invoice's products are all returned.
+      let share = c.commissionType === SalesCommissionType.PERCENTAGE ? round2((returnedBase * (Number(c.value) || 0)) / 100) : 0;
+      if (fullyReturned) share = left;
+      share = Math.min(share, left);
+      if (share <= 0) continue;
+      rows.push(
+        manager.getRepository(SalesReturnCommission).create({
+          salesReturnId: ret.id,
+          salesInvoiceId: ret.salesInvoiceId,
+          salesInvoiceCommissionId: c.id,
+          employeeId: c.employeeId,
+          employeeName: c.employeeName,
+          commissionType: c.commissionType,
+          value: Number(c.value) || 0,
+          returnedBase,
+          amount: share,
+        }),
+      );
+    }
+    const total = round2(rows.reduce((t, r) => t + r.amount, 0));
+    if (total <= 0) return;
+    if (!settings.commissionExpenseAccountId || !settings.commissionPayableAccountId) {
+      throw new BadRequestException('حسابا مصروف العمولات والعمولات المستحقة غير محددين في إعدادات المحاسبة — لا يمكن عكس عمولة الموظفين');
+    }
+    await manager.getRepository(SalesReturnCommission).save(rows);
+    const who = rows.map((r) => r.employeeName ?? '').filter(Boolean).join('، ');
+    lines.push({ accountId: settings.commissionPayableAccountId, debit: total, credit: 0, description: `عكس عمولات مبيعات مستحقة (${who}) — مردود مبيعات ${number}` });
+    lines.push({ accountId: settings.commissionExpenseAccountId, debit: 0, credit: total, description: `عكس عمولة مبيعات (${who}) — مردود مبيعات ${number}` });
+    ret.commissionReturned = total;
   }
 
   /**
@@ -611,9 +702,7 @@ export class SalesReturnPostingService {
     if (!order) return;
     const done = (i: SalesDeliveryItem) => (Number(i.deliveredQuantity) || 0) + (Number(i.cancelledQuantity) || 0) + 1e-6 >= (Number(i.orderedQuantity) || 0);
     const goods = order.items.filter((i) => i.lineType !== SalesLineType.SERVICE);
-    order.deliveryProgress = goods.length && goods.every(done)
-      ? SalesDeliveryProgress.DELIVERED
-      : goods.some((i) => (Number(i.deliveredQuantity) || 0) > 1e-6) ? SalesDeliveryProgress.PARTIAL : SalesDeliveryProgress.PENDING;
+    order.deliveryProgress = this.progressOf(order.items);
     order.updatedBy = actorId ?? null;
     await manager.getRepository(SalesDelivery).save(order);
     // A produced order whose line is now fully closed is finished (and vice versa).
@@ -645,12 +734,19 @@ export class SalesReturnPostingService {
       : [];
     const closed = new Map<string, number>();
     for (const r of rows) if (r.salesInvoiceItemId) closed.set(r.salesInvoiceItemId, (closed.get(r.salesInvoiceItemId) ?? 0) + (Number(r.cancelledQuantity) || 0));
-    const anyDelivered = goods.some((i) => (Number(i.deliveredQuantity) || 0) > 1e-6);
-    const allDone = goods.length > 0 && goods.every((i) => (Number(i.deliveredQuantity) || 0) + (closed.get(i.id) ?? 0) + 1e-6 >= (Number(i.quantity) || 0));
-    invoice.deliveryStatus = !goods.length
-      ? InvoiceDeliveryStatus.NOT_APPLICABLE
-      : allDone ? InvoiceDeliveryStatus.DELIVERED : anyDelivered ? InvoiceDeliveryStatus.PARTIAL : InvoiceDeliveryStatus.PENDING;
+    const state = fulfilmentState(goods.map((i) => ({ ordered: Number(i.quantity) || 0, delivered: Number(i.deliveredQuantity) || 0, closed: closed.get(i.id) ?? 0 })));
+    invoice.deliveryStatus = (state ?? InvoiceDeliveryStatus.NOT_APPLICABLE) as InvoiceDeliveryStatus;
     await manager.getRepository(SalesInvoice).save(invoice);
+  }
+
+  /** Delivery order progress of its goods lines (closed-by-return-only → «ملغى بالمرتجع»). */
+  private progressOf(items: SalesDeliveryItem[]): SalesDeliveryProgress {
+    const state = fulfilmentState(
+      items
+        .filter((i) => i.lineType !== SalesLineType.SERVICE)
+        .map((i) => ({ ordered: Number(i.orderedQuantity) || 0, delivered: Number(i.deliveredQuantity) || 0, closed: Number(i.cancelledQuantity) || 0 })),
+    );
+    return (state ?? SalesDeliveryProgress.PENDING) as SalesDeliveryProgress;
   }
 
   private validateAccounts(ret: SalesReturn, products: Map<string, Product>, settings: AccountingSetting): void {

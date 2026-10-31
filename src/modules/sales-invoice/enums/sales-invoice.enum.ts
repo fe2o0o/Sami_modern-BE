@@ -28,6 +28,8 @@ export enum SalesDeliveryStatus {
   PENDING = 'pending',
   PARTIAL = 'partial',
   DELIVERED = 'delivered',
+  /** Every goods line returned before anything was delivered. */
+  CANCELLED = 'cancelled',
 }
 
 export const SALES_DELIVERY_STATUS_LABELS: Record<SalesDeliveryStatus, string> = {
@@ -35,6 +37,7 @@ export const SALES_DELIVERY_STATUS_LABELS: Record<SalesDeliveryStatus, string> =
   [SalesDeliveryStatus.PENDING]: 'بانتظار التسليم',
   [SalesDeliveryStatus.PARTIAL]: 'مُسلّم جزئياً',
   [SalesDeliveryStatus.DELIVERED]: 'مُسلّم بالكامل',
+  [SalesDeliveryStatus.CANCELLED]: 'ملغى بالمرتجع',
 };
 
 export enum SalesDiscountType {

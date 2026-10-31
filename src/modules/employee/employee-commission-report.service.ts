@@ -11,6 +11,9 @@ import { Branch } from '../branch/entities/branch.entity';
 import { Employee } from './entities/employee.entity';
 import { applyBranchScope, BranchScope } from '../../common/utils/branch-scope.util';
 import { CommissionReportQueryDto } from './dto/commission-report-query.dto';
+import { SalesReturnCommission } from '../sales-return/entities/sales-return-commission.entity';
+import { SalesReturn } from '../sales-return/entities/sales-return.entity';
+import { SalesReturnStatus } from '../sales-return/enums/sales-return.enum';
 
 export interface CommissionReportRow {
   employeeId: string;
@@ -25,13 +28,34 @@ export interface CommissionReportRow {
   effectiveRate: number | null;
   percentageLines: number;
   fixedLines: number;
+  /** Commission taken back by sales returns POSTED in the period (by return date). */
+  returnedCommission: number;
+  returnsCount: number;
+  /** totalCommission − returnedCommission. */
+  netCommission: number;
 }
 
 export interface CommissionReport {
   period: { from: string; to: string };
   rows: CommissionReportRow[];
+  /** Gross commission of the period's invoices. */
   total: number;
+  totalReturned: number;
+  totalNet: number;
   totalSales: number;
+}
+
+/** A sales return that took back part of an employee's commission. */
+export interface EmployeeCommissionReturn {
+  returnId: string;
+  returnNumber: string | null;
+  returnDate: string;
+  invoiceId: string;
+  invoiceNumber: string | null;
+  customerName: string | null;
+  /** Returned product net (the commission base taken back). */
+  returnedBase: number;
+  amount: number;
 }
 
 export interface EmployeeCommissionInvoice {
@@ -48,6 +72,9 @@ export interface EmployeeCommissionInvoice {
   /** Percentage entered (percentage lines) or fixed amount (fixed lines). */
   value: number;
   amount: number;
+  /** Taken back by POSTED returns of this invoice (any date). */
+  returnedAmount: number;
+  netAmount: number;
   /** Commission ÷ invoice taxable amount × 100. */
   effectiveRate: number | null;
   /** Other employees sharing commission on the same invoice. */
@@ -86,8 +113,10 @@ export interface EmployeeCommissionDetails {
   employee: { id: string; code: string | null; name: string; jobTitle: string | null; commissionRate: number | null };
   /** Totals over POSTED invoices only (drafts are listed but not counted). */
   summary: Omit<CommissionReportRow, 'employeeId' | 'employeeName'> & { draftInvoices: number; draftCommission: number };
-  byMonth: { month: string; invoicesCount: number; totalSales: number; totalCommission: number }[];
+  byMonth: { month: string; invoicesCount: number; totalSales: number; totalCommission: number; returnedCommission: number; netCommission: number }[];
   invoices: EmployeeCommissionInvoice[];
+  /** Returns POSTED in the period that took back this employee's commission. */
+  returns: EmployeeCommissionReturn[];
   /** Posted invoices only. */
   customers: EmployeeCommissionCustomer[];
   products: EmployeeCommissionProduct[];
@@ -183,11 +212,22 @@ export class EmployeeCommissionReportService {
       byEmployee.set(r.employeeId, e);
     }
 
+    // Commission taken back by returns posted in the period (by return date).
+    const retQb = this.returnedQuery(query, branchScope)
+      .select('rc.employeeId', 'employeeId')
+      .addSelect('MAX(rc.employeeName)', 'employeeName')
+      .addSelect('COUNT(DISTINCT rc.salesReturnId)', 'returnsCount')
+      .addSelect('SUM(rc.amount)', 'amount')
+      .groupBy('rc.employeeId');
+    if (query.employeeId) retQb.andWhere('rc.employeeId = :eid', { eid: query.employeeId });
+    const returned = new Map(
+      (await retQb.getRawMany<{ employeeId: string; employeeName: string | null; returnsCount: string; amount: string }>()).map((r): [string, typeof r] => [r.employeeId, r]),
+    );
+    for (const [id, r] of returned) if (!byEmployee.has(id)) byEmployee.set(id, { name: r.employeeName, lines: [] });
+
     const rows: CommissionReportRow[] = [...byEmployee.entries()]
-      .map(([employeeId, e]) => ({
-        employeeId,
-        employeeName: e.name,
-        ...aggregate(
+      .map(([employeeId, e]) => {
+        const agg = aggregate(
           e.lines.map((l) => ({
             invoiceId: l.invoiceId,
             commissionType: l.commissionType,
@@ -195,16 +235,38 @@ export class EmployeeCommissionReportService {
             amount: Number(l.amount),
             taxableAmount: Number(l.taxableAmount),
           })),
-        ),
-      }))
-      .sort((a, b) => b.totalCommission - a.totalCommission);
+        );
+        const back = round2(Number(returned.get(employeeId)?.amount ?? 0));
+        return {
+          employeeId,
+          employeeName: e.name,
+          ...agg,
+          returnedCommission: back,
+          returnsCount: Number(returned.get(employeeId)?.returnsCount ?? 0),
+          netCommission: round2(agg.totalCommission - back),
+        };
+      })
+      .sort((a, b) => b.netCommission - a.netCommission);
 
     const total = round2(rows.reduce((s, r) => s + r.totalCommission, 0));
+    const totalReturned = round2(rows.reduce((s, r) => s + r.returnedCommission, 0));
     // Sales of distinct invoices across everyone (an invoice shared by two reps counts once).
     const invoiceSales = new Map(raw.map((r) => [r.invoiceId, Number(r.taxableAmount)]));
     const totalSales = round2([...invoiceSales.values()].reduce((s, v) => s + v, 0));
 
-    return { period: { from: query.dateFrom, to: query.dateTo }, rows, total, totalSales };
+    return { period: { from: query.dateFrom, to: query.dateTo }, rows, total, totalReturned, totalNet: round2(total - totalReturned), totalSales };
+  }
+
+  /** Commission rows of sales returns POSTED in the period, within the branch scope. */
+  private returnedQuery(query: CommissionReportQueryDto, branchScope: BranchScope) {
+    const qb = this.commissionRepository.manager
+      .createQueryBuilder(SalesReturnCommission, 'rc')
+      .innerJoin(SalesReturn, 'sr', 'sr.id = rc.salesReturnId AND sr.deletedAt IS NULL')
+      .where('sr.status = :rposted', { rposted: SalesReturnStatus.POSTED })
+      .andWhere('sr.returnDate >= :rfrom', { rfrom: query.dateFrom })
+      .andWhere('sr.returnDate <= :rto', { rto: query.dateTo });
+    applyBranchScope(qb, 'sr.branchId', branchScope);
+    return qb;
   }
 
   /** Everything one employee earned commission on in the period (posted + drafts). */
@@ -277,10 +339,27 @@ export class EmployeeCommissionReportService {
       sharedMap.set(o.invoiceId, list);
     }
 
+    // Commission taken back from each of these invoices (posted returns, any date).
+    const backByInvoice = new Map<string, number>();
+    if (invoiceIds.length) {
+      const back = await this.commissionRepository.manager
+        .createQueryBuilder(SalesReturnCommission, 'rc')
+        .innerJoin(SalesReturn, 'sr', 'sr.id = rc.salesReturnId AND sr.deletedAt IS NULL')
+        .select('rc.salesInvoiceId', 'invoiceId')
+        .addSelect('SUM(rc.amount)', 'amount')
+        .where('rc.employeeId = :eid', { eid: employeeId })
+        .andWhere('rc.salesInvoiceId IN (:...ids)', { ids: invoiceIds })
+        .andWhere('sr.status = :rposted', { rposted: SalesReturnStatus.POSTED })
+        .groupBy('rc.salesInvoiceId')
+        .getRawMany<{ invoiceId: string; amount: string }>();
+      for (const b of back) backByInvoice.set(b.invoiceId, Number(b.amount) || 0);
+    }
+
     const invoices: EmployeeCommissionInvoice[] = raw.map((r) => {
       const taxable = Number(r.taxableAmount);
       const amount = Number(r.amount);
       const invoiceId = String(r.invoiceId);
+      const returnedAmount = round2(backByInvoice.get(invoiceId) ?? 0);
       return {
         invoiceId,
         invoiceNumber: (r.invoiceNumber as string | null) ?? null,
@@ -294,6 +373,8 @@ export class EmployeeCommissionReportService {
         commissionType: r.commissionType as SalesCommissionType,
         value: round2(Number(r.value)),
         amount: round2(amount),
+        returnedAmount,
+        netAmount: round2(amount - returnedAmount),
         effectiveRate: taxable > 0 ? round2((amount / taxable) * 100) : null,
         sharedWith: sharedMap.get(invoiceId) ?? [],
         customerId: (r.customerId as string | null) ?? null,
@@ -304,16 +385,61 @@ export class EmployeeCommissionReportService {
 
     const posted = invoices.filter((i) => i.status === SalesInvoiceStatus.POSTED);
     const drafts = invoices.filter((i) => i.status === SalesInvoiceStatus.DRAFT);
+
+    // Returns posted in the period that took back this employee's commission (by return date).
+    const returnRows = await this.returnedQuery(query, branchScope)
+      .leftJoin(SalesInvoice, 'si', 'si.id = rc.salesInvoiceId')
+      .leftJoin(Customer, 'cu', 'cu.id = sr.customerId')
+      .select('sr.id', 'returnId')
+      .addSelect('sr.returnNumber', 'returnNumber')
+      .addSelect('sr.returnDate', 'returnDate')
+      .addSelect('rc.salesInvoiceId', 'invoiceId')
+      .addSelect('si.invoiceNumber', 'invoiceNumber')
+      .addSelect('cu.name', 'customerName')
+      .addSelect('SUM(rc.returnedBase)', 'returnedBase')
+      .addSelect('SUM(rc.amount)', 'amount')
+      .andWhere('rc.employeeId = :eid', { eid: employeeId })
+      .groupBy('sr.id')
+      .addGroupBy('sr.returnNumber')
+      .addGroupBy('sr.returnDate')
+      .addGroupBy('rc.salesInvoiceId')
+      .addGroupBy('si.invoiceNumber')
+      .addGroupBy('cu.name')
+      .orderBy('sr.returnDate', 'DESC')
+      .getRawMany<Record<string, unknown>>();
+    const returns: EmployeeCommissionReturn[] = returnRows.map((r) => ({
+      returnId: String(r.returnId),
+      returnNumber: (r.returnNumber as string | null) ?? null,
+      returnDate: toYmd(r.returnDate),
+      invoiceId: String(r.invoiceId),
+      invoiceNumber: (r.invoiceNumber as string | null) ?? null,
+      customerName: (r.customerName as string | null) ?? null,
+      returnedBase: round2(Number(r.returnedBase)),
+      amount: round2(Number(r.amount)),
+    }));
+    const returnedCommission = round2(returns.reduce((s, r) => s + r.amount, 0));
+
+    const gross = aggregate(posted.map((i) => ({ invoiceId: i.invoiceId, commissionType: i.commissionType, value: i.value, amount: i.amount, taxableAmount: i.taxableAmount })));
     const summary = {
-      ...aggregate(posted.map((i) => ({ invoiceId: i.invoiceId, commissionType: i.commissionType, value: i.value, amount: i.amount, taxableAmount: i.taxableAmount }))),
+      ...gross,
+      returnedCommission,
+      returnsCount: returns.length,
+      netCommission: round2(gross.totalCommission - returnedCommission),
       draftInvoices: new Set(drafts.map((d) => d.invoiceId)).size,
       draftCommission: round2(drafts.reduce((s, d) => s + d.amount, 0)),
     };
 
-    const months = new Map<string, { invoices: Set<string>; sales: Map<string, number>; commission: number }>();
+    const months = new Map<string, { invoices: Set<string>; sales: Map<string, number>; commission: number; returned: number }>();
+    const monthOf = (key: string) => months.get(key) ?? { invoices: new Set<string>(), sales: new Map<string, number>(), commission: 0, returned: 0 };
+    for (const r of returns) {
+      const key = r.returnDate.slice(0, 7);
+      const m = monthOf(key);
+      m.returned += r.amount;
+      months.set(key, m);
+    }
     for (const i of posted) {
       const key = i.invoiceDate.slice(0, 7);
-      const m = months.get(key) ?? { invoices: new Set<string>(), sales: new Map<string, number>(), commission: 0 };
+      const m = monthOf(key);
       m.invoices.add(i.invoiceId);
       m.sales.set(i.invoiceId, i.taxableAmount);
       m.commission += i.amount;
@@ -326,6 +452,8 @@ export class EmployeeCommissionReportService {
         invoicesCount: m.invoices.size,
         totalSales: round2([...m.sales.values()].reduce((s, v) => s + v, 0)),
         totalCommission: round2(m.commission),
+        returnedCommission: round2(m.returned),
+        netCommission: round2(m.commission - m.returned),
       }));
 
     // Customers (posted invoices).
@@ -389,6 +517,7 @@ export class EmployeeCommissionReportService {
       [SalesDeliveryStatus.PENDING]: 0,
       [SalesDeliveryStatus.PARTIAL]: 0,
       [SalesDeliveryStatus.DELIVERED]: 0,
+      [SalesDeliveryStatus.CANCELLED]: 0,
     } as Record<SalesDeliveryStatus, number>;
     const seen = new Set<string>();
     for (const i of posted) {
@@ -412,6 +541,7 @@ export class EmployeeCommissionReportService {
       summary,
       byMonth,
       invoices,
+      returns,
     };
   }
 }

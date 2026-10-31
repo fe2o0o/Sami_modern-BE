@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SalesReturn } from './entities/sales-return.entity';
 import { SalesReturnItem } from './entities/sales-return-item.entity';
+import { SalesReturnCommission } from './entities/sales-return-commission.entity';
 import { SalesReturnService } from './sales-return.service';
 import { SalesReturnPostingService } from './sales-return-posting.service';
 import { SalesReturnController } from './sales-return.controller';
@@ -27,6 +28,7 @@ import { ManufacturingModule } from '../manufacturing/manufacturing.module';
     TypeOrmModule.forFeature([
       SalesReturn,
       SalesReturnItem,
+      SalesReturnCommission,
       SalesInvoice,
       SalesInvoiceItem,
       Product,

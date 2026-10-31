@@ -354,7 +354,7 @@ export class DashboardService {
       .groupBy('si.deliveryStatus');
     this.scopeBranch(qb, 'si.branchId', scope, branchId);
     const rows = await qb.getRawMany<{ status: string; count: string }>();
-    const out: Record<string, number> = { pending: 0, partial: 0, delivered: 0, not_applicable: 0 };
+    const out: Record<string, number> = { pending: 0, partial: 0, delivered: 0, cancelled: 0, not_applicable: 0 };
     for (const x of rows) out[x.status] = n(x.count);
     return out;
   }

@@ -98,7 +98,7 @@ export class EmployeeAiTools {
           return {
             success: true,
             presentation: 'report',
-            data: { title: 'تقرير عمولات الموظفين', currency: CURRENCY, period: res.period, totalSales: res.totalSales, totalCommission: res.total, commissions: res.rows },
+            data: { title: 'تقرير عمولات الموظفين', currency: CURRENCY, period: res.period, totalSales: res.totalSales, totalCommission: res.total, returnedCommission: res.totalReturned, netCommission: res.totalNet, commissions: res.rows },
           };
         },
       },

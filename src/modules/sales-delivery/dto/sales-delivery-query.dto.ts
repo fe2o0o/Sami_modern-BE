@@ -34,10 +34,10 @@ export class SalesDeliveryQueryDto extends PaginationQueryDto {
    * (pending/partial/delivered, excluding reversed), document status for
    * standalone notes (draft/posted), and reversed for any note.
    */
-  @ApiPropertyOptional({ enum: ['pending', 'partial', 'delivered', 'draft', 'posted', 'reversed'] })
+  @ApiPropertyOptional({ enum: ['pending', 'partial', 'delivered', 'cancelled', 'draft', 'posted', 'reversed'] })
   @IsOptional()
-  @IsIn(['pending', 'partial', 'delivered', 'draft', 'posted', 'reversed'], { message: 'حالة إذن التسليم غير صالحة' })
-  state?: 'pending' | 'partial' | 'delivered' | 'draft' | 'posted' | 'reversed';
+  @IsIn(['pending', 'partial', 'delivered', 'cancelled', 'draft', 'posted', 'reversed'], { message: 'حالة إذن التسليم غير صالحة' })
+  state?: 'pending' | 'partial' | 'delivered' | 'cancelled' | 'draft' | 'posted' | 'reversed';
 
   @ApiPropertyOptional({ format: 'date' })
   @IsOptional()

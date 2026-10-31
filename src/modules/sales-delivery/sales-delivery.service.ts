@@ -326,7 +326,7 @@ export class SalesDeliveryService {
     if (query.fiscalYearId) qb.andWhere('d.fiscalYearId = :fy', { fy: query.fiscalYearId });
     if (query.status) qb.andWhere('d.status = :st', { st: query.status });
     // `state` = what the list's status column shows (see the DTO).
-    if (query.state === 'pending' || query.state === 'partial' || query.state === 'delivered') {
+    if (query.state === 'pending' || query.state === 'partial' || query.state === 'delivered' || query.state === 'cancelled') {
       qb.andWhere(`d.source = 'invoice' AND d.status <> 'reversed' AND d.deliveryProgress = :pg`, { pg: query.state });
     } else if (query.state === 'draft' || query.state === 'posted') {
       qb.andWhere(`d.source = 'standalone' AND d.status = :sst`, { sst: query.state });
