@@ -76,13 +76,15 @@ export class EmployeeService extends BaseCrudService<Employee> {
     await this.ensureUnique('code', code, undefined, 'كود الموظف مستخدم بالفعل');
     await this.validateProfile(dto);
     const branches = await this.resolveBranches(dto.branchIds);
-    const { branchIds: _bi, netSalary, isActive, ...rest } = dto;
+    const payrollBranchId = await this.resolvePayrollBranch(dto.payrollBranchId, branches, null);
+    const { branchIds: _bi, netSalary, isActive, payrollBranchId: _pb, ...rest } = dto;
     const active = isActive !== false;
     const saved = await this.employeeRepository.save(
       this.employeeRepository.create({
         ...rest,
         code,
         branches,
+        payrollBranchId,
         isActive: active,
         employmentStatus: active ? EmploymentStatus.ACTIVE : EmploymentStatus.TERMINATED,
         netSalary: 0,
@@ -101,8 +103,14 @@ export class EmployeeService extends BaseCrudService<Employee> {
     }
     await this.validateProfile({ ...employee, ...dto }, id);
     if (dto.branchIds !== undefined) employee.branches = await this.resolveBranches(dto.branchIds);
+    employee.payrollBranchId = await this.resolvePayrollBranch(
+      dto.payrollBranchId === undefined ? employee.payrollBranchId : dto.payrollBranchId,
+      employee.branches ?? [],
+      employee.payrollBranchId,
+    );
     const rest: Record<string, unknown> = { ...dto };
     delete rest.branchIds;
+    delete rest.payrollBranchId;
     for (const k of NOT_EDITABLE) delete rest[k];
     Object.assign(employee, rest);
     await this.employeeRepository.save(employee);
@@ -269,6 +277,23 @@ export class EmployeeService extends BaseCrudService<Employee> {
       expiringDocuments,
       commission,
     };
+  }
+
+  /**
+   * «فرع صرف الراتب»: must be one of the employee's branches (any branch when they
+   * serve all). Defaults to the only branch of a one-branch employee.
+   */
+  private async resolvePayrollBranch(requested: string | null | undefined, branches: Branch[], current: string | null): Promise<string | null> {
+    let id = requested ?? null;
+    if (id && branches.length && !branches.some((b) => b.id === id)) {
+      if (requested === current) id = null; // branches changed — the old pay branch no longer applies
+      else throw new BadRequestException('فرع صرف الراتب يجب أن يكون من فروع الموظف');
+    }
+    if (!id && branches.length === 1) id = branches[0].id;
+    if (id && !branches.length && !(await this.branchRepository.exists({ where: { id } }))) {
+      throw new NotFoundException('فرع صرف الراتب غير موجود');
+    }
+    return id;
   }
 
   /** Resolve+validate the branch ids. Empty/undefined → no branches (all). */

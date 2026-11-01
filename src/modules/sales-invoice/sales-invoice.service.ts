@@ -279,7 +279,7 @@ export class SalesInvoiceService {
       invoiceNumber: i.invoiceNumber,
       invoiceDate: i.invoiceDate,
       customerId: i.customerId,
-      customerName: customerName.get(i.customerId) ?? null,
+      customerName: (i.isQuickSale ? i.walkInCustomerName : null) ?? customerName.get(i.customerId) ?? null,
       warehouseId: i.warehouseId,
       warehouseName: i.warehouseId ? warehouseName.get(i.warehouseId) ?? null : null,
       taxableAmount: i.taxableAmount,
@@ -485,7 +485,7 @@ export class SalesInvoiceService {
     return {
       ...invoice,
       cancelledLines,
-      customerName: customer?.name ?? null,
+      customerName: (invoice.isQuickSale ? invoice.walkInCustomerName : null) ?? customer?.name ?? null,
       warehouseName: warehouse?.name ?? null,
       branchName: branch?.name ?? null,
       fiscalYearName: fiscalYear?.name ?? null,

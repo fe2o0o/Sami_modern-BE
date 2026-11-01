@@ -61,6 +61,11 @@ export class CreateEmployeeDto {
   @IsUUID('4', { each: true, message: 'أحد الفروع المختارة غير صالح' })
   branchIds?: string[];
 
+  @ApiPropertyOptional({ format: 'uuid', description: 'فرع صرف الراتب (يُملأ تلقائياً لو للموظف فرع واحد)' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'فرع صرف الراتب غير صحيح' })
+  payrollBranchId?: string | null;
+
   @ApiPropertyOptional({ format: 'date' })
   @IsOptional()
   @IsDateString({}, { message: 'تاريخ التعيين غير صحيح' })

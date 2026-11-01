@@ -112,7 +112,7 @@ export class SalesReturnService {
     // Only DELIVERED goods are returnable. Manufacturing, service and
     // non-inventory lines never ship through a delivery note, so they fall back
     // to the invoiced quantity (they were "delivered" at invoicing).
-    const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
+    const delivered = await this.deliveredInfo(invoice);
     const ships = await this.shipsViaDeliveryByItem(invoice.items);
     const fromWarehouse = await this.deliveredWarehouseByItem(invoice.items.map((i) => i.id));
     const mfg = await this.manufacturingInfoByItem(invoice.items.filter((i) => i.lineType === SalesLineType.MANUFACTURING).map((i) => i.id));
@@ -382,7 +382,7 @@ export class SalesReturnService {
   ): Promise<SalesReturnItem[]> {
     const itemById = new Map(invoice.items.map((i): [string, SalesInvoiceItem] => [i.id, i]));
     const alreadyReturned = await this.returnedQtyByItem(invoice.items.map((i) => i.id), excludeReturnId);
-    const delivered = await this.deliveredInfoByItem(invoice.items.map((i) => i.id));
+    const delivered = await this.deliveredInfo(invoice);
     const ships = await this.shipsViaDeliveryByItem(invoice.items);
     const fromWarehouse = await this.deliveredWarehouseByItem(invoice.items.map((i) => i.id));
 
@@ -511,6 +511,15 @@ export class SalesReturnService {
       .groupBy('di.salesInvoiceItemId')
       .getRawMany<{ itemId: string; warehouseId: string }>();
     return new Map(rows.map((r) => [r.itemId, r.warehouseId]));
+  }
+
+  /** Delivered qty + unit cost per invoice line. A quick sale was handed over at the
+   *  counter: everything invoiced counts as delivered, at the cost it was issued at. */
+  private async deliveredInfo(invoice: SalesInvoice): Promise<Map<string, { qty: number; unitCost: number }>> {
+    if (invoice.isQuickSale) {
+      return new Map(invoice.items.map((i): [string, { qty: number; unitCost: number }] => [i.id, { qty: Number(i.deliveredQuantity) || 0, unitCost: Number(i.costAtPost) || 0 }]));
+    }
+    return this.deliveredInfoByItem(invoice.items.map((i) => i.id));
   }
 
   private async deliveredInfoByItem(

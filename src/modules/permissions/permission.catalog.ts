@@ -16,6 +16,7 @@ export enum PermissionAction {
   REVERSE = 'reverse',
   MANAGE = 'manage',
   APPROVE = 'approve',
+  PAY = 'pay',
 }
 
 export const PERMISSION_ACTION_LABELS: Record<PermissionAction, string> = {
@@ -27,6 +28,7 @@ export const PERMISSION_ACTION_LABELS: Record<PermissionAction, string> = {
   [PermissionAction.REVERSE]: 'عكس',
   [PermissionAction.MANAGE]: 'إدارة',
   [PermissionAction.APPROVE]: 'اعتماد',
+  [PermissionAction.PAY]: 'صرف',
 };
 
 export interface PermissionModuleDef {
@@ -91,6 +93,7 @@ export const PERMISSION_CATALOG: PermissionGroupDef[] = [
       { module: 'hr_salary', labelAr: 'رواتب الموظفين وبنود الراتب', actions: [A.VIEW, A.MANAGE] },
       { module: 'advances', labelAr: 'سلف الموظفين', actions: [A.VIEW, A.CREATE, A.EDIT, A.DELETE, A.APPROVE, A.POST, A.REVERSE] },
       { module: 'custody', labelAr: 'عُهد الموظفين', actions: DOC },
+      { module: 'payroll', labelAr: 'مسير الرواتب', actions: [A.VIEW, A.CREATE, A.DELETE, A.APPROVE, A.PAY, A.REVERSE] },
     ],
   },
   {

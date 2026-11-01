@@ -40,6 +40,11 @@ export class Employee extends BaseEntity {
   })
   branches!: Branch[];
 
+  /** «فرع صرف الراتب» — the branch whose monthly payroll pays this employee. */
+  @Index()
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  payrollBranchId!: string | null;
+
   @Column({ type: 'date', nullable: true })
   hireDate!: string | null;
 

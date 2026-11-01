@@ -107,6 +107,18 @@ export class SalesInvoice extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   reversalJournalEntryId!: string | null;
 
+  /** Quick sale (بيع سريع): cash, from stock, goods issued + cost booked at posting
+   *  (no reservation / delivery order). Booked against the «عميل بيع سريع» customer. */
+  @Column({ type: 'boolean', default: false })
+  isQuickSale!: boolean;
+
+  /** Quick sale: the walk-in customer's name / mobile as printed on the invoice. */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  walkInCustomerName!: string | null;
+
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  walkInCustomerMobile!: string | null;
+
   /** Total sales commission on the invoice (Σ commission lines). */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   commissionTotal!: number;

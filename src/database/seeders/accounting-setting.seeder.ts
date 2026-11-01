@@ -28,6 +28,11 @@ export class AccountingSettingSeeder implements Seeder {
       | 'outputVatAccountId'
       | 'commissionExpenseAccountId'
       | 'commissionPayableAccountId'
+      | 'salariesExpenseAccountId'
+      | 'employeeAdvancesAccountId'
+      | 'employeeCustodyAccountId'
+      | 'salariesPayableAccountId'
+      | 'payrollDeductionsAccountId'
       | 'openingBalanceEquityAccountId'
     >,
     string
@@ -46,6 +51,11 @@ export class AccountingSettingSeeder implements Seeder {
     outputVatAccountId: '221000',
     commissionExpenseAccountId: '613000',
     commissionPayableAccountId: '231000',
+    salariesExpenseAccountId: '614000',
+    employeeAdvancesAccountId: '123000',
+    employeeCustodyAccountId: '124000',
+    salariesPayableAccountId: '232000',
+    payrollDeductionsAccountId: '233000',
     openingBalanceEquityAccountId: '330000',
   };
 
@@ -75,5 +85,12 @@ export class AccountingSettingSeeder implements Seeder {
     }
 
     await settingRepo.save(setting);
+
+    // Employee accounts always carry the employee on journal lines (same rule as
+    // saving the settings from the UI).
+    const employeeAccounts = [setting.employeeAdvancesAccountId, setting.employeeCustodyAccountId, setting.salariesPayableAccountId].filter(
+      (v): v is string => !!v,
+    );
+    if (employeeAccounts.length) await accountRepo.update(employeeAccounts, { requiresEmployee: true });
   }
 }

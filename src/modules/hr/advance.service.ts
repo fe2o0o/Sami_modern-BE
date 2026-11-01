@@ -384,6 +384,7 @@ export class AdvanceService {
       const r = await manager.findOne(EmployeeAdvanceRepayment, { where: { id: repaymentId, advanceId: a.id } });
       if (!r) throw new NotFoundException('لم يتم العثور على السداد');
       if (r.status !== HrMovementStatus.POSTED) throw new BadRequestException('السداد معكوس بالفعل');
+      if (r.method === 'payroll') throw new BadRequestException('هذا القسط خُصم من مسير رواتب — يُلغى بعكس المسير نفسه');
       const date = dto.date ?? today();
       const description = `عكس سداد سلفة ${a.advanceNumber ?? ''} — ${a.employeeName ?? ''} — ${dto.reason}`;
       const rev = await this.posting.reverseEntry(r.journalEntryId!, { date, reason: dto.reason, sourceType: JournalSourceType.EMPLOYEE_ADVANCE, sourceId: a.id, sourceNumber: a.advanceNumber, description, actorId }, manager);

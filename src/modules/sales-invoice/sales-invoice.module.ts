@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { QuickSaleService } from './quick-sale.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SalesInvoice } from './entities/sales-invoice.entity';
 import { SalesInvoiceItem } from './entities/sales-invoice-item.entity';
@@ -59,7 +60,7 @@ import { SalesDeliveryModule } from '../sales-delivery/sales-delivery.module';
     SalesDeliveryModule,
   ],
   controllers: [SalesInvoiceController],
-  providers: [SalesInvoiceService, SalesInvoicePostingService],
+  providers: [SalesInvoiceService, SalesInvoicePostingService, QuickSaleService],
   exports: [SalesInvoiceService],
 })
 export class SalesInvoiceModule {}

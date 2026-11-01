@@ -81,6 +81,18 @@ export class AccountingSetting extends BaseEntity {
   @Column({ type: 'varchar', length: 36, nullable: true })
   employeeCustodyAccountId!: string | null;
 
+  /** Payroll: salaries & allowances expense (a pay component may override it). */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  salariesExpenseAccountId!: string | null;
+
+  /** Payroll: net salaries owed to employees until paid (lines carry the employee). */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  salariesPayableAccountId!: string | null;
+
+  /** Payroll: deductions withheld (taxes, social insurance…) until remitted. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  payrollDeductionsAccountId!: string | null;
+
   /** Optional ceiling: an advance may not exceed this × the employee's net salary. */
   @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
   maxAdvanceSalaryMultiple!: string | null;

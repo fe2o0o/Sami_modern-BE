@@ -15,6 +15,8 @@ import { SalesInvoicePostingService } from './sales-invoice-posting.service';
 import { CreateSalesInvoiceDto } from './dto/create-sales-invoice.dto';
 import { UpdateSalesInvoiceDto } from './dto/update-sales-invoice.dto';
 import { ReverseSalesInvoiceDto } from './dto/reverse-sales-invoice.dto';
+import { QuickSaleDto } from './dto/quick-sale.dto';
+import { QuickSaleService } from './quick-sale.service';
 import { SalesInvoiceQueryDto } from './dto/sales-invoice-query.dto';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -28,6 +30,7 @@ export class SalesInvoiceController {
   constructor(
     private readonly service: SalesInvoiceService,
     private readonly posting: SalesInvoicePostingService,
+    private readonly quick: QuickSaleService,
   ) {}
 
   @Get('products')
@@ -57,6 +60,18 @@ export class SalesInvoiceController {
   @ApiOperation({ summary: 'عرض تفاصيل فاتورة مبيعات' })
   findOne(@Param('id', ParseUUIDPipe) id: string, @BranchScope() branchScope: string[] | null) {
     return this.service.findOneDetailed(id, branchScope);
+  }
+
+  @Post('quick')
+  @RequirePermissions('sales_invoices.create', 'sales_invoices.post')
+  @ResponseMessage('تم ترحيل فاتورة البيع السريع بنجاح')
+  @ApiOperation({ summary: 'بيع سريع: فاتورة نقدية من المخزن لعميل غير مسجّل — تُنشأ وتُرحّل مباشرة' })
+  quickSale(
+    @Body() dto: QuickSaleDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.quick.createAndPost(dto, actorId, branchScope);
   }
 
   @Post()

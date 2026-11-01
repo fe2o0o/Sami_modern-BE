@@ -141,14 +141,19 @@ export class EmployeeAdvanceRepayment extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, transformer: numericTransformer })
   amount!: number;
 
-  @Column({ type: 'enum', enum: HrCashMethod })
-  method!: HrCashMethod;
+  /** treasury / bank = cash repayment; 'payroll' = deducted by a payroll run (reversed with the run). */
+  @Column({ type: 'enum', enum: [...Object.values(HrCashMethod), 'payroll'] })
+  method!: HrCashMethod | 'payroll';
 
   @Column({ type: 'varchar', length: 36, nullable: true })
   treasuryId!: string | null;
 
   @Column({ type: 'varchar', length: 36, nullable: true })
   bankAccountId!: string | null;
+
+  /** Set when the installment was recovered by a payroll run. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  payrollRunId!: string | null;
 
   @Column({ type: 'enum', enum: HrMovementStatus, default: HrMovementStatus.POSTED })
   status!: HrMovementStatus;

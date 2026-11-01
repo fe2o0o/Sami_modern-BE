@@ -46,7 +46,7 @@ export class AccountingSettingService {
     Object.assign(setting, dto);
     const saved = await this.settingRepository.save(setting);
     // employee accounts always ask for the employee on manual journal lines
-    const flag = [saved.employeeAdvancesAccountId, saved.employeeCustodyAccountId].filter((v): v is string => !!v);
+    const flag = [saved.employeeAdvancesAccountId, saved.employeeCustodyAccountId, saved.salariesPayableAccountId].filter((v): v is string => !!v);
     if (flag.length) await this.settingRepository.manager.update(ChartOfAccount, flag, { requiresEmployee: true });
     return saved;
   }

@@ -80,6 +80,15 @@ export class UpdateAccountingSettingDto {
   @AccountId()
   employeeCustodyAccountId?: string | null;
 
+  @AccountId()
+  salariesExpenseAccountId?: string | null;
+
+  @AccountId()
+  salariesPayableAccountId?: string | null;
+
+  @AccountId()
+  payrollDeductionsAccountId?: string | null;
+
   /** Max advance = X × net salary (empty = no ceiling). */
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()

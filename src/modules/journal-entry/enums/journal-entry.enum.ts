@@ -61,7 +61,7 @@ export const JOURNAL_SOURCE_TYPE_LABELS: Record<JournalSourceType, string> = {
   [JournalSourceType.BANK_TRANSFER]: 'تحويل بنكي',
   [JournalSourceType.INVENTORY_ADJUSTMENT]: 'تسوية مخزون',
   [JournalSourceType.MANUFACTURING]: 'أمر تصنيع',
-  [JournalSourceType.PAYROLL]: 'رواتب',
+  [JournalSourceType.PAYROLL]: 'مسير رواتب',
   [JournalSourceType.EMPLOYEE_ADVANCE]: 'سلفة موظف',
   [JournalSourceType.EMPLOYEE_CUSTODY]: 'عهدة موظف',
 };

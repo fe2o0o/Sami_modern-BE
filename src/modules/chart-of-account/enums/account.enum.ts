@@ -30,6 +30,8 @@ export enum AccountSubType {
   INVENTORY_FINISHED_GOODS = 'inventory_finished_goods',
   FIXED_ASSET = 'fixed_asset',
   TAX_RECEIVABLE = 'tax_receivable',
+  /** Owed by non-customers: employee advances & custody, sundry debtors. */
+  OTHER_RECEIVABLE = 'other_receivable',
   // LIABILITY
   ACCOUNTS_PAYABLE = 'accounts_payable',
   TAX_PAYABLE = 'tax_payable',
@@ -61,6 +63,7 @@ export const ACCOUNT_SUBTYPE_LABELS: Record<AccountSubType, string> = {
   [AccountSubType.INVENTORY_FINISHED_GOODS]: 'مخزون منتج تام',
   [AccountSubType.FIXED_ASSET]: 'أصل ثابت',
   [AccountSubType.TAX_RECEIVABLE]: 'ضريبة مدينة (مشتريات)',
+  [AccountSubType.OTHER_RECEIVABLE]: 'ذمم مدينة أخرى (موظفون ومدينون متنوعون)',
   [AccountSubType.ACCOUNTS_PAYABLE]: 'ذمم دائنة (موردون)',
   [AccountSubType.TAX_PAYABLE]: 'ضريبة دائنة (مبيعات)',
   [AccountSubType.SALARY_PAYABLE]: 'رواتب مستحقة',
@@ -90,6 +93,7 @@ export const SUBTYPES_BY_TYPE: Record<AccountType, AccountSubType[]> = {
     AccountSubType.INVENTORY_FINISHED_GOODS,
     AccountSubType.FIXED_ASSET,
     AccountSubType.TAX_RECEIVABLE,
+    AccountSubType.OTHER_RECEIVABLE,
   ],
   [AccountType.LIABILITY]: [
     AccountSubType.ACCOUNTS_PAYABLE,

@@ -23,6 +23,8 @@ const SUBTYPE_BY_CODE: Record<string, AccountSubType> = {
   '112000': AccountSubType.BANK,
   '121000': AccountSubType.ACCOUNTS_RECEIVABLE,
   '122000': AccountSubType.TAX_RECEIVABLE,
+  '123000': AccountSubType.OTHER_RECEIVABLE,
+  '124000': AccountSubType.OTHER_RECEIVABLE,
   '131000': AccountSubType.INVENTORY_RAW_MATERIAL,
   '132000': AccountSubType.INVENTORY_WIP,
   '133000': AccountSubType.INVENTORY_FINISHED_GOODS,
@@ -30,6 +32,8 @@ const SUBTYPE_BY_CODE: Record<string, AccountSubType> = {
   '211000': AccountSubType.ACCOUNTS_PAYABLE,
   '221000': AccountSubType.TAX_PAYABLE,
   '231000': AccountSubType.OTHER_PAYABLE,
+  '232000': AccountSubType.SALARY_PAYABLE,
+  '233000': AccountSubType.OTHER_PAYABLE,
   // Equity
   '310000': AccountSubType.CAPITAL,
   '320000': AccountSubType.RETAINED_EARNINGS,
@@ -42,6 +46,7 @@ const SUBTYPE_BY_CODE: Record<string, AccountSubType> = {
   '611000': AccountSubType.OPERATING_EXPENSE,
   '612000': AccountSubType.INVENTORY_ADJUSTMENT,
   '613000': AccountSubType.OPERATING_EXPENSE,
+  '614000': AccountSubType.OPERATING_EXPENSE,
 };
 
 /**

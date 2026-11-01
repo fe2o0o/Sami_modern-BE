@@ -141,6 +141,12 @@ export class SalesInvoicePostingService {
 
       // All account mappings must resolve BEFORE we touch stock.
       this.validateAccounts(invoice, items, products, settings);
+      const quick = invoice.isQuickSale;
+      if (quick) {
+        if (invoice.paymentType !== SalesPaymentType.CASH) throw new BadRequestException('البيع السريع نقدي فقط');
+        const bad = items.find((i) => i.lineType !== SalesLineType.STOCK || !products.get(i.productId)?.trackInventory);
+        if (bad) throw new BadRequestException(`البيع السريع من المخزن فقط — «${bad.productName ?? ''}» ليس صنفاً مخزنياً`);
+      }
 
       // Mint the invoice number up-front so every side-effect shares it.
       const invoiceNumber = await this.sequenceService.nextDocumentNumber('SI', fiscalYear, manager);
@@ -153,13 +159,13 @@ export class SalesInvoicePostingService {
       );
       const manufacturingItems = items.filter((i) => i.lineType === SalesLineType.MANUFACTURING);
 
-      if (stockItems.length) {
-        const stockLines: StockLineInput[] = stockItems.map((i) => ({
-          warehouseId: i.warehouseId!, // guaranteed by validateAccounts for stock lines
-          productId: i.productId,
-          productName: i.productName ?? products.get(i.productId)?.name,
-          quantity: i.quantity,
-        }));
+      const stockLines: StockLineInput[] = stockItems.map((i) => ({
+        warehouseId: i.warehouseId!, // guaranteed by validateAccounts for stock lines
+        productId: i.productId,
+        productName: i.productName ?? products.get(i.productId)?.name,
+        quantity: i.quantity,
+      }));
+      if (stockLines.length && !quick) {
         // Hold the goods against this invoice; delivery releases the hold.
         await this.stockService.reserve(stockLines, manager);
       }
@@ -167,13 +173,21 @@ export class SalesInvoicePostingService {
       // Build + post the balanced journal entry via the central engine. The
       // narration names the customer so the ledger reads without opening the invoice.
       const customer = await manager.getRepository(Customer).findOne({ where: { id: invoice.customerId }, select: { id: true, name: true } });
-      const customerName = customer?.name ?? '';
+      // A quick sale names the walk-in customer (the system customer is only a holder).
+      const customerName = quick
+        ? [invoice.walkInCustomerName, invoice.walkInCustomerMobile].filter(Boolean).join(' — ')
+        : customer?.name ?? '';
       const paymentLabel = invoice.paymentType === SalesPaymentType.CREDIT ? 'آجل' : 'نقدي';
       const lines = this.buildJournalLines(invoice, items, products, settings, invoiceNumber, customerName);
+      if (quick && stockLines.length) {
+        // Sold straight from the shelf: issue the goods now (weighted-average cost)
+        // and book their cost — DR COGS / CR inventory. No delivery order follows.
+        await this.issueQuickSale(stockItems, stockLines, products, settings, invoice, invoiceNumber, lines, actorId, manager);
+      }
       // Cost of sales WITH the invoice (when the clearing account is configured):
       // DR the product category's COGS / CR «بضاعة مباعة لم تُسلَّم». Delivery later
       // clears it against inventory at the actual cost (difference → COGS).
-      if (settings.goodsSoldNotDeliveredAccountId) {
+      if (settings.goodsSoldNotDeliveredAccountId && !quick) {
         await this.accrueCostOfSales(items, products, settings, invoiceNumber, lines, manager);
       }
       const journalEntry = await this.journalService.createSystemJournalEntry(
@@ -185,7 +199,9 @@ export class SalesInvoicePostingService {
           fiscalYearId: invoice.fiscalYearId,
           accountingPeriodId: invoice.accountingPeriodId,
           branchId: invoice.branchId,
-          description: `فاتورة مبيعات ${paymentLabel} ${invoiceNumber} — العميل: ${customerName}`,
+          description: quick
+            ? `بيع سريع ${invoiceNumber} — العميل: ${customerName}`
+            : `فاتورة مبيعات ${paymentLabel} ${invoiceNumber} — العميل: ${customerName}`,
           lines,
           actorId,
         },
@@ -225,7 +241,7 @@ export class SalesInvoicePostingService {
             sourceId: invoice.id,
             sourceNumber: invoiceNumber,
             journalEntryId: journalEntry.id,
-            description: `فاتورة مبيعات نقدية ${invoiceNumber}`,
+            description: quick ? `بيع سريع ${invoiceNumber} — ${customerName}` : `فاتورة مبيعات نقدية ${invoiceNumber}`,
             actorId,
           },
           manager,
@@ -271,8 +287,9 @@ export class SalesInvoicePostingService {
       invoice.status = SalesInvoiceStatus.POSTED;
       // Stock + manufacturing lines both ship (manufacturing after production);
       // an invoice with neither (service-only) is not applicable for delivery.
-      invoice.deliveryStatus =
-        stockItems.length || manufacturingItems.length
+      invoice.deliveryStatus = quick
+        ? SalesDeliveryStatus.DELIVERED // handed over at the counter
+        : stockItems.length || manufacturingItems.length
           ? SalesDeliveryStatus.PENDING
           : SalesDeliveryStatus.NOT_APPLICABLE;
       invoice.journalEntryId = journalEntry.id;
@@ -335,10 +352,13 @@ export class SalesInvoicePostingService {
 
     // Auto-create a DRAFT delivery note for the invoice's stock lines (best-effort:
     // a draft has no financial/stock effect, so a failure here never fails posting).
-    try {
-      await this.salesDeliveryService.autoCreateForInvoice(id, actorId);
-    } catch {
-      /* non-fatal — a draft has no effect; the user can still create it manually */
+    // A quick sale was handed over at the counter — it gets none.
+    if (!invoice.isQuickSale) {
+      try {
+        await this.salesDeliveryService.autoCreateForInvoice(id, actorId);
+      } catch {
+        /* non-fatal — a draft has no effect; the user can still create it manually */
+      }
     }
     return invoice;
   }
@@ -381,7 +401,7 @@ export class SalesInvoicePostingService {
       // hold rather than receiving stock back. A partially/fully delivered invoice
       // cannot be reversed — its delivery notes must be reversed first.
       const deliveredQty = invoice.items.reduce((s, i) => s + (i.deliveredQuantity ?? 0), 0);
-      if (deliveredQty > 0) {
+      if (deliveredQty > 0 && !invoice.isQuickSale) {
         throw new BadRequestException(
           'لا يمكن عكس فاتورة تم تسليم جزء منها — يجب عكس أذون التسليم المرتبطة بها أولاً',
         );
@@ -419,7 +439,25 @@ export class SalesInvoicePostingService {
           productId: i.productId,
           quantity: i.quantity,
         }));
-      if (stockLines.length) {
+      if (stockLines.length && invoice.isQuickSale) {
+        // A quick sale issued its goods at posting — take them back at the cost they left at.
+        const costById = new Map(invoice.items.map((i): [string, number] => [i.id, Number(i.costAtPost) || 0]));
+        const issued = invoice.items.filter((i) => i.lineType === SalesLineType.STOCK && products.get(i.productId)?.trackInventory);
+        await this.stockService.receive(
+          issued.map((i) => ({ warehouseId: i.warehouseId!, productId: i.productId, quantity: i.quantity, unitCost: costById.get(i.id) ?? 0 })),
+          manager,
+          {
+            movementType: StockMovementType.SALE_REVERSAL,
+            sourceType: JournalSourceType.SALES_INVOICE,
+            sourceId: invoice.id,
+            sourceNumber: invoice.invoiceNumber,
+            movementDate: dto.reversalDate,
+            actorId,
+          },
+        );
+        for (const i of issued) i.deliveredQuantity = 0;
+        await manager.getRepository(SalesInvoiceItem).save(issued);
+      } else if (stockLines.length) {
         await this.stockService.releaseReservation(stockLines, manager);
       }
 
@@ -723,6 +761,46 @@ export class SalesInvoicePostingService {
       if (!settings.commissionExpenseAccountId) block('حساب مصروف عمولات المبيعات غير محدد في إعدادات المحاسبة.');
       if (!settings.commissionPayableAccountId) block('حساب عمولات مستحقة للموظفين غير محدد في إعدادات المحاسبة.');
     }
+  }
+
+  /**
+   * Quick sale: issue the goods now and book their cost (DR the product's COGS /
+   * CR its inventory). The issue cost is kept on the line (`costAtPost`, and
+   * `cogsAccrued` = the cost booked with the invoice) so returns put the goods
+   * back at the same cost and the product reports read it like any invoice cost.
+   */
+  private async issueQuickSale(
+    stockItems: SalesInvoiceItem[],
+    stockLines: StockLineInput[],
+    products: Map<string, Product>,
+    settings: AccountingSetting,
+    invoice: SalesInvoice,
+    invoiceNumber: string,
+    lines: JournalLineInput[],
+    actorId: string | undefined,
+    manager: EntityManager,
+  ): Promise<void> {
+    const issued = await this.stockService.issue(stockLines, manager, {
+      movementType: StockMovementType.SALE,
+      sourceType: JournalSourceType.SALES_INVOICE,
+      sourceId: invoice.id,
+      sourceNumber: invoiceNumber,
+      movementDate: invoice.invoiceDate,
+      actorId,
+    });
+    stockItems.forEach((item, idx) => {
+      const product = products.get(item.productId)!;
+      const unitCost = Number(issued[idx]?.unitCost) || 0;
+      const cost = round2(item.quantity * unitCost);
+      item.costAtPost = unitCost;
+      item.cogsAccrued = cost;
+      item.deliveredQuantity = item.quantity;
+      if (cost <= 0) return; // no costed receipt yet → goods leave, nothing to book
+      const what = `${item.productName ?? product.name} (${item.quantity}) — بيع سريع ${invoiceNumber}`;
+      lines.push({ accountId: (product.cogsAccountId ?? settings.costOfGoodsSoldAccountId)!, debit: cost, credit: 0, productId: item.productId, description: `تكلفة بضاعة مباعة — ${what}` });
+      lines.push({ accountId: this.resolveInventoryAccount(product, settings)!, debit: 0, credit: cost, productId: item.productId, warehouseId: item.warehouseId, description: `صرف من المخزن — ${what}` });
+    });
+    await manager.getRepository(SalesInvoiceItem).save(stockItems);
   }
 
   private resolveInventoryAccount(

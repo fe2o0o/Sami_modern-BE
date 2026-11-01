@@ -140,6 +140,24 @@ export const SETTING_ACCOUNT_RULES: SettingAccountRule[] = [
     subTypes: [],
   },
   {
+    key: 'salariesExpenseAccountId',
+    label: 'حساب مصروف الرواتب والأجور',
+    accountType: AccountType.EXPENSE,
+    subTypes: [],
+  },
+  {
+    key: 'salariesPayableAccountId',
+    label: 'حساب الرواتب المستحقة',
+    accountType: AccountType.LIABILITY,
+    subTypes: [AccountSubType.SALARY_PAYABLE, AccountSubType.OTHER_PAYABLE],
+  },
+  {
+    key: 'payrollDeductionsAccountId',
+    label: 'حساب استقطاعات الرواتب (ضرائب وتأمينات)',
+    accountType: AccountType.LIABILITY,
+    subTypes: [AccountSubType.TAX_PAYABLE, AccountSubType.OTHER_PAYABLE, AccountSubType.SALARY_PAYABLE],
+  },
+  {
     key: 'openingBalanceEquityAccountId',
     label: 'حساب موازنة الأرصدة الافتتاحية',
     accountType: AccountType.EQUITY,

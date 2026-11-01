@@ -19,18 +19,22 @@ import { AdvanceService } from './advance.service';
 import { CustodyService } from './custody.service';
 import { EmployeeStatementService } from './employee-statement.service';
 import { HrMoneyController } from './hr-money.controller';
+import { PayrollController } from './payroll.controller';
+import { PayrollService } from './payroll.service';
+import { PayrollLine, PayrollPayment, PayrollRun } from './entities/payroll-run.entity';
 import { DepartmentService, JobGradeService } from './hr-lookup.service';
 import { EmployeeHrService } from './employee-hr.service';
 import { SalaryService } from './salary.service';
 import { HrController } from './hr.controller';
 import { EmployeeHrController } from './employee-hr.controller';
 
-/** Mini HR — phase 1 (employee profile), 2 (salary structure), 3 (advances, custody, employee statement). */
+/** Mini HR — phase 1 (employee profile), 2 (salary structure), 3 (advances, custody, employee statement), 6 (monthly payroll). */
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Employee, Department, JobGrade, EmployeeStatusChange, EmployeeDocument, PayComponent, SalaryPackage, SalaryPackageLine,
       EmployeeAdvance, EmployeeAdvanceInstallment, EmployeeAdvanceRepayment, EmployeeCustody, EmployeeCustodySettlement,
+      PayrollRun, PayrollLine, PayrollPayment,
     ]),
     CodeSettingModule,
     SequenceModule,
@@ -38,8 +42,8 @@ import { EmployeeHrController } from './employee-hr.controller';
     TreasuryModule,
     BankAccountModule,
   ],
-  controllers: [HrController, EmployeeHrController, HrMoneyController],
-  providers: [DepartmentService, JobGradeService, EmployeeHrService, SalaryService, HrPostingHelper, AdvanceService, CustodyService, EmployeeStatementService],
+  controllers: [HrController, EmployeeHrController, HrMoneyController, PayrollController],
+  providers: [DepartmentService, JobGradeService, EmployeeHrService, SalaryService, HrPostingHelper, AdvanceService, CustodyService, EmployeeStatementService, PayrollService],
   exports: [EmployeeHrService, SalaryService],
 })
 export class HrModule {}
