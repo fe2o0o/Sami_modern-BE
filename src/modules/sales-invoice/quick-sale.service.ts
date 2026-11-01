@@ -58,9 +58,19 @@ export class QuickSaleService {
     const date = dto.invoiceDate ?? todayIso();
     const warehouse = await this.dataSource.getRepository(Warehouse).findOne({ where: { id: dto.warehouseId } });
     if (!warehouse) throw new NotFoundException('المخزن غير موجود');
-    if (warehouse.branchId && !isWithinBranchScope(warehouse.branchId, branchScope)) {
-      throw new BadRequestException('المخزن خارج نطاق فروعك');
+    // Each row may come from its own warehouse — all in scope and in ONE branch
+    // (shared warehouses have no branch and fit any); the sale takes that branch.
+    const lineWarehouseIds = [...new Set([warehouse.id, ...dto.items.map((i) => i.warehouseId ?? warehouse.id)])];
+    const warehouses = await this.dataSource.getRepository(Warehouse).find({ where: { id: In(lineWarehouseIds) } });
+    if (warehouses.length !== lineWarehouseIds.length) throw new NotFoundException('أحد المخازن غير موجود');
+    for (const w of warehouses) {
+      if (w.branchId && !isWithinBranchScope(w.branchId, branchScope)) {
+        throw new BadRequestException(`المخزن «${w.name}» خارج نطاق فروعك`);
+      }
     }
+    const branchIds = [...new Set(warehouses.map((w) => w.branchId).filter((b): b is string => !!b))];
+    if (branchIds.length > 1) throw new BadRequestException('كل المخازن في الفاتورة يجب أن تكون من نفس الفرع');
+    const saleBranchId = branchIds[0] ?? null;
 
     // Stock goods only — nothing made to order, no services.
     const productIds = [...new Set(dto.items.map((i) => i.productId))];
@@ -96,7 +106,7 @@ export class QuickSaleService {
       {
         customerId: customer.id,
         invoiceDate: date,
-        branchId: warehouse.branchId ?? undefined,
+        branchId: saleBranchId ?? undefined,
         warehouseId: warehouse.id,
         fiscalYearId: period.fiscalYearId,
         accountingPeriodId: period.id,
@@ -105,7 +115,7 @@ export class QuickSaleService {
         notes: dto.notes ?? null,
         items: dto.items.map((i) => ({
           productId: i.productId,
-          warehouseId: warehouse.id,
+          warehouseId: i.warehouseId ?? warehouse.id,
           lineType: SalesLineType.STOCK,
           quantity: i.quantity,
           unitPrice: i.unitPrice,

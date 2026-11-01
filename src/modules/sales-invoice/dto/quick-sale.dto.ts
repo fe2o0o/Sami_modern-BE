@@ -22,6 +22,12 @@ import { SalesInvoiceCommissionDto } from './sales-invoice-commission.dto';
 const trimOrNull = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() || null : value);
 
 export class QuickSaleItemDto {
+  /** The row's own warehouse (same branch as the others); defaults to the header one. */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'المخزن غير صحيح' })
+  warehouseId?: string | null;
+
   @ApiProperty({ format: 'uuid' })
   @IsUUID(undefined, { message: 'الصنف غير صحيح' })
   productId!: string;
