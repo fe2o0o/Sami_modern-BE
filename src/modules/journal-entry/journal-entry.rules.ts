@@ -137,6 +137,10 @@ export function buildReversalLines(
     customerId: line.customerId ?? null,
     supplierId: line.supplierId ?? null,
     employeeId: line.employeeId ?? null,
+    // keep the chosen treasury/bank: without it the reversal falls back to the
+    // first treasury on the GL account and may hit a different cashbox
+    treasuryId: line.treasuryId ?? null,
+    bankAccountId: line.bankAccountId ?? null,
     warehouseId: line.warehouseId ?? null,
     productId: line.productId ?? null,
   }));

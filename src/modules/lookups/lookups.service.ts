@@ -34,6 +34,12 @@ export interface LookupItem {
   name: string;
 }
 
+export interface CustomerLookupItem extends LookupItem {
+  nameEn: string | null;
+  code: string;
+  mobile: string | null;
+}
+
 export interface WarehouseLookupItem extends LookupItem {
   branchId: string | null;
 }
@@ -189,13 +195,14 @@ export class LookupsService {
     }));
   }
 
-  async customers(): Promise<LookupItem[]> {
+  /** Code + mobile ride along so pickers can search by them (quick sale «check customer»). */
+  async customers(): Promise<CustomerLookupItem[]> {
     const rows = await this.customerRepository.find({
       where: { isActive: true },
-      select: { id: true, name: true , nameEn: true },
+      select: { id: true, name: true , nameEn: true, code: true, mobile: true },
       order: { name: 'ASC' },
     });
-    return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null }));
+    return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null, code: r.code, mobile: r.mobile ?? null }));
   }
 
   async suppliers(): Promise<LookupItem[]> {

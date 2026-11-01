@@ -146,6 +146,12 @@ export class SalesInvoicePostingService {
         if (invoice.paymentType !== SalesPaymentType.CASH) throw new BadRequestException('البيع السريع نقدي فقط');
         const bad = items.find((i) => i.lineType !== SalesLineType.STOCK || !products.get(i.productId)?.trackInventory);
         if (bad) throw new BadRequestException(`البيع السريع من المخزن فقط — «${bad.productName ?? ''}» ليس صنفاً مخزنياً`);
+        if (invoice.cashSplits?.length) {
+          const paid = Math.round(invoice.cashSplits.reduce((s, p) => s + Number(p.amount), 0) * 100) / 100;
+          if (Math.abs(paid - Number(invoice.totalAmount)) > 0.005) {
+            throw new BadRequestException(`مجموع المبالغ المحصّلة (${paid.toFixed(2)}) لا يساوي إجمالي الفاتورة (${Number(invoice.totalAmount).toFixed(2)})`);
+          }
+        }
       }
 
       // Mint the invoice number up-front so every side-effect shares it.
@@ -174,7 +180,8 @@ export class SalesInvoicePostingService {
       // narration names the customer so the ledger reads without opening the invoice.
       const customer = await manager.getRepository(Customer).findOne({ where: { id: invoice.customerId }, select: { id: true, name: true } });
       // A quick sale names the walk-in customer (the system customer is only a holder).
-      const customerName = quick
+      // A quick sale to a registered customer has no walk-in name → the customer's own.
+      const customerName = quick && invoice.walkInCustomerName
         ? [invoice.walkInCustomerName, invoice.walkInCustomerMobile].filter(Boolean).join(' — ')
         : customer?.name ?? '';
       const paymentLabel = invoice.paymentType === SalesPaymentType.CREDIT ? 'آجل' : 'نقدي';
@@ -231,11 +238,11 @@ export class SalesInvoicePostingService {
         // Cash sale: mirror the cash inflow into the treasury/bank subledger so
         // it appears in the cashbox statement (no extra journal — the entry above
         // already debited the cash account).
-        await this.cashSubledger.record(
+        for (const part of this.cashCollections(invoice)) await this.cashSubledger.record(
           {
-            cashAccountId: invoice.cashAccountId,
+            cashAccountId: part.cashAccountId,
             documentKind: 'sale_invoice',
-            amount: invoice.totalAmount,
+            amount: part.amount,
             transactionDate: invoice.invoiceDate,
             sourceType: JournalSourceType.SALES_INVOICE,
             sourceId: invoice.id,
@@ -505,11 +512,11 @@ export class SalesInvoicePostingService {
         );
       } else {
         // Cash sale reversal: pull the cash back OUT of the treasury/bank subledger.
-        await this.cashSubledger.record(
+        for (const part of this.cashCollections(invoice)) await this.cashSubledger.record(
           {
-            cashAccountId: invoice.cashAccountId,
+            cashAccountId: part.cashAccountId,
             documentKind: 'sale_invoice',
-            amount: invoice.totalAmount,
+            amount: part.amount,
             reversal: true,
             transactionDate: dto.reversalDate,
             sourceType: JournalSourceType.SALES_INVOICE,
@@ -622,7 +629,9 @@ export class SalesInvoicePostingService {
     if (invoice.paymentType === SalesPaymentType.CREDIT) {
       b.add(settings.customerControlAccountId!, invoice.totalAmount, 0, `مديونية العميل ${customerName} — ${ref}`, { customerId: invoice.customerId });
     } else {
-      b.add(invoice.cashAccountId!, invoice.totalAmount, 0, `تحصيل نقدي — ${ref} — العميل: ${customerName}`);
+      for (const part of this.cashCollections(invoice)) {
+        b.add(part.cashAccountId, part.amount, 0, `تحصيل نقدي — ${ref} — العميل: ${customerName}`);
+      }
     }
 
     // Credit revenue (per product's resolved revenue account).
@@ -715,6 +724,14 @@ export class SalesInvoicePostingService {
       lines.push({ accountId: cogsAcc, debit: estimate, credit: 0, productId: item.productId, description: `تكلفة مبيعات ${label} — فاتورة ${invoiceNumber}${item.lineType === SalesLineType.MANUFACTURING ? ' (تقديرية — تصنيع)' : ''}` });
       lines.push({ accountId: clearing, debit: 0, credit: estimate, productId: item.productId, description: `بضاعة مباعة لم تُسلَّم ${label} — فاتورة ${invoiceNumber}` });
     }
+  }
+
+  /** Where a cash sale's money went: the split parts, or the one account for the total. */
+  private cashCollections(invoice: SalesInvoice): { cashAccountId: string; amount: number }[] {
+    if (invoice.cashSplits?.length) {
+      return invoice.cashSplits.map((p) => ({ cashAccountId: p.cashAccountId, amount: Number(p.amount) }));
+    }
+    return [{ cashAccountId: invoice.cashAccountId!, amount: invoice.totalAmount }];
   }
 
   /** Validate every account the posting needs is configured. Arabic messages. */

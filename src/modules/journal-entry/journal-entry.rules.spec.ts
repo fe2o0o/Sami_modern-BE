@@ -132,5 +132,14 @@ describe('journal-entry rules', () => {
         credit: 0,
       });
     });
+
+    it('keeps the chosen treasury / bank on the reversed cash line', () => {
+      const [t, b] = buildReversalLines([
+        line({ accountId: 'cash', credit: 1000, treasuryId: 't2' }),
+        line({ accountId: 'bank', debit: 1000, bankAccountId: 'b1' }),
+      ]);
+      expect(t).toMatchObject({ debit: 1000, credit: 0, treasuryId: 't2' });
+      expect(b).toMatchObject({ debit: 0, credit: 1000, bankAccountId: 'b1' });
+    });
   });
 });

@@ -638,7 +638,10 @@ export class JournalEntryService {
         'تاريخ العكس خارج نطاق الفترة المحاسبية المختارة',
       );
 
-      const reversalLines = buildReversalLines(this.toLineInputs(original.lines));
+      // Reverse into the same treasury/bank the original hit (never re-resolved by GL account).
+      const reversalLines = buildReversalLines(
+        await this.subledger.withOriginalCash(original.id, this.toLineInputs(original.lines), manager),
+      );
 
       const reversal = await this.createSystemJournalEntry(
         {

@@ -9,6 +9,14 @@ import {
 import { SalesInvoiceItem } from './sales-invoice-item.entity';
 import { SalesInvoiceCommission } from './sales-invoice-commission.entity';
 
+/** One part of a split cash collection (treasury / bank GL account + amount). */
+export interface SalesCashSplit {
+  cashAccountId: string;
+  amount: number;
+  /** Treasury / bank name at the time of sale (for details + print). */
+  accountName?: string | null;
+}
+
 /**
  * A sales invoice — a business document that, once POSTED, issues inventory,
  * moves the customer subledger and produces exactly one journal entry (all in a
@@ -118,6 +126,11 @@ export class SalesInvoice extends BaseEntity {
 
   @Column({ type: 'varchar', length: 30, nullable: true })
   walkInCustomerMobile!: string | null;
+
+  /** Quick sale paid through more than one treasury / bank (e.g. part cash, rest bank).
+   *  Σ amount = totalAmount; `cashAccountId` keeps the first one. Null = one account. */
+  @Column({ type: 'json', nullable: true })
+  cashSplits!: SalesCashSplit[] | null;
 
   /** Total sales commission on the invoice (Σ commission lines). */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })

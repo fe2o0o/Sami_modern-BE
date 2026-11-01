@@ -12,6 +12,9 @@ import { Warehouse } from '../warehouse/entities/warehouse.entity';
 import { Product } from '../product/entities/product.entity';
 import { ProductType } from '../product/enums/product-type.enum';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
+import { Treasury } from '../treasury/entities/treasury.entity';
+import { BankAccount } from '../bank-account/entities/bank-account.entity';
+import { SalesCashSplit } from './entities/sales-invoice.entity';
 
 /** The one system customer every quick sale is booked against. */
 export const QUICK_SALE_CUSTOMER_CODE = 'QUICK-SALE';
@@ -36,6 +39,22 @@ export class QuickSaleService {
   ) {}
 
   async createAndPost(dto: QuickSaleDto, actorId?: string, branchScope: BranchScope = null): Promise<SalesInvoice> {
+    const draft = await this.createDraft(dto, actorId, branchScope);
+    try {
+      return await this.posting.post(draft.id, actorId, branchScope);
+    } catch (err) {
+      // A failed post leaves no orphan draft behind.
+      await this.invoices.remove(draft.id, actorId, branchScope).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /**
+   * «حفظ مسودة»: the same quick-sale invoice, saved as a DRAFT — nothing leaves the
+   * warehouse and nothing is booked until it is posted from the invoice page (the
+   * normal post endpoint; `isQuickSale` keeps the counter behaviour).
+   */
+  async createDraft(dto: QuickSaleDto, actorId?: string, branchScope: BranchScope = null): Promise<SalesInvoice> {
     const date = dto.invoiceDate ?? todayIso();
     const warehouse = await this.dataSource.getRepository(Warehouse).findOne({ where: { id: dto.warehouseId } });
     if (!warehouse) throw new NotFoundException('المخزن غير موجود');
@@ -66,7 +85,13 @@ export class QuickSaleService {
     // Sales commission lines as on a normal invoice — validated / resolved by the invoice engine.
     const commissions = dto.commissions ?? [];
 
-    const customer = await this.quickCustomer();
+    // Split collection (part cash, part bank …): the invoice keeps the first account;
+    // posting checks Σ = total and books every part (see SalesInvoicePostingService).
+    const payments = dto.payments ?? [];
+    const cashSplits = payments.length > 1 ? await this.namedSplits(payments) : null;
+    const cashAccountId = payments[0]?.cashAccountId ?? dto.cashAccountId ?? null;
+
+    const customer = dto.customerId ? await this.registeredCustomer(dto.customerId) : await this.quickCustomer();
     const draft = await this.invoices.create(
       {
         customerId: customer.id,
@@ -76,7 +101,7 @@ export class QuickSaleService {
         fiscalYearId: period.fiscalYearId,
         accountingPeriodId: period.id,
         paymentType: SalesPaymentType.CASH,
-        cashAccountId: dto.cashAccountId ?? null,
+        cashAccountId,
         notes: dto.notes ?? null,
         items: dto.items.map((i) => ({
           productId: i.productId,
@@ -95,16 +120,44 @@ export class QuickSaleService {
     );
     await this.dataSource.getRepository(SalesInvoice).update(draft.id, {
       isQuickSale: true,
-      walkInCustomerName: dto.customerName,
-      walkInCustomerMobile: dto.customerMobile ?? null,
+      cashSplits,
+      // A registered customer prints under their own name.
+      walkInCustomerName: dto.customerId ? null : dto.customerName ?? null,
+      walkInCustomerMobile: dto.customerId ? null : dto.customerMobile ?? null,
     });
-    try {
-      return await this.posting.post(draft.id, actorId, branchScope);
-    } catch (err) {
-      // A failed post leaves no orphan draft behind.
-      await this.invoices.remove(draft.id, actorId, branchScope).catch(() => undefined);
-      throw err;
+    if (cashSplits) {
+      const paid = Math.round(cashSplits.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+      if (Math.abs(paid - Number(draft.totalAmount)) > 0.005) {
+        await this.invoices.remove(draft.id, actorId, branchScope).catch(() => undefined);
+        throw new BadRequestException(`مجموع المبالغ المحصّلة (${paid.toFixed(2)}) لا يساوي إجمالي الفاتورة (${Number(draft.totalAmount).toFixed(2)})`);
+      }
     }
+    return draft;
+  }
+
+  /** Each part with its treasury / bank name, for the details page and printout. */
+  private async namedSplits(payments: { cashAccountId: string; amount: number }[]): Promise<SalesCashSplit[]> {
+    const ids = payments.map((p) => p.cashAccountId);
+    const [treasuries, banks] = await Promise.all([
+      this.dataSource.getRepository(Treasury).find({ where: { accountId: In(ids) } }),
+      this.dataSource.getRepository(BankAccount).find({ where: { accountId: In(ids) } }),
+    ]);
+    const names = new Map<string, string>([
+      ...treasuries.map((t): [string, string] => [t.accountId, t.name]),
+      ...banks.map((b): [string, string] => [b.accountId, b.accountName ? `${b.bankName} — ${b.accountName}` : b.bankName]),
+    ]);
+    return payments.map((p) => {
+      if (!names.has(p.cashAccountId)) throw new BadRequestException('حساب التحصيل ليس خزنة أو حساباً بنكياً');
+      return { cashAccountId: p.cashAccountId, amount: Math.round(Number(p.amount) * 100) / 100, accountName: names.get(p.cashAccountId) };
+    });
+  }
+
+  /** A real, active customer picked on the quick sale (never the system holder). */
+  private async registeredCustomer(id: string): Promise<Customer> {
+    const customer = await this.dataSource.getRepository(Customer).findOne({ where: { id } });
+    if (!customer || customer.code === QUICK_SALE_CUSTOMER_CODE) throw new NotFoundException('العميل غير موجود');
+    if (!customer.isActive) throw new BadRequestException(`العميل «${customer.name}» غير نشط`);
+    return customer;
   }
 
   /** «عميل بيع سريع» — created on first use. */

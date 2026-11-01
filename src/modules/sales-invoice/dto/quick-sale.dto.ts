@@ -13,6 +13,7 @@ import {
   IsUUID,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { SalesDiscountType } from '../enums/sales-invoice.enum';
@@ -53,18 +54,37 @@ export class QuickSaleItemDto {
   vatRate?: number;
 }
 
+/** One part of the collection — e.g. part cash in a treasury, the rest to a bank. */
+export class QuickSalePaymentDto {
+  @ApiProperty({ format: 'uuid', description: 'حساب الخزنة / البنك' })
+  @IsUUID(undefined, { message: 'حساب التحصيل غير صحيح' })
+  cashAccountId!: string;
+
+  @ApiProperty({ minimum: 0.01 })
+  @IsNumber({}, { message: 'المبلغ المحصّل يجب أن يكون رقماً' })
+  @Min(0.01, { message: 'المبلغ المحصّل يجب أن يكون أكبر من صفر' })
+  amount!: number;
+}
+
 /**
  * Quick sale (بيع سريع): a CASH sale from one warehouse to a walk-in customer who
  * is not registered — only their name (and mobile) are printed on the invoice.
  * Created and posted in one step; goods leave the warehouse immediately.
  */
 export class QuickSaleDto {
-  @ApiProperty({ description: 'اسم العميل كما يظهر على الفاتورة' })
+  /** A registered customer — when given, the walk-in name/mobile are not needed. */
+  @ApiPropertyOptional({ format: 'uuid', description: 'عميل مسجّل (بدلاً من اسم العميل النقدي)' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'العميل غير صحيح' })
+  customerId?: string | null;
+
+  @ApiPropertyOptional({ description: 'اسم العميل النقدي كما يظهر على الفاتورة (مطلوب بدون عميل مسجّل)' })
+  @ValidateIf((o: QuickSaleDto) => !o.customerId)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString({ message: 'اسم العميل مطلوب' })
   @IsNotEmpty({ message: 'اسم العميل مطلوب' })
   @MaxLength(255, { message: 'اسم العميل طويل جداً' })
-  customerName!: string;
+  customerName?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -86,6 +106,16 @@ export class QuickSaleDto {
   @IsOptional()
   @IsUUID(undefined, { message: 'حساب التحصيل غير صحيح' })
   cashAccountId?: string | null;
+
+  /** Split collection (more than one treasury / bank). Σ amount must equal the invoice
+   *  total; when given it replaces `cashAccountId`. */
+  @ApiPropertyOptional({ type: [QuickSalePaymentDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique((p: QuickSalePaymentDto) => p?.cashAccountId, { message: 'حساب التحصيل مكرر' })
+  @ValidateNested({ each: true })
+  @Type(() => QuickSalePaymentDto)
+  payments?: QuickSalePaymentDto[];
 
   /** Sales commission lines — exactly as on a normal invoice (employee + percentage / fixed amount). */
   @ApiPropertyOptional({ type: [SalesInvoiceCommissionDto] })

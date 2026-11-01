@@ -74,6 +74,18 @@ export class SalesInvoiceController {
     return this.quick.createAndPost(dto, actorId, branchScope);
   }
 
+  @Post('quick/draft')
+  @RequirePermissions('sales_invoices.create')
+  @ResponseMessage('تم حفظ مسودة البيع السريع')
+  @ApiOperation({ summary: 'بيع سريع: حفظ كمسودة (بدون ترحيل) — تُرحّل لاحقاً من صفحة الفاتورة' })
+  quickSaleDraft(
+    @Body() dto: QuickSaleDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.quick.createDraft(dto, actorId, branchScope);
+  }
+
   @Post()
   @RequirePermissions('sales_invoices.create')
   @ResponseMessage('تم حفظ فاتورة المبيعات كمسودة بنجاح')

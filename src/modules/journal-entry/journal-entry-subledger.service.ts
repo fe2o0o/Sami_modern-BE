@@ -10,6 +10,8 @@ import { ChartOfAccount } from '../chart-of-account/entities/chart-of-account.en
 import { AccountSubType } from '../chart-of-account/enums/account.enum';
 import { Treasury } from '../treasury/entities/treasury.entity';
 import { BankAccount } from '../bank-account/entities/bank-account.entity';
+import { TreasuryTransaction } from '../treasury/entities/treasury-transaction.entity';
+import { BankTransaction } from '../bank-account/entities/bank-transaction.entity';
 import { CustomerLedgerService } from '../customer/customer-ledger.service';
 import { SupplierLedgerService } from '../supplier/supplier-ledger.service';
 import { TreasuryLedgerService } from '../treasury/treasury-ledger.service';
@@ -266,6 +268,43 @@ export class JournalEntrySubledgerService {
       }
       // else: a plain GL account — nothing to mirror.
     }
+  }
+
+  /**
+   * Before reversing: give each cash/bank line the treasury/bank the ORIGINAL post
+   * actually hit (its subledger row), when the line itself carries none — older
+   * entries resolved the cashbox from the GL account, and several treasuries may
+   * share it. Only filled when the original hit exactly one cashbox on that account.
+   */
+  async withOriginalCash(originalId: string, lines: JournalLineInput[], manager: EntityManager): Promise<JournalLineInput[]> {
+    if (!lines.some((l) => !l.treasuryId && !l.bankAccountId && !l.customerId && !l.supplierId && !l.employeeId && !l.productId)) return lines;
+    const [tRows, bRows] = await Promise.all([
+      manager
+        .getRepository(TreasuryTransaction)
+        .createQueryBuilder('tt')
+        .innerJoin(Treasury, 't', 't.id = tt.treasuryId')
+        .select(['tt.treasuryId AS cashId', 't.accountId AS accountId'])
+        .where('tt.sourceType = :st AND tt.sourceId = :id', { st: MANUAL_JOURNAL_SOURCE, id: originalId })
+        .getRawMany<{ cashId: string; accountId: string }>(),
+      manager
+        .getRepository(BankTransaction)
+        .createQueryBuilder('bt')
+        .innerJoin(BankAccount, 'b', 'b.id = bt.bankAccountId')
+        .select(['bt.bankAccountId AS cashId', 'b.accountId AS accountId'])
+        .where('bt.sourceType = :st AND bt.sourceId = :id', { st: MANUAL_JOURNAL_SOURCE, id: originalId })
+        .getRawMany<{ cashId: string; accountId: string }>(),
+    ]);
+    const only = (rows: { cashId: string; accountId: string }[], accountId: string) => {
+      const ids = [...new Set(rows.filter((r) => r.accountId === accountId).map((r) => r.cashId))];
+      return ids.length === 1 ? ids[0] : null;
+    };
+    return lines.map((l) => {
+      if (l.treasuryId || l.bankAccountId || l.customerId || l.supplierId || l.employeeId || l.productId) return l;
+      const treasuryId = only(tRows, l.accountId);
+      if (treasuryId) return { ...l, treasuryId };
+      const bankAccountId = only(bRows, l.accountId);
+      return bankAccountId ? { ...l, bankAccountId } : l;
+    });
   }
 
   /** Party display info per line (same order as `lines`) for the details view. */
