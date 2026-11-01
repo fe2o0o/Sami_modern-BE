@@ -66,6 +66,17 @@ export class QuickSalePaymentDto {
   @IsUUID(undefined, { message: 'حساب التحصيل غير صحيح' })
   cashAccountId!: string;
 
+  /** Which treasury / bank exactly — needed when several share one GL account. */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'الخزنة غير صحيحة' })
+  treasuryId?: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'الحساب البنكي غير صحيح' })
+  bankAccountId?: string | null;
+
   @ApiProperty({ minimum: 0.01 })
   @IsNumber({}, { message: 'المبلغ المحصّل يجب أن يكون رقماً' })
   @Min(0.01, { message: 'المبلغ المحصّل يجب أن يكون أكبر من صفر' })
@@ -118,7 +129,7 @@ export class QuickSaleDto {
   @ApiPropertyOptional({ type: [QuickSalePaymentDto] })
   @IsOptional()
   @IsArray()
-  @ArrayUnique((p: QuickSalePaymentDto) => p?.cashAccountId, { message: 'حساب التحصيل مكرر' })
+  @ArrayUnique((p: QuickSalePaymentDto) => p?.treasuryId ?? p?.bankAccountId ?? p?.cashAccountId, { message: 'حساب التحصيل مكرر' })
   @ValidateNested({ each: true })
   @Type(() => QuickSalePaymentDto)
   payments?: QuickSalePaymentDto[];

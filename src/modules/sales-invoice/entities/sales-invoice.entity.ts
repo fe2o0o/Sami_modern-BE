@@ -12,6 +12,9 @@ import { SalesInvoiceCommission } from './sales-invoice-commission.entity';
 /** One part of a split cash collection (treasury / bank GL account + amount). */
 export interface SalesCashSplit {
   cashAccountId: string;
+  /** The exact treasury / bank (several can share one GL account). */
+  treasuryId?: string | null;
+  bankAccountId?: string | null;
   amount: number;
   /** Treasury / bank name at the time of sale (for details + print). */
   accountName?: string | null;

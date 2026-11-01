@@ -146,8 +146,8 @@ export class SalesInvoicePostingService {
         if (invoice.paymentType !== SalesPaymentType.CASH) throw new BadRequestException('البيع السريع نقدي فقط');
         const bad = items.find((i) => i.lineType !== SalesLineType.STOCK || !products.get(i.productId)?.trackInventory);
         if (bad) throw new BadRequestException(`البيع السريع من المخزن فقط — «${bad.productName ?? ''}» ليس صنفاً مخزنياً`);
-        if (invoice.cashSplits?.length) {
-          const paid = Math.round(invoice.cashSplits.reduce((s, p) => s + Number(p.amount), 0) * 100) / 100;
+        if ((invoice.cashSplits?.length ?? 0) > 1) {
+          const paid = Math.round(invoice.cashSplits!.reduce((s, p) => s + Number(p.amount), 0) * 100) / 100;
           if (Math.abs(paid - Number(invoice.totalAmount)) > 0.005) {
             throw new BadRequestException(`مجموع المبالغ المحصّلة (${paid.toFixed(2)}) لا يساوي إجمالي الفاتورة (${Number(invoice.totalAmount).toFixed(2)})`);
           }
@@ -241,6 +241,8 @@ export class SalesInvoicePostingService {
         for (const part of this.cashCollections(invoice)) await this.cashSubledger.record(
           {
             cashAccountId: part.cashAccountId,
+            treasuryId: part.treasuryId,
+            bankAccountId: part.bankAccountId,
             documentKind: 'sale_invoice',
             amount: part.amount,
             transactionDate: invoice.invoiceDate,
@@ -515,6 +517,8 @@ export class SalesInvoicePostingService {
         for (const part of this.cashCollections(invoice)) await this.cashSubledger.record(
           {
             cashAccountId: part.cashAccountId,
+            treasuryId: part.treasuryId,
+            bankAccountId: part.bankAccountId,
             documentKind: 'sale_invoice',
             amount: part.amount,
             reversal: true,
@@ -727,10 +731,11 @@ export class SalesInvoicePostingService {
   }
 
   /** Where a cash sale's money went: the split parts, or the one account for the total. */
-  private cashCollections(invoice: SalesInvoice): { cashAccountId: string; amount: number }[] {
-    if (invoice.cashSplits?.length) {
-      return invoice.cashSplits.map((p) => ({ cashAccountId: p.cashAccountId, amount: Number(p.amount) }));
-    }
+  private cashCollections(invoice: SalesInvoice): { cashAccountId: string; treasuryId?: string | null; bankAccountId?: string | null; amount: number }[] {
+    const splits = invoice.cashSplits ?? [];
+    // One method always takes the full total (stays right if a draft's lines were edited).
+    if (splits.length === 1) return [{ ...splits[0], amount: invoice.totalAmount }];
+    if (splits.length > 1) return splits.map((p) => ({ ...p, amount: Number(p.amount) }));
     return [{ cashAccountId: invoice.cashAccountId!, amount: invoice.totalAmount }];
   }
 

@@ -17,6 +17,10 @@ export type CashDocumentKind =
 export interface CashSubledgerInput {
   /** The GL cash/bank account the document settles through. */
   cashAccountId: string | null | undefined;
+  /** The exact treasury / bank when several share one GL account (otherwise the
+   *  first one on `cashAccountId` is used). */
+  treasuryId?: string | null;
+  bankAccountId?: string | null;
   documentKind: CashDocumentKind;
   amount: number;
   /** When true, records the OPPOSITE side (used on document reversal). */
@@ -68,9 +72,16 @@ export class CashSubledgerService {
       actorId: input.actorId,
     };
 
+    if (input.bankAccountId) {
+      await this.bankLedger.record(
+        { bankAccountId: input.bankAccountId, type: this.bankType(inflow, reversal), ...base },
+        manager,
+      );
+      return;
+    }
     const treasury = await manager
       .getRepository(Treasury)
-      .findOne({ where: { accountId: input.cashAccountId } });
+      .findOne({ where: input.treasuryId ? { id: input.treasuryId } : { accountId: input.cashAccountId } });
     if (treasury) {
       await this.treasuryLedger.record(
         { treasuryId: treasury.id, type: this.treasuryType(input.documentKind, reversal), ...base },

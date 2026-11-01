@@ -98,7 +98,8 @@ export class QuickSaleService {
     // Split collection (part cash, part bank …): the invoice keeps the first account;
     // posting checks Σ = total and books every part (see SalesInvoicePostingService).
     const payments = dto.payments ?? [];
-    const cashSplits = payments.length > 1 ? await this.namedSplits(payments) : null;
+    // Stored even for ONE method: it pins the exact treasury / bank (several can share a GL account).
+    const cashSplits = payments.length ? await this.namedSplits(payments) : null;
     const cashAccountId = payments[0]?.cashAccountId ?? dto.cashAccountId ?? null;
 
     const customer = dto.customerId ? await this.registeredCustomer(dto.customerId) : await this.quickCustomer();
@@ -135,7 +136,7 @@ export class QuickSaleService {
       walkInCustomerName: dto.customerId ? null : dto.customerName ?? null,
       walkInCustomerMobile: dto.customerId ? null : dto.customerMobile ?? null,
     });
-    if (cashSplits) {
+    if (cashSplits && cashSplits.length > 1) {
       const paid = Math.round(cashSplits.reduce((s, p) => s + p.amount, 0) * 100) / 100;
       if (Math.abs(paid - Number(draft.totalAmount)) > 0.005) {
         await this.invoices.remove(draft.id, actorId, branchScope).catch(() => undefined);
@@ -146,19 +147,35 @@ export class QuickSaleService {
   }
 
   /** Each part with its treasury / bank name, for the details page and printout. */
-  private async namedSplits(payments: { cashAccountId: string; amount: number }[]): Promise<SalesCashSplit[]> {
+  private async namedSplits(
+    payments: { cashAccountId: string; treasuryId?: string | null; bankAccountId?: string | null; amount: number }[],
+  ): Promise<SalesCashSplit[]> {
     const ids = payments.map((p) => p.cashAccountId);
     const [treasuries, banks] = await Promise.all([
       this.dataSource.getRepository(Treasury).find({ where: { accountId: In(ids) } }),
       this.dataSource.getRepository(BankAccount).find({ where: { accountId: In(ids) } }),
     ]);
-    const names = new Map<string, string>([
-      ...treasuries.map((t): [string, string] => [t.accountId, t.name]),
-      ...banks.map((b): [string, string] => [b.accountId, b.accountName ? `${b.bankName} — ${b.accountName}` : b.bankName]),
-    ]);
+    const bankName = (b: BankAccount) => (b.accountName ? `${b.bankName} — ${b.accountName}` : b.bankName);
     return payments.map((p) => {
-      if (!names.has(p.cashAccountId)) throw new BadRequestException('حساب التحصيل ليس خزنة أو حساباً بنكياً');
-      return { cashAccountId: p.cashAccountId, amount: Math.round(Number(p.amount) * 100) / 100, accountName: names.get(p.cashAccountId) };
+      const amount = Math.round(Number(p.amount) * 100) / 100;
+      // The exact treasury / bank when given (must post through the same GL account) …
+      if (p.treasuryId) {
+        const t = treasuries.find((x) => x.id === p.treasuryId && x.accountId === p.cashAccountId);
+        if (!t) throw new BadRequestException('الخزنة غير موجودة أو لا تطابق حسابها');
+        return { cashAccountId: p.cashAccountId, treasuryId: t.id, bankAccountId: null, amount, accountName: t.name };
+      }
+      if (p.bankAccountId) {
+        const b = banks.find((x) => x.id === p.bankAccountId && x.accountId === p.cashAccountId);
+        if (!b) throw new BadRequestException('الحساب البنكي غير موجود أو لا يطابق حسابه');
+        return { cashAccountId: p.cashAccountId, treasuryId: null, bankAccountId: b.id, amount, accountName: bankName(b) };
+      }
+      // … else the first one on that GL account.
+      const t = treasuries.find((x) => x.accountId === p.cashAccountId);
+      const b = banks.find((x) => x.accountId === p.cashAccountId);
+      if (!t && !b) throw new BadRequestException('حساب التحصيل ليس خزنة أو حساباً بنكياً');
+      return t
+        ? { cashAccountId: p.cashAccountId, treasuryId: t.id, bankAccountId: null, amount, accountName: t.name }
+        : { cashAccountId: p.cashAccountId, treasuryId: null, bankAccountId: b!.id, amount, accountName: bankName(b!) };
     });
   }
 
