@@ -67,7 +67,7 @@ export class EmployeeAiTools {
         },
         handler: async (args, ctx) => {
           // Same rule as EmployeeController.summary: commissions only for report viewers.
-          const canSeeCommissions = ctx.isSuperAdmin || ctx.permissions.includes('accounting_reports.view');
+          const canSeeCommissions = ctx.isSuperAdmin || ctx.permissions.includes('report_commissions.view');
           const query = { search: optStr(args.search), isActive: optBool(args.isActive) } as StatusQueryDto;
           const has = (k: string) => ctx.isSuperAdmin || ctx.permissions.includes(k);
           const data = await this.employees.summary(query, { withCommissions: canSeeCommissions, withSalaries: has('hr_salary.view'), withDocuments: has('hr_documents.view') });
@@ -78,7 +78,7 @@ export class EmployeeAiTools {
         name: 'get_employee_commissions',
         description:
           'تقرير عمولات الموظفين خلال فترة (من سطور العمولة في فواتير البيع المُرحّلة فقط): لكل موظف عدد الفواتير وإجمالي المبيعات وإجمالي العمولة ومتوسط النسبة المُدخلة (avgRate) والنسبة الفعلية (effectiveRate)، مع الإجمالي العام. الفترة مطلوبة؛ إن لم يحددها المستخدم استخدم الشهر الحالي. يمكن تحديد موظف (معرّفه من get_employees).',
-        permission: 'accounting_reports.view',
+        permission: 'report_commissions.view',
         parameters: {
           type: 'object',
           properties: {
@@ -106,7 +106,7 @@ export class EmployeeAiTools {
         name: 'get_employee_commission_details',
         description:
           'تفاصيل عمولات موظف واحد خلال فترة: كل فاتورة بيع عليها عمولة له (رقم الفاتورة، التاريخ، العميل، الفرع، قيمة الفاتورة، نوع العمولة والنسبة/المبلغ، العمولة، الشركاء في العمولة، الحالة) مع ملخص (المبيعات، العمولة، متوسط النسبة، النسبة الفعلية) وتوزيع شهري. الملخص من الفواتير المرحّلة فقط؛ المسودات تظهر منفصلة. employeeId مطلوب (من get_employees).',
-        permission: 'accounting_reports.view',
+        permission: 'report_commissions.view',
         parameters: {
           type: 'object',
           properties: {

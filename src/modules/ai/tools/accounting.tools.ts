@@ -68,7 +68,7 @@ export class AccountingAiTools {
       {
         name: 'get_general_ledger',
         description: 'الأستاذ العام لحساب: الرصيد الافتتاحي والحركات والرصيد الجاري خلال فترة. يتطلب معرّف الحساب.',
-        permission: 'accounting_reports.view',
+        permission: 'report_general_ledger.view',
         parameters: {
           type: 'object',
           properties: {
@@ -101,7 +101,7 @@ export class AccountingAiTools {
       {
         name: 'get_trial_balance',
         description: 'ميزان المراجعة: أرصدة كل الحسابات (افتتاحي/الحركة/ختامي) والتحقق من التوازن.',
-        permission: 'accounting_reports.view',
+        permission: 'report_trial_balance.view',
         parameters: {
           type: 'object',
           properties: {
@@ -128,7 +128,7 @@ export class AccountingAiTools {
       {
         name: 'get_income_statement',
         description: 'قائمة الدخل (الأرباح والخسائر): الإيرادات وتكلفة المبيعات ومجمل الربح والمصروفات وصافي الربح خلال فترة.',
-        permission: 'accounting_reports.view',
+        permission: 'report_income_statement.view',
         parameters: {
           type: 'object',
           properties: {
@@ -155,7 +155,7 @@ export class AccountingAiTools {
       {
         name: 'get_balance_sheet',
         description: 'الميزانية العمومية: الأصول والخصوم وحقوق الملكية حتى تاريخ معيّن.',
-        permission: 'accounting_reports.view',
+        permission: 'report_balance_sheet.view',
         parameters: {
           type: 'object',
           properties: {

@@ -20,7 +20,7 @@ export class FinanceAiTools {
         name: 'get_financial_overview',
         description:
           'نظرة مالية عامة: المبيعات والمشتريات (مع التغير عن الفترة السابقة)، إجمالي المستحق على العملاء (مدينون)، المستحق للموردين (دائنون)، النقدية بالخزائن، صافي التدفق النقدي، وأكبر المدينين والدائنين.',
-        permission: 'accounting_reports.view',
+        permission: 'report_income_statement.view',
         parameters: {
           type: 'object',
           properties: { dateFrom: dateProp('بداية الفترة'), dateTo: dateProp('نهاية الفترة'), branchId: { type: 'string' } },
@@ -40,7 +40,7 @@ export class FinanceAiTools {
         name: 'get_cash_and_bank_summary',
         description:
           'أرصدة الخزائن والحسابات البنكية: لكل خزينة/حساب الرصيد الافتتاحي والوارد والمنصرف والرصيد الختامي خلال فترة، والرصيد الحالي الفعلي الآن (currentBalance — كل الحركات بغض النظر عن الفترة)، مع الإجماليات. هذا هو «تقرير الخزائن». جاوب من هنا على "كام رصيد الخزنة؟" و"كام فلوس في البنك؟". يحتوي أيضاً معرّفات (id) لكل خزينة/حساب لاستخدامها في كشف الحركة.',
-        permission: 'accounting_reports.view',
+        permission: 'report_treasury.view',
         parameters: {
           type: 'object',
           properties: { dateFrom: dateProp('بداية الفترة'), dateTo: dateProp('نهاية الفترة'), branchId: { type: 'string' } },
@@ -54,7 +54,7 @@ export class FinanceAiTools {
       {
         name: 'get_treasury_statement',
         description: 'كشف حركة خزينة معيّنة خلال فترة (الرصيد الافتتاحي والحركات والرصيد الجاري). احصل على معرّف الخزينة من get_cash_and_bank_summary.',
-        permission: 'accounting_reports.view',
+        permission: 'report_treasury.view',
         parameters: {
           type: 'object',
           properties: {
@@ -75,7 +75,7 @@ export class FinanceAiTools {
       {
         name: 'get_bank_statement',
         description: 'كشف حركة حساب بنكي معيّن خلال فترة. احصل على معرّف الحساب من get_cash_and_bank_summary.',
-        permission: 'accounting_reports.view',
+        permission: 'report_treasury.view',
         parameters: {
           type: 'object',
           properties: {
@@ -96,7 +96,7 @@ export class FinanceAiTools {
       {
         name: 'get_top_debtors',
         description: 'أكبر العملاء المدينين (المبالغ المستحقة لنا عليهم). استخدمها لـ "مين أكتر العملاء عليهم فلوس؟".',
-        permission: 'accounting_reports.view',
+        permission: 'customers.view',
         parameters: {
           type: 'object',
           properties: { dateFrom: dateProp('بداية الفترة'), dateTo: dateProp('نهاية الفترة'), branchId: { type: 'string' } },
@@ -110,7 +110,7 @@ export class FinanceAiTools {
       {
         name: 'get_top_creditors',
         description: 'أكبر الموردين الدائنين (المستحق لهم علينا). استخدمها لـ "الموردين اللي لينا عندهم أرصدة".',
-        permission: 'accounting_reports.view',
+        permission: 'suppliers.view',
         parameters: {
           type: 'object',
           properties: { dateFrom: dateProp('بداية الفترة'), dateTo: dateProp('نهاية الفترة'), branchId: { type: 'string' } },

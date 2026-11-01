@@ -4,6 +4,7 @@ import { RolePermission } from '../../modules/permissions/entities/role-permissi
 import {
   ALL_PERMISSION_KEYS,
   sanitizePermissionKeys,
+  REPORT_PERMISSION_KEYS,
 } from '../../modules/permissions/permission.catalog';
 import { SUPER_ADMIN_ROLE_CODE } from '../../modules/permissions/permissions.service';
 import { Seeder } from './seeder.interface';
@@ -31,7 +32,7 @@ export class PermissionSeeder implements Seeder {
     'vouchers.view', 'vouchers.create', 'vouchers.edit', 'vouchers.post',
     'stock.view',
     'products.view', 'customers.view', 'suppliers.view',
-    'accounting_reports.view',
+    ...REPORT_PERMISSION_KEYS,
   ]);
 
   async run(dataSource: DataSource): Promise<void> {

@@ -36,13 +36,13 @@ const NAV_MAP: NavScreen[] = [
 
   { section: 'التصنيع', screen: 'أوامر التصنيع', route: '/app/manufacturing/orders', description: 'أوامر الإنتاج والمكوّنات والمصانع والمتأخر', permission: 'manufacturing.view' },
 
-  { section: 'التقارير', screen: 'الأستاذ العام', route: '/app/accounting/general-ledger', description: 'حركة وأرصدة حساب', permission: 'accounting_reports.view' },
-  { section: 'التقارير', screen: 'ميزان المراجعة', route: '/app/accounting/trial-balance', description: 'أرصدة كل الحسابات', permission: 'accounting_reports.view' },
-  { section: 'التقارير', screen: 'قائمة الدخل', route: '/app/accounting/income-statement', description: 'الأرباح والخسائر', permission: 'accounting_reports.view' },
-  { section: 'التقارير', screen: 'الميزانية العمومية', route: '/app/accounting/balance-sheet', description: 'الأصول والخصوم وحقوق الملكية', permission: 'accounting_reports.view' },
-  { section: 'التقارير', screen: 'تقرير العمولات', route: '/app/accounting/commissions-report', description: 'عمولات الموظفين', permission: 'accounting_reports.view' },
-  { section: 'التقارير', screen: 'تقرير الخزائن', route: '/app/accounting/treasury-report', description: 'أرصدة وحركة الخزائن والبنوك والرصيد الحالي', permission: 'accounting_reports.view' },
-  { section: 'التقارير', screen: 'تقرير دخل المنتجات', route: '/app/accounting/product-income', description: 'إيراد وتكلفة وربحية كل منتج', permission: 'accounting_reports.view' },
+  { section: 'التقارير', screen: 'الأستاذ العام', route: '/app/accounting/general-ledger', description: 'حركة وأرصدة حساب', permission: 'report_general_ledger.view' },
+  { section: 'التقارير', screen: 'ميزان المراجعة', route: '/app/accounting/trial-balance', description: 'أرصدة كل الحسابات', permission: 'report_trial_balance.view' },
+  { section: 'التقارير', screen: 'قائمة الدخل', route: '/app/accounting/income-statement', description: 'الأرباح والخسائر', permission: 'report_income_statement.view' },
+  { section: 'التقارير', screen: 'الميزانية العمومية', route: '/app/accounting/balance-sheet', description: 'الأصول والخصوم وحقوق الملكية', permission: 'report_balance_sheet.view' },
+  { section: 'التقارير', screen: 'تقرير العمولات', route: '/app/accounting/commissions-report', description: 'عمولات الموظفين', permission: 'report_commissions.view' },
+  { section: 'التقارير', screen: 'تقرير الخزائن', route: '/app/accounting/treasury-report', description: 'أرصدة وحركة الخزائن والبنوك والرصيد الحالي', permission: 'report_treasury.view' },
+  { section: 'التقارير', screen: 'تقرير دخل المنتجات', route: '/app/accounting/product-income', description: 'إيراد وتكلفة وربحية كل منتج', permission: 'report_product_income.view' },
 
   { section: 'البيانات الأساسية', screen: 'المنتجات', route: '/app/master-data/products', description: 'إدارة المنتجات والمكوّنات', permission: 'products.view' },
   { section: 'البيانات الأساسية', screen: 'العملاء', route: '/app/master-data/customers', description: 'إدارة العملاء وكشوف حساباتهم', permission: 'customers.view' },

@@ -41,49 +41,49 @@ export class AccountingReportController {
   ) {}
 
   @Get('products/income-summary')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_product_income.view')
   @ApiOperation({ summary: 'دخل المنتجات — الإيراد والمرتجعات وتكلفة المبيعات والربح لكل منتج خلال فترة' })
   getProductIncome(@Query() query: ProductIncomeQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.productIncome.summary(query, branchScope);
   }
 
   @Get('general-ledger')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_general_ledger.view')
   @ApiOperation({ summary: 'الأستاذ العام — حركة وأرصدة حساب من القيود المرحلة' })
   getGeneralLedger(@Query() query: GeneralLedgerQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.generalLedger.generate(query, branchScope);
   }
 
   @Get('trial-balance')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_trial_balance.view')
   @ApiOperation({ summary: 'ميزان المراجعة — أرصدة الحسابات من القيود المرحلة' })
   getTrialBalance(@Query() query: TrialBalanceQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.trialBalance.generate(query, branchScope);
   }
 
   @Get('income-statement')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_income_statement.view')
   @ApiOperation({ summary: 'قائمة الدخل — الإيرادات والمصروفات وصافي الربح للفترة' })
   getIncomeStatement(@Query() query: FinancialStatementQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.financialStatements.incomeStatement(query, branchScope);
   }
 
   @Get('balance-sheet')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_balance_sheet.view')
   @ApiOperation({ summary: 'الميزانية — الأصول والخصوم وحقوق الملكية حتى تاريخ' })
   getBalanceSheet(@Query() query: FinancialStatementQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.financialStatements.balanceSheet(query, branchScope);
   }
 
   @Get('cash-accounts')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_treasury.view')
   @ApiOperation({ summary: 'تقرير الخزائن — أرصدة وحركة الخزائن والحسابات البنكية' })
   getCashAccounts(@Query() query: CashAccountsReportQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.treasuryCashReport.summary(query, branchScope);
   }
 
   @Get('cash-accounts/:kind/:id/statement')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_treasury.view')
   @ApiOperation({ summary: 'كشف حركة خزينة/حساب بنكي معيّن' })
   getCashAccountStatement(
     @Param('kind') kind: string,
@@ -98,21 +98,21 @@ export class AccountingReportController {
   }
 
   @Get('profit-loss')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_profit_loss.view')
   @ApiOperation({ summary: 'الأرباح والخسائر — تحليل تفصيلي حسب الحساب والشهر والفرع والمبيعات مع المقارنة' })
   getProfitLoss(@Query() query: ProfitLossQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.profitLoss.report(query, branchScope);
   }
 
   @Get('products/sales-detail')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_product_sales_detail.view')
   @ApiOperation({ summary: 'دخل المنتجات التفصيلي — كل بند مبيع بتكلفته وربحه (بدون تجميع)' })
   getProductSalesDetail(@Query() query: ProductSalesDetailQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.productSalesDetail.report(query, branchScope);
   }
 
   @Get('products/delivered-detail')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_delivered_items.view')
   @ApiOperation({ summary: 'المنتجات المُسلَّمة التفصيلي — كل بند تسليم بمخزنه أو مصنعه وتكلفته (بدون تجميع)' })
   getDeliveredItems(@Query() query: DeliveredItemsQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.deliveredItems.report(query, branchScope);

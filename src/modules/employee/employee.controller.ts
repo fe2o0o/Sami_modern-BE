@@ -40,14 +40,14 @@ export class EmployeeController {
   ) {}
 
   @Get('commissions-report')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_commissions.view')
   @ApiOperation({ summary: 'تقرير عمولات الموظفين من الفواتير المرحّلة' })
   commissionsReport(@Query() query: CommissionReportQueryDto, @BranchScope() branchScope: string[] | null) {
     return this.commissionReport.generate(query, branchScope);
   }
 
   @Get('commissions-report/:employeeId')
-  @RequirePermissions('accounting_reports.view')
+  @RequirePermissions('report_commissions.view')
   @ApiOperation({ summary: 'تفاصيل عمولات موظف: الفواتير والعمولة والنسبة لكل فاتورة' })
   commissionDetails(
     @Param('employeeId', ParseUUIDPipe) employeeId: string,
@@ -81,7 +81,7 @@ export class EmployeeController {
   summary(@Query() query: EmployeeQueryDto, @CurrentUser() user: AuthenticatedUser, @BranchScope() branchScope: string[] | null) {
     return this.employeeService.summary(
       query,
-      { withCommissions: can(user, 'accounting_reports.view'), withSalaries: can(user, 'hr_salary.view'), withDocuments: can(user, 'hr_documents.view') },
+      { withCommissions: can(user, 'report_commissions.view'), withSalaries: can(user, 'hr_salary.view'), withDocuments: can(user, 'hr_documents.view') },
       branchScope,
     );
   }

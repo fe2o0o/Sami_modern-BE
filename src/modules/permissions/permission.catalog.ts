@@ -103,9 +103,25 @@ export const PERMISSION_CATALOG: PermissionGroupDef[] = [
       { module: 'journal_entries', labelAr: 'القيود اليومية', actions: DOC },
       { module: 'opening_balances', labelAr: 'الأرصدة الافتتاحية', actions: [A.VIEW, A.CREATE, A.EDIT, A.POST] },
       { module: 'chart_of_accounts', labelAr: 'شجرة الحسابات', actions: CRUD },
-      { module: 'accounting_reports', labelAr: 'التقارير المالية', actions: [A.VIEW] },
       { module: 'accounting_settings', labelAr: 'إعدادات المحاسبة', actions: [A.VIEW, A.EDIT] },
       { module: 'code_settings', labelAr: 'إعدادات توليد الأكواد', actions: [A.VIEW, A.EDIT] },
+    ],
+  },
+  {
+    // One permission per report page (replaces the single «التقارير المالية»).
+    group: 'reports',
+    labelAr: 'التقارير',
+    modules: [
+      { module: 'report_profit_loss', labelAr: 'الأرباح والخسائر', actions: [A.VIEW] },
+      { module: 'report_product_income', labelAr: 'دخل المنتجات', actions: [A.VIEW] },
+      { module: 'report_product_sales_detail', labelAr: 'دخل المنتجات التفصيلي', actions: [A.VIEW] },
+      { module: 'report_delivered_items', labelAr: 'المنتجات المُسلَّمة التفصيلي', actions: [A.VIEW] },
+      { module: 'report_general_ledger', labelAr: 'الأستاذ العام', actions: [A.VIEW] },
+      { module: 'report_trial_balance', labelAr: 'ميزان المراجعة', actions: [A.VIEW] },
+      { module: 'report_income_statement', labelAr: 'قائمة الدخل', actions: [A.VIEW] },
+      { module: 'report_balance_sheet', labelAr: 'الميزانية العمومية', actions: [A.VIEW] },
+      { module: 'report_treasury', labelAr: 'تقرير الخزائن', actions: [A.VIEW] },
+      { module: 'report_commissions', labelAr: 'عمولات الموظفين', actions: [A.VIEW] },
     ],
   },
   {
@@ -126,6 +142,9 @@ export const PERMISSION_CATALOG: PermissionGroupDef[] = [
     ],
   },
 ];
+
+/** The view key of every report page. */
+export const REPORT_PERMISSION_KEYS: string[] = PERMISSION_CATALOG.find((g) => g.group === 'reports')!.modules.map((m) => `${m.module}.view`);
 
 /** Every valid permission key, flattened from the catalog. */
 export const ALL_PERMISSION_KEYS: string[] = PERMISSION_CATALOG.flatMap((g) =>
