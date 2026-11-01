@@ -12,6 +12,7 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
@@ -62,7 +63,7 @@ export class PayrollAdjustmentDto {
   note?: string | null;
 }
 
-/** Edit one draft line: component amounts (taxes / insurance / allowances), bonuses & penalties, note. */
+/** Edit one draft line: component amounts (taxes / insurance / allowances), commission, advance installment, bonuses & penalties, note. */
 export class UpdatePayrollLineDto {
   @ApiPropertyOptional({ type: [PayrollComponentOverrideDto] })
   @IsOptional()
@@ -77,6 +78,22 @@ export class UpdatePayrollLineDto {
   @ValidateNested({ each: true })
   @Type(() => PayrollAdjustmentDto)
   adjustments?: PayrollAdjustmentDto[];
+
+  /** Commission of the month set by hand; null = back to the calculated amount. */
+  @ApiPropertyOptional({ nullable: true, minimum: 0 })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsNumber({}, { message: 'العمولة يجب أن تكون رقماً' })
+  @Min(0, { message: 'العمولة لا يمكن أن تكون سالبة' })
+  commissionOverride?: number | null;
+
+  /** Advance installment to deduct this month; null = as much as the pay allows. */
+  @ApiPropertyOptional({ nullable: true, minimum: 0 })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsNumber({}, { message: 'قسط السلفة يجب أن يكون رقماً' })
+  @Min(0, { message: 'قسط السلفة لا يمكن أن يكون سالباً' })
+  advanceOverride?: number | null;
 
   @ApiPropertyOptional()
   @IsOptional()

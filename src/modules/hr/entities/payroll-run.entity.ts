@@ -140,6 +140,18 @@ export class PayrollLine extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   advances!: number;
 
+  /** Commission set by hand for this month (null = calculated from invoices − returns). */
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true, transformer: numericTransformer })
+  commissionOverride!: number | null;
+
+  /** Advance installment to recover this month, set by hand (null = as much as the pay allows). */
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true, transformer: numericTransformer })
+  advanceOverride!: number | null;
+
+  /** Open advance installments due up to the month (the most that can be recovered). */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  advanceDue!: number;
+
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   netPay!: number;
 

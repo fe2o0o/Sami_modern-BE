@@ -161,7 +161,10 @@ export class PayrollService {
       if (dto.adjustments) {
         line.adjustments = dto.adjustments.map((a) => ({ kind: a.kind, amount: round2(a.amount), note: a.note?.trim() || null }));
       }
+      if (dto.commissionOverride !== undefined) line.commissionOverride = dto.commissionOverride === null ? null : round2(dto.commissionOverride);
+      if (dto.advanceOverride !== undefined) line.advanceOverride = dto.advanceOverride === null ? null : round2(dto.advanceOverride);
       if (dto.notes !== undefined) line.notes = dto.notes?.trim() || null;
+      line.commissions = this.commissionOf(line);
       await this.recomputeLine(line, manager, run.periodMonth);
       await manager.save(line);
       run.updatedBy = actorId ?? null;
@@ -223,7 +226,8 @@ export class PayrollService {
         agg.set(accountId, cur);
       };
       const perEmployee: JournalLineInput[] = [];
-      let commissions = 0;
+      let commissions = 0; // accrued (calculated) — clears the commissions payable
+      let commissionDiff = 0; // manual amount − accrued — commission expense
       for (const l of lines) {
         for (const c of l.components ?? []) {
           if (!c.amount) continue;
@@ -238,7 +242,9 @@ export class PayrollService {
         for (const a of l.adjustments ?? []) {
           add(settings.salariesExpenseAccountId, a.kind === PayrollAdjustmentKind.BONUS ? a.amount : -a.amount, `رواتب ومكافآت وجزاءات — ${label}`);
         }
-        commissions = round2(commissions + l.commissions);
+        const accrued = this.accruedCommission(l);
+        commissions = round2(commissions + accrued);
+        commissionDiff = round2(commissionDiff + l.commissions - accrued);
         if (l.advances > 0) {
           const { advances } = await this.posting.accounts(manager);
           if (!advances) throw new BadRequestException('حساب سلف الموظفين غير محدد في إعدادات المحاسبة');
@@ -251,6 +257,10 @@ export class PayrollService {
       if (Math.abs(commissions) >= 0.005) {
         if (!settings.commissionPayableAccountId) throw new BadRequestException('حساب العمولات المستحقة غير محدد في إعدادات المحاسبة');
         add(settings.commissionPayableAccountId, commissions, `عمولات مبيعات مصروفة مع الرواتب — ${label}`);
+      }
+      if (Math.abs(commissionDiff) >= 0.005) {
+        if (!settings.commissionExpenseAccountId) throw new BadRequestException('حساب مصروف العمولات غير محدد في إعدادات المحاسبة — مطلوب لتعديل العمولة يدوياً');
+        add(settings.commissionExpenseAccountId, commissionDiff, `فرق تعديل العمولات يدوياً — ${label}`);
       }
       const journalLines: JournalLineInput[] = [];
       for (const [accountId, v] of agg) {
@@ -517,6 +527,8 @@ export class PayrollService {
         salaryPackageId: pkg?.id ?? null,
         components,
         adjustments: prev?.adjustments ?? [],
+        commissionOverride: prev?.commissionOverride ?? null,
+        advanceOverride: prev?.advanceOverride ?? null,
         notes: prev?.notes ?? null,
         bankName: e.bankName ?? null,
         bankAccountNumber: e.bankAccountNumber ?? null,
@@ -524,12 +536,22 @@ export class PayrollService {
         paidAmount: 0,
       });
       line.commissionDetail = await this.commissionsOf(e.id, start, end, manager);
-      line.commissions = round2(line.commissionDetail.earned - line.commissionDetail.returned);
+      line.commissions = this.commissionOf(line);
       await this.recomputeLine(line, manager, run.periodMonth);
       lines.push(line);
     }
     if (lines.length) await manager.save(lines);
     await this.refreshTotals(run, manager);
+  }
+
+  /** Calculated commission of the month (invoices − returns), before any manual amount. */
+  private accruedCommission(line: PayrollLine): number {
+    const d = line.commissionDetail;
+    return d ? round2(d.earned - d.returned) : 0;
+  }
+  /** The commission paid on the line: the manual amount when set, else the calculated one. */
+  private commissionOf(line: PayrollLine): number {
+    return line.commissionOverride !== null && line.commissionOverride !== undefined ? round2(line.commissionOverride) : this.accruedCommission(line);
   }
 
   /** Commissions of the month: posted invoices dated in it − taken back by returns posted in it. */
@@ -558,7 +580,8 @@ export class PayrollService {
 
   /**
    * Totals of one line. Advance installments due up to the month (oldest first) are
-   * recovered only as far as the pay allows — the net never goes below zero.
+   * recovered only as far as the pay allows — the net never goes below zero —
+   * and never more than a manual installment amount when one is set.
    */
   private async recomputeLine(line: PayrollLine, manager: EntityManager, periodMonth: string): Promise<void> {
     const comps = line.components ?? [];
@@ -582,7 +605,9 @@ export class PayrollService {
       .orderBy('i.dueMonth', 'ASC')
       .addOrderBy('i.sequence', 'ASC')
       .getMany();
+    line.advanceDue = round2(due.reduce((s, i) => s + (i.amount - i.paidAmount), 0));
     let room = Math.max(0, available);
+    if (line.advanceOverride !== null && line.advanceOverride !== undefined) room = Math.min(room, Math.max(0, line.advanceOverride));
     const allocation: PayrollAdvanceAllocation[] = [];
     for (const inst of due) {
       if (room <= 0.009) break;

@@ -279,4 +279,10 @@ export const finance: Record<string, string> = {
   "مصروف": "Paid",
   "حسابا مصروف العمولات والعمولات المستحقة غير محددين في إعدادات المحاسبة — لا يمكن عكس عمولة الموظفين": "The commission expense and commissions payable accounts are not set in the accounting settings — the employees’ commission cannot be taken back",
   "ذمم مدينة أخرى (موظفون ومدينون متنوعون)": "Other receivables (employees & sundry debtors)",
+  "العمولة يجب أن تكون رقماً": "Commission must be a number",
+  "العمولة لا يمكن أن تكون سالبة": "Commission cannot be negative",
+  "قسط السلفة يجب أن يكون رقماً": "Advance installment must be a number",
+  "قسط السلفة لا يمكن أن يكون سالباً": "Advance installment cannot be negative",
+  "حساب مصروف العمولات غير محدد في إعدادات المحاسبة — مطلوب لتعديل العمولة يدوياً": "The commission expense account is not set in the accounting settings — required to change a commission by hand",
+  "فرق تعديل العمولات يدوياً": "Manual commission adjustment",
 };
