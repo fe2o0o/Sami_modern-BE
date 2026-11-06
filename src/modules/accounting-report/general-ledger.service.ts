@@ -195,8 +195,10 @@ export class GeneralLedgerService {
       qb.andWhere('l.branchId = :branchId', { branchId: query.branchId });
     }
     applyBranchScope(qb, 'l.branchId', query.branchScope ?? null);
-    if (query.sourceType) {
-      qb.andWhere('je.sourceType = :sourceType', { sourceType: query.sourceType });
+    // One source, or several separated by commas.
+    const sourceTypes = (query.sourceType ?? '').split(',').map((v) => v.trim()).filter(Boolean);
+    if (sourceTypes.length) {
+      qb.andWhere('je.sourceType IN (:...sourceTypes)', { sourceTypes });
     }
     if (query.excludeReversed) {
       // Only pairs fully inside the range: a full reversal mirrors every line, so
