@@ -39,6 +39,8 @@ export interface VoucherListItem {
   accountName: string | null;
   amount: number;
   status: VoucherStatus;
+  reference: string | null;
+  notes: string | null;
 }
 
 @Injectable()
@@ -258,6 +260,8 @@ export class VoucherService {
       accountName: accountNames.get(v.id) ?? null,
       amount: v.amount,
       status: v.status,
+      reference: v.reference,
+      notes: v.notes,
     }));
     return paginate(rows, total, query.page, query.perPage);
   }

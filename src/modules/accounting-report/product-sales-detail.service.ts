@@ -51,6 +51,8 @@ export interface ProductSalesDetailRow {
   grossMargin: number | null;
   deliveredQuantity: number;
   costBasis: CostBasis;
+  /** Where the cost booked with the invoice came from (see SalesInvoiceItem.cogsSource); null = unknown. */
+  costSource: string | null;
 }
 
 export interface ProductSalesDetailReport {
@@ -149,6 +151,7 @@ export class ProductSalesDetailService {
         .addSelect(COST, 'cost')
         .addSelect(MARGIN, 'grossMargin')
         .addSelect('ii.cogsAccrued', 'cogsAccrued')
+        .addSelect('ii.cogsSource', 'cogsSource')
         .orderBy(SORT_EXPR[q.sortBy] ?? 'si.invoiceDate', q.sortOrder === 'asc' ? 'ASC' : 'DESC')
         .addOrderBy('si.invoiceNumber', 'DESC')
         .addOrderBy('ii.lineNumber', 'ASC')
@@ -224,6 +227,7 @@ export class ProductSalesDetailService {
         grossMargin: grossProfit === null || netRevenue === 0 ? null : round2((grossProfit / netRevenue) * 100),
         deliveredQuantity: delivered,
         costBasis,
+        costSource: (r.cogsSource as string | null) ?? null,
       };
     });
 

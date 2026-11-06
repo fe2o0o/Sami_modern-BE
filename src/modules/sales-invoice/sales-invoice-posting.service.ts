@@ -683,10 +683,15 @@ export class SalesInvoicePostingService {
     const clearing = settings.goodsSoldNotDeliveredAccountId!;
     const stockRepo = manager.getRepository(WarehouseStock);
     const productRepo = manager.getRepository(Product);
+    type CostSource = 'warehouse_avg' | 'all_stock_avg' | 'product_card';
+    let lastSource: CostSource = 'product_card';
     const unitCostIn = async (productId: string, warehouseId: string | null): Promise<number> => {
       if (warehouseId) {
         const ws = await stockRepo.findOne({ where: { warehouseId, productId } });
-        if (ws && Number(ws.avgCost) > 0) return Number(ws.avgCost);
+        if (ws && Number(ws.avgCost) > 0) {
+          lastSource = 'warehouse_avg';
+          return Number(ws.avgCost);
+        }
       }
       // Any warehouse: quantity-weighted average of the positive balances.
       const rows = (await manager.query(
@@ -694,7 +699,11 @@ export class SalesInvoicePostingService {
         [productId],
       )) as Array<{ c: string | null }>;
       const avg = Number(rows[0]?.c ?? 0);
-      if (avg > 0) return avg;
+      if (avg > 0) {
+        lastSource = 'all_stock_avg';
+        return avg;
+      }
+      lastSource = 'product_card';
       const p = await productRepo.findOne({ where: { id: productId }, select: { id: true, costPrice: true } });
       return Number(p?.costPrice) || 0;
     };
@@ -703,8 +712,10 @@ export class SalesInvoicePostingService {
       const product = products.get(item.productId);
       if (!product) continue;
       let estimate = 0;
+      let source: string | null = null;
       if (item.lineType === SalesLineType.STOCK && product.trackInventory) {
         estimate = round2(item.quantity * (await unitCostIn(item.productId, item.warehouseId ?? null)));
+        source = lastSource;
       } else if (item.lineType === SalesLineType.MANUFACTURING) {
         const own = await manager.getRepository(SalesInvoiceItemComponent).find({ where: { salesInvoiceItemId: item.id } });
         const bom = own.length
@@ -715,10 +726,16 @@ export class SalesInvoicePostingService {
               warehouseId: null as string | null,
             }));
         let components = 0;
-        for (const c of bom) components += c.perUnit * item.quantity * (await unitCostIn(c.productId, c.warehouseId));
+        let fromCard = false;
+        for (const c of bom) {
+          components += c.perUnit * item.quantity * (await unitCostIn(c.productId, c.warehouseId));
+          if (lastSource === 'product_card') fromCard = true;
+        }
         estimate = round2(components + (Number(item.manufacturingFee) || 0));
+        source = !bom.length ? 'manufacturing_fee' : fromCard ? 'manufacturing_card' : 'manufacturing';
       }
       item.cogsAccrued = estimate;
+      item.cogsSource = estimate > 0 ? source : null;
       item.cogsAccruedSettled = 0;
       item.cogsReleasedQty = 0;
       if (estimate <= 0) continue;
@@ -816,6 +833,7 @@ export class SalesInvoicePostingService {
       const cost = round2(item.quantity * unitCost);
       item.costAtPost = unitCost;
       item.cogsAccrued = cost;
+      item.cogsSource = cost > 0 ? 'stock_issue' : null;
       item.deliveredQuantity = item.quantity;
       if (cost <= 0) return; // no costed receipt yet → goods leave, nothing to book
       const what = `${item.productName ?? product.name} (${item.quantity}) — بيع سريع ${invoiceNumber}`;

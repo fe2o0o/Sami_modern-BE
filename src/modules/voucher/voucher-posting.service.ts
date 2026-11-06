@@ -89,10 +89,10 @@ export class VoucherPostingService {
         voucher.type === VoucherType.RECEIPT
           ? JournalSourceType.RECEIPT_VOUCHER
           : JournalSourceType.PAYMENT_VOUCHER;
-      const description =
-        voucher.type === VoucherType.RECEIPT
-          ? `سند قبض ${voucherNumber} — ${voucher.partyName ?? ''}`
-          : `سند صرف ${voucherNumber} — ${voucher.partyName ?? ''}`;
+      // The voucher's notes go into the narration so they show on every statement
+      // (party, treasury / bank, journal) — capped to the 500-char ledger columns.
+      const notes = voucher.notes?.trim().replace(/\s+/g, ' ');
+      const description = `${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucherNumber} — ${voucher.partyName ?? ''}${notes ? ` — ${notes}` : ''}`.slice(0, 500);
 
       // Journal: RECEIPT → DR cash / CR customer-control; PAYMENT → DR supplier-control / CR cash.
       const lines: JournalLineInput[] =
@@ -213,7 +213,7 @@ export class VoucherPostingService {
         accountId: l.accountId,
         debit: l.credit,
         credit: l.debit,
-        description: l.description ? `عكس: ${l.description}` : 'عكس سند',
+        description: l.description ? `عكس: ${l.description}`.slice(0, 500) : 'عكس سند',
       }));
       const reversalEntry = await this.journalService.createSystemJournalEntry(
         {
@@ -236,7 +236,8 @@ export class VoucherPostingService {
       );
       await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
 
-      const desc = `عكس ${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucher.voucherNumber ?? ''}`;
+      const notes = voucher.notes?.trim().replace(/\s+/g, ' ');
+      const desc = `عكس ${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucher.voucherNumber ?? ''}${notes ? ` — ${notes}` : ''}`.slice(0, 500);
       // Reverse the party subledger (none for an ACCOUNT voucher).
       if (voucher.partyType === VoucherPartyType.CUSTOMER) {
         await this.customerLedger.record(

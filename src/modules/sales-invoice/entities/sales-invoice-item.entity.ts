@@ -112,6 +112,17 @@ export class SalesInvoiceItem extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   cogsAccrued!: number;
 
+  /**
+   * Where `cogsAccrued` came from: warehouse_avg (the line's warehouse average),
+   * all_stock_avg (average of every warehouse), product_card (the product's cost
+   * price), manufacturing (components × cost + factory fee), manufacturing_card
+   * (same, some component priced from its product card), manufacturing_fee (no
+   * bill of materials — fee only), stock_issue (quick sale: issued at posting).
+   * NULL on old lines whose source isn't known.
+   */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  cogsSource!: string | null;
+
   /** Part of `cogsAccrued` already cleared by deliveries or released by returns. */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   cogsAccruedSettled!: number;
