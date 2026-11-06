@@ -198,6 +198,15 @@ export class GeneralLedgerService {
     if (query.sourceType) {
       qb.andWhere('je.sourceType = :sourceType', { sourceType: query.sourceType });
     }
+    if (query.excludeReversed) {
+      // Only pairs fully inside the range: a full reversal mirrors every line, so
+      // the account's lines of the pair net to zero and the balances don't move.
+      qb.andWhere(
+        `NOT EXISTS (SELECT 1 FROM journal_entries r WHERE r.reversal_of_journal_entry_id = je.id AND r.is_posted = 1 AND r.deleted_at IS NULL AND r.entry_date BETWEEN :from AND :to)`,
+      ).andWhere(
+        `NOT (je.reversalOfJournalEntryId IS NOT NULL AND EXISTS (SELECT 1 FROM journal_entries o WHERE o.id = je.reversalOfJournalEntryId AND o.is_posted = 1 AND o.entry_date BETWEEN :from AND :to))`,
+      );
+    }
     return qb;
   }
 

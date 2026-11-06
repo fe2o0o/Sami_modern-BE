@@ -10,6 +10,7 @@ import { BankTransaction } from '../bank-account/entities/bank-transaction.entit
 import { BANK_TRANSACTION_TYPE_LABELS } from '../bank-account/enums/bank-transaction.enum';
 import { CashAccountsReportQueryDto } from './dto/cash-accounts-report-query.dto';
 import { round2 } from './ledger-math';
+import { pairCashLedger } from '../../common/utils/reversal-pairs.util';
 
 /** Widest date bounds → an omitted filter never clips the data. */
 const MIN_DATE = '0001-01-01';
@@ -41,6 +42,10 @@ export interface CashAccountsSummary {
 export interface CashStatementMovement {
   date: string;
   type: string;
+  /** Raw movement type (receipt, payment, reversal…) — for colour badges / filters. */
+  typeKey: string;
+  /** Shared by an entry and the reversal cancelling it (both may be hidden). */
+  reversalPairId: string | null;
   sourceNumber: string | null;
   description: string | null;
   debit: number;
@@ -211,9 +216,11 @@ export class TreasuryCashReportService {
       .getMany();
 
     const movements = this.buildMovements(
-      rows.map((r) => ({
+      (await pairCashLedger(this.treasuryRepo.manager, rows)).map((r) => ({
         date: r.transactionDate,
         type: TREASURY_TRANSACTION_TYPE_LABELS[r.type] ?? r.type,
+        typeKey: r.type,
+        reversalPairId: r.reversalPairId,
         sourceNumber: r.sourceNumber,
         description: r.description,
         debit: r.debit,
@@ -254,9 +261,11 @@ export class TreasuryCashReportService {
       .getMany();
 
     const movements = this.buildMovements(
-      rows.map((r) => ({
+      (await pairCashLedger(this.bankRepo.manager, rows)).map((r) => ({
         date: r.transactionDate,
         type: BANK_TRANSACTION_TYPE_LABELS[r.type] ?? r.type,
+        typeKey: r.type,
+        reversalPairId: r.reversalPairId,
         sourceNumber: r.sourceNumber,
         description: r.description,
         debit: r.debit,
@@ -328,7 +337,7 @@ export class TreasuryCashReportService {
   }
 
   private buildMovements(
-    rows: { date: string; type: string; sourceNumber: string | null; description: string | null; debit: number; credit: number }[],
+    rows: { date: string; type: string; typeKey: string; reversalPairId: string | null; sourceNumber: string | null; description: string | null; debit: number; credit: number }[],
     opening: number,
   ): CashStatementMovement[] {
     let running = opening;
@@ -337,6 +346,8 @@ export class TreasuryCashReportService {
       return {
         date: r.date,
         type: r.type,
+        typeKey: r.typeKey,
+        reversalPairId: r.reversalPairId,
         sourceNumber: r.sourceNumber,
         description: r.description,
         debit: round2(r.debit),

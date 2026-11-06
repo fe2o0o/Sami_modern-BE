@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
@@ -23,11 +23,13 @@ export class CreateProductDto {
   @MaxLength(50, { message: 'الكود يجب ألا يتجاوز 50 حرفاً' })
   code?: string;
 
+  /** Optional and unique: blank → null (an empty string would clash with every other blank). */
   @ApiPropertyOptional()
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
   @IsString({ message: 'الباركود يجب أن يكون نصاً' })
   @MaxLength(100)
-  barcode?: string;
+  barcode?: string | null;
 
   @ApiProperty({ example: 'سرير مزدوج' })
   @IsString({ message: 'اسم المنتج مطلوب' })

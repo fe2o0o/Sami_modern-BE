@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
+import { pairPartyLedger } from '../../common/utils/reversal-pairs.util';
 import { SupplierTransaction } from './entities/supplier-transaction.entity';
 import { SupplierTransactionType } from './enums/supplier-transaction.enum';
 
@@ -18,9 +19,16 @@ export interface SupplierLedgerEntry {
   actorId?: string | null;
 }
 
+/**
+ * A statement row. `reversalPairId` is set on an entry AND on the reversal that
+ * cancels it exactly (same document, opposite amounts) — the pair nets to zero,
+ * so a statement may hide both without changing the balance.
+ */
+export type SupplierStatementRow = SupplierTransaction & { reversalPairId: string | null };
+
 export interface SupplierStatement {
   balance: number;
-  transactions: SupplierTransaction[];
+  transactions: SupplierStatementRow[];
 }
 
 /**
@@ -90,8 +98,9 @@ export class SupplierLedgerService {
       where: { supplierId },
       order: { transactionDate: 'DESC', createdAt: 'DESC' },
     });
-    return { balance: await this.balance(supplierId), transactions };
+    return { balance: await this.balance(supplierId), transactions: await pairPartyLedger(this.repository.manager, transactions) };
   }
+
 }
 
 function round2(value: number): number {

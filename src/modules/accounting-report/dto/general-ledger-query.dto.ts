@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsDateString,
   IsInt,
   IsOptional,
@@ -53,6 +54,13 @@ export class GeneralLedgerQueryDto {
   @IsOptional()
   @IsString()
   sourceType?: string;
+
+  /** Hide an entry and the reversal cancelling it when both fall in the range (balances unchanged). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  excludeReversed?: boolean;
 
   @ApiPropertyOptional({ default: APP_CONSTANTS.DEFAULT_PAGE, minimum: 1 })
   @IsOptional()

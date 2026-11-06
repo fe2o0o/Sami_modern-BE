@@ -83,7 +83,19 @@ export class CodeSettingService {
   /** The next code preview for an entity (does NOT consume the counter). */
   async preview(entityKey: string): Promise<{ entityKey: string; autoGenerate: boolean; code: string }> {
     const s = await this.ensure(entityKey);
-    return { entityKey, autoGenerate: s.autoGenerate, code: this.format(s, s.nextNumber) };
+    return { entityKey, autoGenerate: s.autoGenerate, code: this.format(s, await this.firstFreeNumber(s, this.dataSource.manager)) };
+  }
+
+  /**
+   * The counter's number, or the next one whose code isn't taken yet — records
+   * added by hand / Excel import (or a counter edited back) would otherwise make
+   * the generated code collide. Soft-deleted rows count, like the uniqueness checks.
+   */
+  private async firstFreeNumber(s: CodeSetting, m: EntityManager): Promise<number> {
+    const table = CODE_ENTITIES.find((e) => e.key === s.entityKey)?.table;
+    let n = s.nextNumber;
+    while (table && (await m.query(`SELECT 1 FROM \`${table}\` WHERE \`code\` = ? LIMIT 1`, [this.format(s, n)])).length) n++;
+    return n;
   }
 
   /** Whether an entity's code is system-generated. */
@@ -115,7 +127,7 @@ export class CodeSettingService {
         s = await repo.findOne({ where: { entityKey }, lock: { mode: 'pessimistic_write' } });
       }
       if (!s || !s.autoGenerate) return null;
-      const n = s.nextNumber;
+      const n = await this.firstFreeNumber(s, m);
       s.nextNumber = n + 1;
       await repo.save(s);
       return this.format(s, n);

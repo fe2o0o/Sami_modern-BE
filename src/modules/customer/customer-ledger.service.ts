@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
+import { pairPartyLedger } from '../../common/utils/reversal-pairs.util';
 import { CustomerTransaction } from './entities/customer-transaction.entity';
 import { CustomerTransactionType } from './enums/customer-transaction.enum';
 
@@ -18,9 +19,12 @@ export interface CustomerLedgerEntry {
   actorId?: string | null;
 }
 
+/** A statement row; `reversalPairId` marks an entry and the reversal cancelling it (see reversal-pairs.util). */
+export type CustomerStatementRow = CustomerTransaction & { reversalPairId: string | null };
+
 export interface CustomerStatement {
   balance: number;
-  transactions: CustomerTransaction[];
+  transactions: CustomerStatementRow[];
 }
 
 /**
@@ -90,7 +94,7 @@ export class CustomerLedgerService {
       where: { customerId },
       order: { transactionDate: 'DESC', createdAt: 'DESC' },
     });
-    return { balance: await this.balance(customerId), transactions };
+    return { balance: await this.balance(customerId), transactions: await pairPartyLedger(this.repository.manager, transactions) };
   }
 }
 

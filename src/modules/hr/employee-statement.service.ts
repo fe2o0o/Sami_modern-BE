@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { pairJournalLines } from '../../common/utils/reversal-pairs.util';
 import { DataSource } from 'typeorm';
 import { BranchScope, applyBranchScope } from '../../common/utils/branch-scope.util';
 import { JournalEntryLine } from '../journal-entry/entities/journal-entry-line.entity';
@@ -76,6 +77,7 @@ export class EmployeeStatementService {
         'je.sourceType AS sourceType',
         'je.sourceNumber AS sourceNumber',
         'je.id AS journalEntryId',
+        'je.reversalOfJournalEntryId AS reversalOfJournalEntryId',
         'COALESCE(l.description, je.description) AS description',
         'l.accountId AS accountId',
         'l.debit AS debit',
@@ -97,6 +99,7 @@ export class EmployeeStatementService {
         date: toYmd(r.date),
         entryNumber: (r.entryNumber as string | null) ?? null,
         journalEntryId: String(r.journalEntryId),
+        reversalOfJournalEntryId: (r.reversalOfJournalEntryId as string | null) ?? null,
         sourceType: String(r.sourceType),
         sourceNumber: (r.sourceNumber as string | null) ?? null,
         description: (r.description as string | null) ?? null,
@@ -108,7 +111,8 @@ export class EmployeeStatementService {
         balance: running,
       };
     });
-    return { balances, total: round2(balances.reduce((s, b) => s + b.balance, 0)), opening, rows };
+    // An entry and the reversal cancelling it carry the same `reversalPairId` (the screen can hide both).
+    return { balances, total: round2(balances.reduce((s, b) => s + b.balance, 0)), opening, rows: pairJournalLines(rows) };
   }
 
   /** Every employee with a non-zero advances / custody balance + their next due installment. */

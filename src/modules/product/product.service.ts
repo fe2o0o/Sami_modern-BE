@@ -177,11 +177,12 @@ export class ProductService {
   // CRUD
   // =========================================================
   async create(dto: CreateProductDto): Promise<Product> {
-    const code = await this.codeSettings.resolveCode('product', dto.code);
-    await this.ensureUnique('code', code, undefined, 'كود المنتج مستخدم بالفعل');
+    // Validate first: a failure after the code is generated would burn the number.
     if (dto.barcode) {
       await this.ensureUnique('barcode', dto.barcode, undefined, 'الباركود مستخدم بالفعل');
     }
+    const code = await this.codeSettings.resolveCode('product', dto.code);
+    await this.ensureUnique('code', code, undefined, 'كود المنتج مستخدم بالفعل');
     const { components, ...rest } = dto;
     const saved = await this.productRepository.save(this.productRepository.create({ ...rest, ...this.inventoryFlag(rest), code }));
     if (components?.length) await this.replaceComponents(saved.id, components);
