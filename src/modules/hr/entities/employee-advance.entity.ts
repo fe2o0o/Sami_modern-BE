@@ -80,6 +80,14 @@ export class EmployeeAdvance extends BaseEntity {
   @Column({ type: 'varchar', length: 36, nullable: true })
   reversalJournalEntryId!: string | null;
 
+  /**
+   * «سلفة من رصيد قائم»: registered for money already on the advances account
+   * (e.g. a manual journal entry) — no entry / cash movement of its own; it only
+   * gives that balance an installment schedule for payroll.
+   */
+  @Column({ type: 'boolean', default: false })
+  fromExistingBalance!: boolean;
+
   @Column({ type: 'text', nullable: true })
   cancelReason!: string | null;
 

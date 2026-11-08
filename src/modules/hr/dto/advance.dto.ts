@@ -100,6 +100,13 @@ export class PayAdvanceDto {
   cash!: HrCashDto;
 }
 
+/** Register an approved advance against a balance already on the advances account. */
+export class LinkAdvanceBalanceDto {
+  @ApiProperty({ format: 'date', description: 'تاريخ التسجيل' })
+  @IsDateString({}, { message: 'التاريخ غير صحيح' })
+  date!: string;
+}
+
 export class RepayAdvanceDto {
   @ApiProperty({ format: 'date' })
   @IsDateString({}, { message: 'تاريخ السداد غير صحيح' })

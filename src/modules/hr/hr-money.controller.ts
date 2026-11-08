@@ -14,6 +14,7 @@ import {
   CreateCustodyDto,
   CustodyQueryDto,
   HrReasonDto,
+  LinkAdvanceBalanceDto,
   PayAdvanceDto,
   RepayAdvanceDto,
   SettleCustodyDto,
@@ -89,6 +90,14 @@ export class HrMoneyController {
   @ResponseMessage('تم إلغاء السلفة')
   cancelAdvance(@Param('id', ParseUUIDPipe) id: string, @Body() dto: HrReasonDto, @CurrentUser() u: AuthenticatedUser, @BranchScope() scope: string[] | null) {
     return this.advances.cancel(id, dto, u?.userId, scope);
+  }
+
+  @Post('hr/advances/:id/link-balance')
+  @RequirePermissions('advances.post')
+  @ResponseMessage('تم تسجيل السلفة من الرصيد القائم')
+  @ApiOperation({ summary: 'تسجيل سلفة معتمدة على رصيد سلف قائم (مثلاً من قيد يدوي) — بدون قيد جديد' })
+  linkAdvanceBalance(@Param('id', ParseUUIDPipe) id: string, @Body() dto: LinkAdvanceBalanceDto, @CurrentUser() u: AuthenticatedUser, @BranchScope() scope: string[] | null) {
+    return this.advances.linkExistingBalance(id, dto, u?.userId, scope);
   }
 
   @Post('hr/advances/:id/pay')

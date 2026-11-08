@@ -8,7 +8,8 @@ import { JournalEntryService } from '../journal-entry/journal-entry.service';
 import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { Employee } from '../employee/entities/employee.entity';
 import { EmployeeAdvance, EmployeeAdvanceInstallment, EmployeeAdvanceRepayment } from './entities/employee-advance.entity';
-import { AdvanceQueryDto, CreateAdvanceDto, HrReasonDto, PayAdvanceDto, RepayAdvanceDto } from './dto/advance.dto';
+import { AdvanceQueryDto, CreateAdvanceDto, HrReasonDto, LinkAdvanceBalanceDto, PayAdvanceDto, RepayAdvanceDto } from './dto/advance.dto';
+import { JournalEntryLine } from '../journal-entry/entities/journal-entry-line.entity';
 import { AdvanceStatus, HrCashMethod, HrMovementStatus, InstallmentStatus } from './enums/advance.enum';
 import { HrPostingHelper } from './hr-posting.helper';
 
@@ -112,6 +113,7 @@ export class AdvanceService {
       netSalary: net,
       openAdvancesCount: Number(r?.n ?? 0),
       openAdvancesAmount: round2(Number(r?.open ?? 0)),
+      untrackedBalance: await this.untrackedBalance(employeeId, this.dataSource.manager, excludeId),
       maxAdvance: multiple && net > 0 ? round2(net * multiple) : null,
       maxAdvanceSalaryMultiple: multiple,
     };
@@ -281,6 +283,66 @@ export class AdvanceService {
     });
   }
 
+  /**
+   * The employee's balance on the advances account that no paid advance document
+   * covers yet (ledger balance − what paid advances still have open). Money given
+   * by a manual journal entry shows up here and can be registered as an advance.
+   */
+  async untrackedBalance(employeeId: string, manager: EntityManager, excludeId?: string): Promise<number> {
+    const { advances } = await this.posting.accounts(manager);
+    if (!advances) return 0;
+    const ledger = await manager
+      .getRepository(JournalEntryLine)
+      .createQueryBuilder('l')
+      .innerJoin('l.journalEntry', 'je')
+      .select('COALESCE(SUM(l.debit - l.credit), 0)', 'v')
+      .where('je.isPosted = 1')
+      .andWhere('l.accountId = :acc', { acc: advances })
+      .andWhere('l.employeeId = :e', { e: employeeId })
+      .getRawOne<{ v: string }>();
+    const tracked = manager
+      .getRepository(EmployeeAdvance)
+      .createQueryBuilder('a')
+      .select('COALESCE(SUM(a.amount - a.repaidAmount), 0)', 'v')
+      .where('a.employeeId = :e', { e: employeeId })
+      .andWhere('a.status = :paid', { paid: AdvanceStatus.PAID });
+    if (excludeId) tracked.andWhere('a.id <> :x', { x: excludeId });
+    const t = await tracked.getRawOne<{ v: string }>();
+    return round2(Math.max(0, Number(ledger?.v ?? 0) - Number(t?.v ?? 0)));
+  }
+
+  /**
+   * «سلفة من رصيد قائم»: an approved advance becomes «paid» against money that
+   * is already on the advances account — no journal entry, no cash movement.
+   * It is limited to the balance no other advance document covers, so the same
+   * money can't be registered twice. From here on it is a normal advance:
+   * payroll deducts its installments, cash repayments work as usual.
+   */
+  async linkExistingBalance(id: string, dto: LinkAdvanceBalanceDto, actorId: string | undefined, scope: BranchScope) {
+    return this.dataSource.transaction(async (manager) => {
+      const a = await this.lock(id, manager, scope);
+      if (a.status !== AdvanceStatus.APPROVED) throw new BadRequestException('يمكن التسجيل من رصيد قائم لسلفة معتمدة فقط');
+      const available = await this.untrackedBalance(a.employeeId, manager, a.id);
+      if (a.amount > available + 0.009) {
+        throw new BadRequestException(`مبلغ السلفة (${a.amount}) أكبر من رصيد السلف القائم غير المسجّل للموظف (${available}) — سجّل سلفة بالمبلغ المتاح أو اصرفها نقداً`);
+      }
+      const { fiscalYear } = await this.posting.context(dto.date, manager);
+      const number = await this.sequences.nextDocumentNumber('ADV', fiscalYear, manager);
+      Object.assign(a, {
+        advanceNumber: number,
+        status: AdvanceStatus.PAID,
+        paidDate: dto.date,
+        paymentMethod: null,
+        treasuryId: null,
+        bankAccountId: null,
+        journalEntryId: null,
+        fromExistingBalance: true,
+        updatedBy: actorId ?? null,
+      });
+      return manager.getRepository(EmployeeAdvance).save(a);
+    });
+  }
+
   /** Reverse a paid advance (only while nothing has been repaid). */
   async reverse(id: string, dto: HrReasonDto, actorId: string | undefined, scope: BranchScope) {
     return this.dataSource.transaction(async (manager) => {
@@ -288,6 +350,13 @@ export class AdvanceService {
       if (a.status !== AdvanceStatus.PAID) throw new BadRequestException('يمكن عكس السلفة المصروفة فقط');
       if (a.repaidAmount > 0.009) throw new BadRequestException('لا يمكن عكس سلفة تم سداد جزء منها — اعكس السدادات أولاً');
       const date = dto.date ?? today();
+      if (a.fromExistingBalance) {
+        // It posted nothing: only the document goes; the ledger balance stays (unregistered again).
+        a.status = AdvanceStatus.REVERSED;
+        a.cancelReason = dto.reason.trim();
+        a.updatedBy = actorId ?? null;
+        return manager.getRepository(EmployeeAdvance).save(a);
+      }
       const description = `عكس صرف سلفة ${a.advanceNumber ?? ''} — ${a.employeeName ?? ''} — ${dto.reason}`;
       const rev = await this.posting.reverseEntry(a.journalEntryId!, { date, reason: dto.reason, sourceType: JournalSourceType.EMPLOYEE_ADVANCE, sourceId: a.id, sourceNumber: a.advanceNumber, description, actorId }, manager);
       await this.posting.recordCash(

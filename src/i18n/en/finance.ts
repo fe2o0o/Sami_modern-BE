@@ -285,4 +285,7 @@ export const finance: Record<string, string> = {
   "قسط السلفة لا يمكن أن يكون سالباً": "Advance installment cannot be negative",
   "حساب مصروف العمولات غير محدد في إعدادات المحاسبة — مطلوب لتعديل العمولة يدوياً": "The commission expense account is not set in the accounting settings — required to change a commission by hand",
   "فرق تعديل العمولات يدوياً": "Manual commission adjustment",
+  "يمكن التسجيل من رصيد قائم لسلفة معتمدة فقط": "Only an approved advance can be registered from an existing balance",
+  "تم تسجيل السلفة من الرصيد القائم": "Advance registered from the existing balance",
+  "التاريخ غير صحيح": "Invalid date",
 };
