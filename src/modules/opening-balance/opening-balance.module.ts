@@ -20,6 +20,8 @@ import { BankAccount } from '../bank-account/entities/bank-account.entity';
 import { JournalEntryModule } from '../journal-entry/journal-entry.module';
 import { StockModule } from '../stock/stock.module';
 import { TreasuryModule } from '../treasury/treasury.module';
+import { CustomerModule } from '../customer/customer.module';
+import { SupplierModule } from '../supplier/supplier.module';
 import { BankAccountModule } from '../bank-account/bank-account.module';
 
 @Module({
@@ -44,6 +46,8 @@ import { BankAccountModule } from '../bank-account/bank-account.module';
     StockModule,
     TreasuryModule,
     BankAccountModule,
+    CustomerModule,
+    SupplierModule,
   ],
   controllers: [OpeningBalanceController],
   providers: [OpeningBalanceService, OpeningBalanceAccountingBuilder],

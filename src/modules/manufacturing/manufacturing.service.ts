@@ -237,6 +237,10 @@ export class ManufacturingService {
     if (dto.components) {
       await this.replaceComponents(order.id, order.productId, order.quantity, dto.components);
     }
+    // Components / quantity / fee changed → the invoice line's cost follows the order.
+    if (dto.components || dto.quantity !== undefined || dto.manufacturingFee !== undefined) {
+      await this.production.syncEstimateAfterEdit(order.id, actorId);
+    }
     return saved;
   }
 

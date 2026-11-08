@@ -37,6 +37,13 @@ export interface StockLineInput {
   quantity: number;
   /** Required for `receive` (the incoming cost). Ignored by `issue`. */
   unitCost?: number;
+  /**
+   * `issue` only: leave at THIS cost instead of the warehouse average (a unit
+   * whose cost is known — a manufactured product leaves at its order's cost).
+   * The remaining units' average is recomputed without it, so the stock value
+   * stays equal to what is left.
+   */
+  exactUnitCost?: number;
 }
 
 export interface IssueOptions {
@@ -321,7 +328,8 @@ export class StockService {
         );
       }
 
-      const unitCost = round2(existing?.avgCost ?? item.unitCost ?? 0);
+      const exact = item.exactUnitCost !== undefined && item.exactUnitCost > 0 ? round2(item.exactUnitCost) : null;
+      const unitCost = exact ?? round2(existing?.avgCost ?? item.unitCost ?? 0);
 
       await movementRepo.save(
         movementRepo.create({
@@ -340,7 +348,13 @@ export class StockService {
       );
 
       if (existing) {
-        existing.quantity = round3(existing.quantity - quantity);
+        const left = round3(existing.quantity - quantity);
+        if (exact !== null && left > 0 && existing.quantity > 0) {
+          // value left = value before − what left at its own cost
+          const valueLeft = existing.quantity * (Number(existing.avgCost) || 0) - quantity * exact;
+          existing.avgCost = Math.max(0, Math.round((valueLeft / left) * 10000) / 10000);
+        }
+        existing.quantity = left;
         await stockRepo.save(existing);
       } else {
         await stockRepo.save(

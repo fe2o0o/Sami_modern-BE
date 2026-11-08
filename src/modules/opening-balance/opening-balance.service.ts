@@ -1,3 +1,7 @@
+import { CustomerLedgerService } from '../customer/customer-ledger.service';
+import { SupplierLedgerService } from '../supplier/supplier-ledger.service';
+import { CustomerTransactionType } from '../customer/enums/customer-transaction.enum';
+import { SupplierTransactionType } from '../supplier/enums/supplier-transaction.enum';
 import {
   BadRequestException,
   ConflictException,
@@ -7,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { BranchScope, isWithinBranchScope } from "../../common/utils/branch-scope.util";
-import { DataSource, In, Not, Repository } from 'typeorm';
+import { DataSource, In, Not, Repository, EntityManager } from 'typeorm';
 import { ExcelService } from '../../common/excel/excel.service';
 import { ImportColumn, UploadedExcel } from '../../common/excel/excel.types';
 import { OpeningBalance } from './entities/opening-balance.entity';
@@ -183,6 +187,8 @@ export class OpeningBalanceService {
     private readonly stockService: StockService,
     private readonly treasuryLedger: TreasuryLedgerService,
     private readonly bankLedger: BankLedgerService,
+    private readonly customerLedger: CustomerLedgerService,
+    private readonly supplierLedger: SupplierLedgerService,
     private readonly accountingBuilder: OpeningBalanceAccountingBuilder,
     private readonly dataSource: DataSource,
   ) {}
@@ -526,6 +532,9 @@ export class OpeningBalanceService {
         );
       }
 
+      // Customers' / suppliers' ledgers (their statements & balances read these).
+      await this.recordPartyOpening(details, openingBalance.id, openingBalance.openingDate, journalEntry.entryNumber, false, actorId, manager);
+
       openingBalance.status = OpeningBalanceStatus.POSTED;
       openingBalance.posted = true;
       openingBalance.postedAt = new Date();
@@ -535,6 +544,46 @@ export class OpeningBalanceService {
 
       return manager.getRepository(OpeningBalance).save(openingBalance);
     });
+  }
+
+  // =========================================================
+  // CUSTOMER / SUPPLIER SUBLEDGERS
+  // =========================================================
+  /**
+   * Opening balance of each customer / supplier on its own ledger (debit raises a
+   * customer's receivable, credit a supplier's payable — same sides as the GL).
+   * A reversal writes the opposite rows on the same source, so statements pair
+   * and hide them together («بدون القيود المعكوسة»).
+   */
+  private async recordPartyOpening(
+    details: OpeningBalanceDetail[],
+    openingBalanceId: string,
+    date: string,
+    entryNumber: string | null,
+    reversal: boolean,
+    actorId: string | undefined,
+    manager: EntityManager,
+  ): Promise<void> {
+    for (const d of details) {
+      const debit = reversal ? Number(d.credit) || 0 : Number(d.debit) || 0;
+      const credit = reversal ? Number(d.debit) || 0 : Number(d.credit) || 0;
+      if (debit <= 0 && credit <= 0) continue;
+      const base = {
+        transactionDate: date,
+        sourceType: OB_SOURCE_TYPE,
+        sourceId: openingBalanceId,
+        sourceNumber: entryNumber,
+        debit,
+        credit,
+        description: reversal ? 'عكس رصيد افتتاحي' : 'رصيد افتتاحي',
+        actorId: actorId ?? null,
+      };
+      if (d.referenceType === OpeningBalanceReferenceType.CUSTOMER && d.customerId) {
+        await this.customerLedger.record({ customerId: d.customerId, type: reversal ? CustomerTransactionType.REVERSAL : CustomerTransactionType.OPENING_BALANCE, ...base }, manager);
+      } else if (d.referenceType === OpeningBalanceReferenceType.SUPPLIER && d.supplierId) {
+        await this.supplierLedger.record({ supplierId: d.supplierId, type: reversal ? SupplierTransactionType.REVERSAL : SupplierTransactionType.OPENING_BALANCE, ...base }, manager);
+      }
+    }
   }
 
   // =========================================================
@@ -734,6 +783,8 @@ export class OpeningBalanceService {
           manager,
         );
       }
+
+      await this.recordPartyOpening(details, openingBalance.id, dto.reversalDate, reversalEntry.entryNumber, true, actorId, manager);
 
       openingBalance.status = OpeningBalanceStatus.REVERSED;
       openingBalance.reversalReason = dto.reason;

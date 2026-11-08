@@ -39,7 +39,8 @@ import {
   JournalEntryService,
   JournalLineInput,
 } from '../journal-entry/journal-entry.service';
-import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalEntryStatus, JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
+import { JournalEntry } from '../journal-entry/entities/journal-entry.entity';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { SalesDeliveryService } from '../sales-delivery/sales-delivery.service';
 import { ProductComponent } from '../product/entities/product-component.entity';
@@ -500,6 +501,40 @@ export class SalesInvoicePostingService {
         manager,
       );
       await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
+
+      // Cost adjustments posted later on this invoice (a manufacturing order edited /
+      // produced → «تسوية تكلفة مبيعات») are reversed with it.
+      const extras = await manager.getRepository(JournalEntry).find({
+        where: { sourceType: JournalSourceType.SALES_INVOICE, sourceId: invoice.id, status: JournalEntryStatus.POSTED },
+      });
+      for (const extra of extras.filter((e) => e.id !== original.id && e.id !== reversalEntry.id && !e.reversalOfJournalEntryId)) {
+        const full = await this.journalService.findWithLines(extra.id);
+        if (!full) continue;
+        const rev = await this.journalService.createSystemJournalEntry(
+          {
+            sourceType: JournalSourceType.SALES_INVOICE,
+            sourceId: invoice.id,
+            sourceNumber: invoice.invoiceNumber,
+            entryDate: dto.reversalDate,
+            fiscalYearId: period.fiscalYearId,
+            accountingPeriodId: period.id,
+            branchId: invoice.branchId,
+            description: `عكس ${full.description ?? 'تسوية تكلفة مبيعات'} — ${dto.reason}`,
+            reversalOfJournalEntryId: full.id,
+            lines: full.lines.map((l) => ({
+              accountId: l.accountId,
+              debit: Number(l.credit) || 0,
+              credit: Number(l.debit) || 0,
+              description: l.description ? `عكس: ${l.description}` : 'عكس تسوية تكلفة',
+              productId: l.productId ?? null,
+              warehouseId: l.warehouseId ?? null,
+            })),
+            actorId,
+          },
+          manager,
+        );
+        await this.journalService.markEntryReversed(full.id, rev.id, dto.reason, actorId, manager);
+      }
 
       // Reverse the customer receivable.
       if (invoice.paymentType === SalesPaymentType.CREDIT) {

@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { DataSource, EntityManager, In } from 'typeorm';
+import { DataSource, EntityManager, In, Not } from 'typeorm';
 import { isWithinBranchScope } from "../../common/utils/branch-scope.util";
 import { PurchaseInvoice } from './entities/purchase-invoice.entity';
 import { PurchaseInvoiceItem } from './entities/purchase-invoice-item.entity';
@@ -185,6 +185,8 @@ export class PurchaseInvoicePostingService {
       invoice.updatedBy = actorId ?? null;
 
       await manager.getRepository(PurchaseInvoice).save(invoice);
+      // The last purchase price becomes the product's cost (card).
+      await this.refreshLastPurchaseCost((invoice.items ?? []).map((i) => i.productId), manager);
       return this.reload(manager, id);
     });
   }
@@ -312,6 +314,8 @@ export class PurchaseInvoicePostingService {
       invoice.updatedBy = actorId ?? null;
 
       await manager.getRepository(PurchaseInvoice).save(invoice);
+      // Back to the latest purchase price still standing (unchanged when none is left).
+      await this.refreshLastPurchaseCost((invoice.items ?? []).map((i) => i.productId), manager);
       return this.reload(manager, id);
     });
   }
@@ -319,6 +323,31 @@ export class PurchaseInvoicePostingService {
   // =========================================================
   // ACCOUNTING
   // =========================================================
+  /**
+   * Product cost = its LAST purchase price: the net (after discount, before VAT)
+   * unit price on the latest POSTED purchase invoice, by invoice date. Recomputed
+   * after posting and after reversing, so an older-dated invoice never overrides a
+   * newer price and a reversed one hands the cost back to the previous purchase.
+   * With no posted purchase left the card keeps its cost (never set to 0).
+   */
+  private async refreshLastPurchaseCost(productIds: string[], manager: EntityManager): Promise<void> {
+    const ids = [...new Set(productIds.filter(Boolean))];
+    for (const productId of ids) {
+      const rows = (await manager.query(
+        `SELECT i.net_before_tax AS net, i.quantity AS qty
+           FROM purchase_invoice_items i
+           JOIN purchase_invoices pi ON pi.id = i.purchase_invoice_id
+          WHERE i.product_id = ? AND pi.status = ? AND pi.deleted_at IS NULL AND i.deleted_at IS NULL AND i.quantity > 0
+          ORDER BY pi.invoice_date DESC, pi.posted_at DESC, pi.updated_at DESC, i.line_number DESC
+          LIMIT 1`,
+        [productId, PurchaseInvoiceStatus.POSTED],
+      )) as Array<{ net: string; qty: string }>;
+      if (!rows.length) continue;
+      const unit = round2(Number(rows[0].net) / Number(rows[0].qty));
+      if (unit > 0) await manager.getRepository(Product).update({ id: productId, productType: Not(ProductType.SERVICE) }, { costPrice: unit });
+    }
+  }
+
   /** Net (after-discount, pre-VAT) unit cost a line is capitalized into stock at. */
   private netUnitCost(item: PurchaseInvoiceItem): number {
     const qty = item.quantity || 0;

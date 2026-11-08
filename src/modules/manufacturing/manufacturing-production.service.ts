@@ -23,6 +23,10 @@ import { SupplierTransactionType } from '../supplier/enums/supplier-transaction.
 import { missingAccountMessage } from '../product/product-accounts';
 import { JournalEntry } from '../journal-entry/entities/journal-entry.entity';
 import { JournalEntryStatus } from '../journal-entry/enums/journal-entry.enum';
+import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.entity';
+import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
+import { SalesInvoiceStatus } from '../sales-invoice/enums/sales-invoice.enum';
+import { unitCostsOf } from '../sales-invoice/product-unit-cost.util';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
@@ -658,6 +662,9 @@ export class ManufacturingProductionService {
       order.updatedBy = actorId ?? null;
       await manager.getRepository(ManufacturingOrder).save(order);
 
+      // The invoice line now carries the order's ACTUAL cost (components consumed + fee).
+      await this.syncInvoiceLineCost(order, round2(totalCost / order.quantity), date, 'actual', actorId, manager);
+
       // 6) Hand the produced goods to the linked delivery line. When the customer
       //    already returned that quantity (closed on the delivery order, production
       //    continued into stock) there is nothing to deliver — the order is finished.
@@ -716,6 +723,88 @@ export class ManufacturingProductionService {
     await repo.save(items);
     // quantity still owed to the customer on those lines
     return round3(items.reduce((sum, it) => sum + Math.max(0, (Number(it.orderedQuantity) || 0) - (Number(it.deliveredQuantity) || 0) - (Number(it.cancelledQuantity) || 0)), 0));
+  }
+
+  /**
+   * After an order's components / quantities / fee are edited (before production):
+   * re-estimate its cost and bring the invoice line's cost to it.
+   */
+  async syncEstimateAfterEdit(orderId: string, actorId?: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const order = await manager.findOne(ManufacturingOrder, { where: { id: orderId }, relations: { components: true }, lock: { mode: 'pessimistic_write' } });
+      if (!order || order.quantity <= 0) return;
+      if (order.status !== ManufacturingOrderStatus.NEW && order.status !== ManufacturingOrderStatus.IN_PROGRESS) return;
+      let components = 0;
+      for (const c of order.components ?? []) {
+        const cost = (await unitCostsOf(manager, [c.componentProductId], c.warehouseId ?? null)).get(c.componentProductId)?.cost ?? 0;
+        components += (Number(c.quantity) || 0) * cost;
+      }
+      const total = round2(components + (Number(order.manufacturingFee) || 0));
+      const t = new Date();
+      const today = `${t.getFullYear()}-${`${t.getMonth() + 1}`.padStart(2, '0')}-${`${t.getDate()}`.padStart(2, '0')}`;
+      await this.syncInvoiceLineCost(order, round2(total / order.quantity), today, 'estimate', actorId, manager);
+    });
+  }
+
+  /**
+   * A manufactured product's cost of sales comes from ITS order (components + fee),
+   * never the warehouse average. Brings the cost booked with the invoice line to
+   * `unitCost` × the quantity still open on it (not delivered / not returned), posting
+   * the difference: DR/CR cost of sales ↔ «بضاعة مباعة لم تُسلَّم». The entry is filed
+   * under the invoice, so reversing the invoice reverses it too.
+   */
+  private async syncInvoiceLineCost(
+    order: ManufacturingOrder,
+    unitCost: number,
+    date: string,
+    kind: 'estimate' | 'actual',
+    actorId: string | undefined,
+    manager: EntityManager,
+  ): Promise<void> {
+    if (!order.salesInvoiceItemId || !(unitCost >= 0)) return;
+    const item = await manager.findOne(SalesInvoiceItem, { where: { id: order.salesInvoiceItemId }, lock: { mode: 'pessimistic_write' } });
+    if (!item || item.lineType !== SalesLineType.MANUFACTURING) return;
+    const invoice = await manager.findOne(SalesInvoice, { where: { id: item.salesInvoiceId } });
+    if (!invoice || invoice.status !== SalesInvoiceStatus.POSTED) return;
+    const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+    const clearing = settings?.goodsSoldNotDeliveredAccountId;
+    if (!settings || !clearing) return; // cost is booked at delivery only — nothing accrued to adjust
+
+    const openQty = Math.round((Number(item.quantity) - (Number(item.deliveredQuantity) || 0) - (Number(item.cogsReleasedQty) || 0)) * 1000) / 1000;
+    if (openQty <= 0) return;
+    const currentOpen = round2((Number(item.cogsAccrued) || 0) - (Number(item.cogsAccruedSettled) || 0));
+    const delta = round2(unitCost * openQty - currentOpen);
+    item.cogsSource = kind === 'actual' ? 'manufacturing_order' : item.cogsSource && item.cogsSource.startsWith('manufacturing') ? item.cogsSource : 'manufacturing';
+    if (Math.abs(delta) >= 0.005) {
+      const product = await manager.getRepository(Product).findOne({ where: { id: item.productId } });
+      if (product) await applyEffectiveAccounts([product], manager);
+      const cogsAcc = product?.cogsAccountId ?? settings.costOfGoodsSoldAccountId;
+      if (!cogsAcc) throw new BadRequestException(missingAccountMessage('cogs', product?.name ?? ''));
+      const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
+      const what = `${item.productName ?? product?.name ?? ''} — أمر تصنيع ${order.orderNumber ?? ''} — فاتورة ${invoice.invoiceNumber ?? ''}`;
+      const label = kind === 'actual' ? 'التكلفة الفعلية للإنتاج' : 'تعديل أمر التصنيع';
+      const abs = Math.abs(delta);
+      await this.journalService.createSystemJournalEntry(
+        {
+          sourceType: JournalSourceType.SALES_INVOICE,
+          sourceId: invoice.id,
+          sourceNumber: invoice.invoiceNumber,
+          entryDate: date,
+          fiscalYearId: fiscalYear.id,
+          accountingPeriodId: period.id,
+          branchId: invoice.branchId,
+          description: `تسوية تكلفة مبيعات (${label}) — ${what}`,
+          lines: [
+            { accountId: cogsAcc, debit: delta > 0 ? abs : 0, credit: delta < 0 ? abs : 0, productId: item.productId, description: `تكلفة مبيعات — ${what}` },
+            { accountId: clearing, debit: delta < 0 ? abs : 0, credit: delta > 0 ? abs : 0, productId: item.productId, description: `بضاعة مباعة لم تُسلَّم — ${what}` },
+          ],
+          actorId: actorId ?? null,
+        },
+        manager,
+      );
+      item.cogsAccrued = round2((Number(item.cogsAccrued) || 0) + delta);
+    }
+    await manager.getRepository(SalesInvoiceItem).save(item);
   }
 
   private async resolvePostingContext(

@@ -260,6 +260,7 @@ export class SalesDeliveryPostingService {
       }
       // A manufacturing line is deliverable only once its production order is
       // produced (the finished goods are then in the warehouse assigned to it).
+      let orderUnitCost: number | undefined;
       if (item.lineType === SalesLineType.MANUFACTURING) {
         const mo = item.manufacturingOrderId
           ? await manager.getRepository(ManufacturingOrder).findOne({ where: { id: item.manufacturingOrderId } })
@@ -282,6 +283,8 @@ export class SalesDeliveryPostingService {
         } else if (!item.warehouseId) {
           throw new BadRequestException('صنف تصنيع — لم يُحدَّد مخزن الإنتاج بعد');
         }
+        // Delivered at ITS order's cost (components + fee), never the warehouse average.
+        if (produced && mo!.quantity > 0 && Number(mo!.totalCost) > 0) orderUnitCost = round2(Number(mo!.totalCost) / Number(mo!.quantity));
       }
       if (!item.warehouseId) throw new BadRequestException('لم يُحدَّد مخزن لهذا السطر');
       const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0) - (item.cancelledQuantity ?? 0));
@@ -302,7 +305,7 @@ export class SalesDeliveryPostingService {
 
       const number = delivery.deliveryNumber ?? (await this.sequenceService.nextDocumentNumber('DN', fiscalYear, manager));
       const stockLine: StockLineInput[] = [
-        { warehouseId: item.warehouseId!, productId: item.productId, productName: item.productName ?? undefined, quantity: qty },
+        { warehouseId: item.warehouseId!, productId: item.productId, productName: item.productName ?? undefined, quantity: qty, exactUnitCost: orderUnitCost },
       ];
       const issued = await this.stockService.issue(stockLine, manager, {
         movementType: StockMovementType.SALE,
