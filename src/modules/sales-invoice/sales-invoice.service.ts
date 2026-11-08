@@ -38,6 +38,7 @@ import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
 import { User } from '../user/entities/user.entity';
 import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
+import { noCostMessage, stockLinesWithoutCost, unitCostsOf, UnitCostSource } from './product-unit-cost.util';
 import { ProductImage } from '../product/entities/product-image.entity';
 import { paginate } from '../../common/utils/pagination.util';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
@@ -75,6 +76,9 @@ export interface SaleProductOption {
   onHand: number;
   /** Reserved by posted, undelivered invoices. */
   reserved: number;
+  /** Unit cost the invoice would book (0 = no cost: the product can't be sold from stock yet). */
+  unitCost: number;
+  costSource: UnitCostSource;
 }
 
 @Injectable()
@@ -519,6 +523,7 @@ export class SalesInvoiceService {
     );
     const stockByProduct = new Map(stocks.map((s): [string, (typeof stocks)[number]] => [s.productId, s]));
     const imgByProduct = new Map(images.map((i): [string, string] => [i.productId, i.url]));
+    const costs = await unitCostsOf(this.dataSource.manager, ids, warehouseId ?? null);
 
     return products.map((p) => ({
       id: p.id,
@@ -532,7 +537,24 @@ export class SalesInvoiceService {
       available: qtyByProduct.get(p.id) ?? 0,
       onHand: Math.round(Number(stockByProduct.get(p.id)?.quantity ?? 0) * 1000) / 1000,
       reserved: Math.round(Number(stockByProduct.get(p.id)?.reservedQuantity ?? 0) * 1000) / 1000,
+      unitCost: Math.round((costs.get(p.id)?.cost ?? 0) * 100) / 100,
+      costSource: costs.get(p.id)?.source ?? 'none',
     }));
+  }
+
+  /**
+   * Give a product with NO cost anywhere (no stock cost, empty card) its cost
+   * price, from the invoice. Never overwrites an existing cost — that stays a
+   * product-card / purchasing matter.
+   */
+  async setMissingCost(productId: string, costPrice: number): Promise<{ productId: string; unitCost: number }> {
+    const product = await this.productRepository.findOne({ where: { id: productId } });
+    if (!product) throw new NotFoundException('المنتج غير موجود');
+    const current = (await unitCostsOf(this.dataSource.manager, [productId], null)).get(productId);
+    if ((current?.cost ?? 0) > 0) throw new BadRequestException(`المنتج «${product.name}» له تكلفة بالفعل (${current!.cost}) — عدّلها من كارت المنتج`);
+    product.costPrice = Math.round(costPrice * 100) / 100;
+    await this.productRepository.save(product);
+    return { productId, unitCost: product.costPrice };
   }
 
   // =========================================================
@@ -566,6 +588,13 @@ export class SalesInvoiceService {
       where: { id: In(productIds) },
     });
     const productById = new Map(products.map((p): [string, Product] => [p.id, p]));
+
+    // A stock line needs a cost (warehouse average / any warehouse / product card).
+    const stockLines = itemsDto
+      .map((d) => ({ productId: d.productId, warehouseId: d.warehouseId ?? headerWarehouseId, productName: productById.get(d.productId)?.name ?? null, d }))
+      .filter((l) => (l.d.lineType ?? SalesLineType.STOCK) === SalesLineType.STOCK && productById.get(l.productId)?.trackInventory);
+    const noCost = await stockLinesWithoutCost(this.dataSource.manager, stockLines);
+    if (noCost.length) throw new BadRequestException(noCostMessage([...new Set(noCost.map((l) => l.productName ?? ''))]));
 
     const unitIds = [
       ...new Set(

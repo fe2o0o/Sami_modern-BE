@@ -150,7 +150,12 @@ export class ProductService {
           // A service never has stock, whatever the sheet says.
           trackInventory: productType === ProductType.SERVICE ? false : bool(v.trackInventory, true),
           isManufactured: bool(v.isManufactured, false),
-          costPrice: optNum(v.costPrice, 0),
+          costPrice: (() => {
+            const cost = optNum(v.costPrice, 0);
+            const stock = productType !== ProductType.SERVICE && bool(v.trackInventory, true);
+            if (stock && !(cost > 0)) throw new Error('سعر التكلفة مطلوب لمنتج المخزون (أكبر من صفر)');
+            return cost;
+          })(),
           sellingPrice: optNum(v.sellingPrice, 0),
           minQuantity: optNum(v.minQuantity, 0),
           reorderPoint: optNum(v.reorderPoint, 0),
@@ -184,9 +189,21 @@ export class ProductService {
     const code = await this.codeSettings.resolveCode('product', dto.code);
     await this.ensureUnique('code', code, undefined, 'كود المنتج مستخدم بالفعل');
     const { components, ...rest } = dto;
+    this.assertStockCost({ ...rest, ...this.inventoryFlag(rest) });
     const saved = await this.productRepository.save(this.productRepository.create({ ...rest, ...this.inventoryFlag(rest), code }));
     if (components?.length) await this.replaceComponents(saved.id, components);
     return this.findOne(saved.id);
+  }
+
+  /**
+   * A stock product must carry a cost: it is the last fallback of the cost of
+   * sales (after the warehouse averages), so a stock product is never sold at 0.
+   */
+  private assertStockCost(p: { productType?: ProductType; trackInventory?: boolean; costPrice?: number | null; name?: string }): void {
+    const stock = p.productType !== ProductType.SERVICE && p.trackInventory !== false;
+    if (stock && !(Number(p.costPrice) > 0)) {
+      throw new BadRequestException(`سعر التكلفة مطلوب لمنتج المخزون${p.name ? ` «${p.name}»` : ''} — لازم يكون أكبر من صفر`);
+    }
   }
 
   /** A service has no stock: never let it be flagged as inventory-tracked. */
@@ -329,6 +346,7 @@ export class ProductService {
     }
     const { components, ...rest } = dto;
     Object.assign(product, rest, this.inventoryFlag({ ...product, ...rest }));
+    this.assertStockCost(product);
     await this.productRepository.save(product);
     // Replace the BOM only when the caller sent a components array.
     if (components !== undefined) await this.replaceComponents(id, components);

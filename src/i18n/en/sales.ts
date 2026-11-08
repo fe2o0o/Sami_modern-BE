@@ -195,4 +195,7 @@ export const sales: Record<string, string> = {
   "البيع السريع نقدي فقط": "Quick sale is cash only",
   "اختر: إيقاف التصنيع أو استكماله واستلامه في المخزن": "Choose: stop manufacturing, or finish it into stock",
   "ملغى بالمرتجع": "Cancelled by return",
+  "تم تحديد تكلفة المنتج": "Product cost set",
+  "التكلفة يجب أن تكون رقماً": "Cost must be a number",
+  "التكلفة يجب أن تكون أكبر من صفر": "Cost must be greater than zero",
 };

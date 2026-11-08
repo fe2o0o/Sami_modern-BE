@@ -1,3 +1,4 @@
+import { SetProductCostDto } from './dto/set-product-cost.dto';
 import {
   Body,
   Controller,
@@ -39,6 +40,14 @@ export class SalesInvoiceController {
   @ApiOperation({ summary: 'منتجات البيع مع السعر والمتاح في المخزن' })
   products(@Query('warehouseId') warehouseId?: string) {
     return this.service.saleProducts(warehouseId);
+  }
+
+  @Post('products/:productId/cost')
+  @RequirePermissions('sales_invoices.create')
+  @ResponseMessage('تم تحديد تكلفة المنتج')
+  @ApiOperation({ summary: 'تحديد تكلفة منتج ليس له أي تكلفة (من شاشة الفاتورة) — لا يعدّل تكلفة موجودة' })
+  setProductCost(@Param('productId', ParseUUIDPipe) productId: string, @Body() dto: SetProductCostDto) {
+    return this.service.setMissingCost(productId, dto.costPrice);
   }
 
   @Get('summary')

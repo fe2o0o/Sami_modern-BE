@@ -44,6 +44,7 @@ import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { SalesDeliveryService } from '../sales-delivery/sales-delivery.service';
 import { ProductComponent } from '../product/entities/product-component.entity';
 import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
+import { noCostMessage, stockLinesWithoutCost } from './product-unit-cost.util';
 import { missingAccountMessage } from '../product/product-accounts';
 
 /**
@@ -141,6 +142,11 @@ export class SalesInvoicePostingService {
 
       // All account mappings must resolve BEFORE we touch stock.
       this.validateAccounts(invoice, items, products, settings);
+      const noCost = await stockLinesWithoutCost(
+        manager,
+        items.filter((i) => i.lineType === SalesLineType.STOCK && products.get(i.productId)?.trackInventory),
+      );
+      if (noCost.length) throw new BadRequestException(noCostMessage([...new Set(noCost.map((i) => i.productName ?? products.get(i.productId)?.name ?? ''))]));
       const quick = invoice.isQuickSale;
       if (quick) {
         if (invoice.paymentType !== SalesPaymentType.CASH) throw new BadRequestException('البيع السريع نقدي فقط');

@@ -345,4 +345,5 @@ export const masterData: Record<string, string> = {
   'تم عكس العهدة': 'Custody reversed',
   'تم تسجيل التسوية': 'Settlement recorded',
   'تم عكس التسوية': 'Settlement reversed',
+  "سعر التكلفة مطلوب لمنتج المخزون (أكبر من صفر)": "Cost price is required for a stock product (greater than zero)",
 };
