@@ -44,6 +44,13 @@ export class HrMoneyController {
     return this.advances.summary(q, scope);
   }
 
+  @Get('hr/advances/linkable-entries/:employeeId')
+  @RequirePermissions('advances.view')
+  @ApiOperation({ summary: 'قيود على حساب السلف لهذا الموظف بدون مستند سلفة (للتسجيل من رصيد قائم)' })
+  linkableEntries(@Param('employeeId', ParseUUIDPipe) employeeId: string) {
+    return this.advances.linkableEntries(employeeId);
+  }
+
   @Get('hr/advances/employee-context/:employeeId')
   @RequirePermissions('advances.view')
   @ApiOperation({ summary: 'صافي راتب الموظف وسلفه المفتوحة والحد الأقصى للسلفة' })

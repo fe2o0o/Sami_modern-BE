@@ -288,4 +288,6 @@ export const finance: Record<string, string> = {
   "يمكن التسجيل من رصيد قائم لسلفة معتمدة فقط": "Only an approved advance can be registered from an existing balance",
   "تم تسجيل السلفة من الرصيد القائم": "Advance registered from the existing balance",
   "التاريخ غير صحيح": "Invalid date",
+  "اختر القيد": "Choose the journal entry",
+  "القيد المختار ليس قيد سلفة لهذا الموظف، أو مربوط بسلفة أخرى بالفعل": "The chosen entry is not an advances entry of this employee, or is already linked to another advance",
 };

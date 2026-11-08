@@ -88,6 +88,10 @@ export class EmployeeAdvance extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   fromExistingBalance!: boolean;
 
+  /** The journal entry (usually manual) that put this money on the advances account. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  linkedJournalEntryId!: string | null;
+
   @Column({ type: 'text', nullable: true })
   cancelReason!: string | null;
 

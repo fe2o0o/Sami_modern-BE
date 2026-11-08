@@ -102,9 +102,10 @@ export class PayAdvanceDto {
 
 /** Register an approved advance against a balance already on the advances account. */
 export class LinkAdvanceBalanceDto {
-  @ApiProperty({ format: 'date', description: 'تاريخ التسجيل' })
-  @IsDateString({}, { message: 'التاريخ غير صحيح' })
-  date!: string;
+  /** The posted entry that moved the money to the advances account (see `linkable-entries`). */
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID(undefined, { message: 'اختر القيد' })
+  journalEntryId!: string;
 }
 
 export class RepayAdvanceDto {

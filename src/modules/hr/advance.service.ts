@@ -10,6 +10,8 @@ import { Employee } from '../employee/entities/employee.entity';
 import { EmployeeAdvance, EmployeeAdvanceInstallment, EmployeeAdvanceRepayment } from './entities/employee-advance.entity';
 import { AdvanceQueryDto, CreateAdvanceDto, HrReasonDto, LinkAdvanceBalanceDto, PayAdvanceDto, RepayAdvanceDto } from './dto/advance.dto';
 import { JournalEntryLine } from '../journal-entry/entities/journal-entry-line.entity';
+import { JournalEntryStatus } from '../journal-entry/enums/journal-entry.enum';
+import { JournalEntry } from '../journal-entry/entities/journal-entry.entity';
 import { AdvanceStatus, HrCashMethod, HrMovementStatus, InstallmentStatus } from './enums/advance.enum';
 import { HrPostingHelper } from './hr-posting.helper';
 
@@ -85,7 +87,10 @@ export class AdvanceService {
     });
     if (!a || !isWithinBranchScope(a.branchId, scope)) throw new NotFoundException('لم يتم العثور على السلفة');
     const context = await this.employeeContext(a.employeeId, a.id);
-    return { ...a, remaining: this.remaining(a), employeeContext: context };
+    const linked = a.linkedJournalEntryId
+      ? await this.dataSource.getRepository(JournalEntry).findOne({ where: { id: a.linkedJournalEntryId }, select: { id: true, entryNumber: true }, withDeleted: true })
+      : null;
+    return { ...a, remaining: this.remaining(a), employeeContext: context, linkedEntryNumber: linked?.entryNumber ?? null };
   }
 
   private remaining(a: EmployeeAdvance): number {
@@ -312,6 +317,49 @@ export class AdvanceService {
   }
 
   /**
+   * Posted entries that put money on this employee's advances account and have no
+   * advance document yet: not an HR advance itself, not reversed / a reversal, and
+   * not already linked to a live advance. One row per entry (its debit there).
+   */
+  async linkableEntries(employeeId: string, manager: EntityManager = this.dataSource.manager, excludeAdvanceId?: string) {
+    const { advances } = await this.posting.accounts(manager);
+    if (!advances) return [];
+    const rows = await manager
+      .getRepository(JournalEntryLine)
+      .createQueryBuilder('l')
+      .innerJoin('l.journalEntry', 'je')
+      .select('je.id', 'journalEntryId')
+      .addSelect('MAX(je.entryNumber)', 'entryNumber')
+      .addSelect('MAX(je.entryDate)', 'entryDate')
+      .addSelect('MAX(je.description)', 'description')
+      .addSelect('MAX(je.sourceType)', 'sourceType')
+      .addSelect('COALESCE(SUM(l.debit - l.credit), 0)', 'amount')
+      .where('je.isPosted = 1')
+      .andWhere('je.status = :posted', { posted: JournalEntryStatus.POSTED })
+      .andWhere('je.reversalOfJournalEntryId IS NULL')
+      .andWhere('je.sourceType <> :adv', { adv: JournalSourceType.EMPLOYEE_ADVANCE })
+      .andWhere('l.accountId = :acc', { acc: advances })
+      .andWhere('l.employeeId = :e', { e: employeeId })
+      .groupBy('je.id')
+      .having('SUM(l.debit - l.credit) > 0.009')
+      .orderBy('MAX(je.entryDate)', 'ASC')
+      .getRawMany<{ journalEntryId: string; entryNumber: string | null; entryDate: string | Date; description: string | null; sourceType: string; amount: string }>();
+    const taken = await manager
+      .getRepository(EmployeeAdvance)
+      .createQueryBuilder('a')
+      .select('a.linkedJournalEntryId', 'id')
+      .where('a.linkedJournalEntryId IS NOT NULL')
+      .andWhere('a.status NOT IN (:...gone)', { gone: [AdvanceStatus.REVERSED, AdvanceStatus.CANCELLED] })
+      .andWhere(excludeAdvanceId ? 'a.id <> :x' : '1=1', { x: excludeAdvanceId })
+      .getRawMany<{ id: string }>();
+    const used = new Set(taken.map((t) => t.id));
+    const ymd = (v: string | Date) => (v instanceof Date ? `${v.getFullYear()}-${`${v.getMonth() + 1}`.padStart(2, '0')}-${`${v.getDate()}`.padStart(2, '0')}` : String(v).slice(0, 10));
+    return rows
+      .filter((r) => !used.has(r.journalEntryId))
+      .map((r) => ({ ...r, entryDate: ymd(r.entryDate), amount: round2(Number(r.amount)) }));
+  }
+
+  /**
    * «سلفة من رصيد قائم»: an approved advance becomes «paid» against money that
    * is already on the advances account — no journal entry, no cash movement.
    * It is limited to the balance no other advance document covers, so the same
@@ -322,16 +370,22 @@ export class AdvanceService {
     return this.dataSource.transaction(async (manager) => {
       const a = await this.lock(id, manager, scope);
       if (a.status !== AdvanceStatus.APPROVED) throw new BadRequestException('يمكن التسجيل من رصيد قائم لسلفة معتمدة فقط');
+      const entry = (await this.linkableEntries(a.employeeId, manager, a.id)).find((r) => r.journalEntryId === dto.journalEntryId);
+      if (!entry) throw new BadRequestException('القيد المختار ليس قيد سلفة لهذا الموظف، أو مربوط بسلفة أخرى بالفعل');
+      if (a.amount > entry.amount + 0.009) {
+        throw new BadRequestException(`مبلغ السلفة (${a.amount}) أكبر من مبلغ القيد ${entry.entryNumber ?? ''} على حساب السلف (${entry.amount})`);
+      }
       const available = await this.untrackedBalance(a.employeeId, manager, a.id);
       if (a.amount > available + 0.009) {
         throw new BadRequestException(`مبلغ السلفة (${a.amount}) أكبر من رصيد السلف القائم غير المسجّل للموظف (${available}) — سجّل سلفة بالمبلغ المتاح أو اصرفها نقداً`);
       }
-      const { fiscalYear } = await this.posting.context(dto.date, manager);
+      const { fiscalYear } = await this.posting.context(entry.entryDate, manager);
       const number = await this.sequences.nextDocumentNumber('ADV', fiscalYear, manager);
       Object.assign(a, {
         advanceNumber: number,
         status: AdvanceStatus.PAID,
-        paidDate: dto.date,
+        paidDate: entry.entryDate,
+        linkedJournalEntryId: entry.journalEntryId,
         paymentMethod: null,
         treasuryId: null,
         bankAccountId: null,
