@@ -18,6 +18,8 @@ export interface GeneralLedgerMovement {
   date: string;
   description: string | null;
   sourceType: string;
+  /** The document behind the entry (for a link to it). */
+  sourceId: string | null;
   sourceNumber: string | null;
   debit: number;
   credit: number;
@@ -112,6 +114,7 @@ export class GeneralLedgerService {
       .addSelect('je.entryDate', 'entryDate')
       .addSelect('je.description', 'entryDescription')
       .addSelect('je.sourceType', 'sourceType')
+      .addSelect('je.sourceId', 'sourceId')
       .addSelect('je.sourceNumber', 'sourceNumber')
       .addSelect('l.debit', 'debit')
       .addSelect('l.credit', 'credit')
@@ -127,6 +130,7 @@ export class GeneralLedgerService {
         entryDate: string;
         entryDescription: string | null;
         sourceType: string;
+        sourceId: string | null;
         sourceNumber: string | null;
         debit: string;
         credit: string;
@@ -141,9 +145,11 @@ export class GeneralLedgerService {
     const movements: GeneralLedgerMovement[] = rows.map((r, i) => ({
       journalEntryId: r.journalEntryId,
       entryNumber: r.entryNumber,
-      date: r.entryDate,
+      // a DATE column comes back as a JS Date (midnight local) → keep the calendar day, not an UTC timestamp
+      date: ymd(r.entryDate),
       description: r.lineDescription || r.entryDescription,
       sourceType: r.sourceType,
+      sourceId: r.sourceId ?? null,
       sourceNumber: r.sourceNumber,
       debit: round2(Number(r.debit)),
       credit: round2(Number(r.credit)),
@@ -275,4 +281,10 @@ export class GeneralLedgerService {
       query,
     );
   }
+}
+
+/** yyyy-mm-dd of a DATE value (mysql2 returns it as a local-midnight Date). */
+function ymd(v: unknown): string {
+  if (v instanceof Date) return `${v.getFullYear()}-${`${v.getMonth() + 1}`.padStart(2, '0')}-${`${v.getDate()}`.padStart(2, '0')}`;
+  return String(v ?? '').slice(0, 10);
 }
