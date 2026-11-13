@@ -18,6 +18,7 @@ import {
 } from 'class-validator';
 import { SalesDiscountType } from '../enums/sales-invoice.enum';
 import { SalesInvoiceCommissionDto } from './sales-invoice-commission.dto';
+import { SalesPaymentDto } from './sales-payment.dto';
 
 const trimOrNull = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() || null : value);
 
@@ -60,28 +61,6 @@ export class QuickSaleItemDto {
   vatRate?: number;
 }
 
-/** One part of the collection — e.g. part cash in a treasury, the rest to a bank. */
-export class QuickSalePaymentDto {
-  @ApiProperty({ format: 'uuid', description: 'حساب الخزنة / البنك' })
-  @IsUUID(undefined, { message: 'حساب التحصيل غير صحيح' })
-  cashAccountId!: string;
-
-  /** Which treasury / bank exactly — needed when several share one GL account. */
-  @ApiPropertyOptional({ format: 'uuid' })
-  @IsOptional()
-  @IsUUID(undefined, { message: 'الخزنة غير صحيحة' })
-  treasuryId?: string | null;
-
-  @ApiPropertyOptional({ format: 'uuid' })
-  @IsOptional()
-  @IsUUID(undefined, { message: 'الحساب البنكي غير صحيح' })
-  bankAccountId?: string | null;
-
-  @ApiProperty({ minimum: 0.01 })
-  @IsNumber({}, { message: 'المبلغ المحصّل يجب أن يكون رقماً' })
-  @Min(0.01, { message: 'المبلغ المحصّل يجب أن يكون أكبر من صفر' })
-  amount!: number;
-}
 
 /**
  * Quick sale (بيع سريع): a CASH sale from one warehouse to a walk-in customer who
@@ -126,13 +105,13 @@ export class QuickSaleDto {
 
   /** Split collection (more than one treasury / bank). Σ amount must equal the invoice
    *  total; when given it replaces `cashAccountId`. */
-  @ApiPropertyOptional({ type: [QuickSalePaymentDto] })
+  @ApiPropertyOptional({ type: [SalesPaymentDto] })
   @IsOptional()
   @IsArray()
-  @ArrayUnique((p: QuickSalePaymentDto) => p?.treasuryId ?? p?.bankAccountId ?? p?.cashAccountId, { message: 'حساب التحصيل مكرر' })
+  @ArrayUnique((p: SalesPaymentDto) => p?.treasuryId ?? p?.bankAccountId ?? p?.cashAccountId, { message: 'حساب التحصيل مكرر' })
   @ValidateNested({ each: true })
-  @Type(() => QuickSalePaymentDto)
-  payments?: QuickSalePaymentDto[];
+  @Type(() => SalesPaymentDto)
+  payments?: SalesPaymentDto[];
 
   /** Sales commission lines — exactly as on a normal invoice (employee + percentage / fixed amount). */
   @ApiPropertyOptional({ type: [SalesInvoiceCommissionDto] })

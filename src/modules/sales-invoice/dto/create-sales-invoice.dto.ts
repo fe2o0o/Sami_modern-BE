@@ -1,3 +1,4 @@
+import { SalesPaymentDto } from './sales-payment.dto';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -53,6 +54,18 @@ export class CreateSalesInvoiceDto {
   @IsOptional()
   @IsUUID()
   cashAccountId?: string | null;
+
+  /**
+   * Cash sale collected through one or more treasuries / banks (e.g. part cash,
+   * the rest to a bank) — Σ amount = invoice total when more than one.
+   * One row = the whole total. Ignored for a credit sale.
+   */
+  @ApiPropertyOptional({ type: [SalesPaymentDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SalesPaymentDto)
+  payments?: SalesPaymentDto[];
 
   @ApiPropertyOptional()
   @IsOptional()

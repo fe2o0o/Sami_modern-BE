@@ -153,11 +153,12 @@ export class SalesInvoicePostingService {
         if (invoice.paymentType !== SalesPaymentType.CASH) throw new BadRequestException('البيع السريع نقدي فقط');
         const bad = items.find((i) => i.lineType !== SalesLineType.STOCK || !products.get(i.productId)?.trackInventory);
         if (bad) throw new BadRequestException(`البيع السريع من المخزن فقط — «${bad.productName ?? ''}» ليس صنفاً مخزنياً`);
-        if ((invoice.cashSplits?.length ?? 0) > 1) {
-          const paid = Math.round(invoice.cashSplits!.reduce((s, p) => s + Number(p.amount), 0) * 100) / 100;
-          if (Math.abs(paid - Number(invoice.totalAmount)) > 0.005) {
-            throw new BadRequestException(`مجموع المبالغ المحصّلة (${paid.toFixed(2)}) لا يساوي إجمالي الفاتورة (${Number(invoice.totalAmount).toFixed(2)})`);
-          }
+      }
+      // A cash sale split over several treasuries / banks must collect exactly the total.
+      if (invoice.paymentType === SalesPaymentType.CASH && (invoice.cashSplits?.length ?? 0) > 1) {
+        const paid = Math.round(invoice.cashSplits!.reduce((s, p) => s + Number(p.amount), 0) * 100) / 100;
+        if (Math.abs(paid - Number(invoice.totalAmount)) > 0.005) {
+          throw new BadRequestException(`مجموع المبالغ المحصّلة (${paid.toFixed(2)}) لا يساوي إجمالي الفاتورة (${Number(invoice.totalAmount).toFixed(2)})`);
         }
       }
 

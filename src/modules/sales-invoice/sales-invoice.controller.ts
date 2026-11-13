@@ -95,6 +95,32 @@ export class SalesInvoiceController {
     return this.quick.createDraft(dto, actorId, branchScope);
   }
 
+  @Put('quick/:id')
+  @RequirePermissions('sales_invoices.edit')
+  @ResponseMessage('تم حفظ مسودة البيع السريع')
+  @ApiOperation({ summary: 'بيع سريع: تعديل مسودة (من نافذة البيع السريع)' })
+  quickSaleUpdate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: QuickSaleDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.quick.updateDraft(id, dto, actorId, branchScope);
+  }
+
+  @Post('quick/:id/post')
+  @RequirePermissions('sales_invoices.edit', 'sales_invoices.post')
+  @ResponseMessage('تم ترحيل فاتورة البيع السريع بنجاح')
+  @ApiOperation({ summary: 'بيع سريع: حفظ المسودة المعدّلة وترحيلها (صرف من المخزن — بدون إذن تسليم)' })
+  quickSaleUpdateAndPost(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: QuickSaleDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.quick.updateAndPost(id, dto, actorId, branchScope);
+  }
+
   @Post()
   @RequirePermissions('sales_invoices.create')
   @ResponseMessage('تم حفظ فاتورة المبيعات كمسودة بنجاح')

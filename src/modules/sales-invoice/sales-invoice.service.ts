@@ -1,3 +1,4 @@
+import { namedCashSplits } from './cash-splits.util';
 import {
   BadRequestException,
   Injectable,
@@ -58,6 +59,8 @@ export interface SalesInvoiceListItem {
   status: SalesInvoiceStatus;
   /** Sales employees on the invoice (its commission lines). */
   salesEmployees: string[];
+  /** Quick-sale draft → edited in the quick-sale popup. */
+  isQuickSale?: boolean;
 }
 
 /** A product row for the invoice product picker (image/price/available aware). */
@@ -138,7 +141,11 @@ export class SalesInvoiceService {
       fiscalYearId: dto.fiscalYearId,
       accountingPeriodId: dto.accountingPeriodId,
       paymentType: dto.paymentType ?? SalesPaymentType.CREDIT,
-      cashAccountId: dto.cashAccountId ?? null,
+      cashAccountId: dto.cashAccountId ?? dto.payments?.[0]?.cashAccountId ?? null,
+      // Cash collected through one or more treasuries / banks (the exact ones).
+      ...((dto.paymentType === SalesPaymentType.CASH && dto.payments?.length)
+        ? { cashSplits: await namedCashSplits(this.dataSource.manager, dto.payments) }
+        : {}),
       notes: dto.notes ?? null,
       status: SalesInvoiceStatus.DRAFT,
       subtotal: totals.subtotal,
@@ -161,8 +168,12 @@ export class SalesInvoiceService {
     dto: UpdateSalesInvoiceDto,
     actorId?: string,
     branchScope: BranchScope = null,
+    opts: { quickSale?: boolean } = {},
   ): Promise<SalesInvoice> {
     const invoice = await this.getEditableDraft(id, branchScope);
+    if (invoice.isQuickSale && !opts.quickSale) {
+      throw new BadRequestException('هذه مسودة بيع سريع — عدّلها من نافذة البيع السريع');
+    }
 
     if (dto.customerId) invoice.customerId = dto.customerId;
     if (dto.invoiceDate) invoice.invoiceDate = dto.invoiceDate;
@@ -182,6 +193,12 @@ export class SalesInvoiceService {
     if (dto.accountingPeriodId) invoice.accountingPeriodId = dto.accountingPeriodId;
     if (dto.paymentType) invoice.paymentType = dto.paymentType;
     if (dto.cashAccountId !== undefined) invoice.cashAccountId = dto.cashAccountId ?? null;
+    if (invoice.paymentType !== SalesPaymentType.CASH) {
+      invoice.cashSplits = null; // a credit sale collects nothing now
+    } else if (dto.payments !== undefined) {
+      invoice.cashSplits = dto.payments.length ? await namedCashSplits(this.dataSource.manager, dto.payments) : null;
+      if (dto.payments[0]) invoice.cashAccountId = dto.payments[0].cashAccountId;
+    }
     if (dto.notes !== undefined) invoice.notes = dto.notes ?? null;
     await this.assertHeaderRefs({
       customerId: invoice.customerId,
@@ -291,6 +308,7 @@ export class SalesInvoiceService {
       totalAmount: i.totalAmount,
       remainingAmount: i.remainingAmount,
       status: i.status,
+      isQuickSale: !!i.isQuickSale,
       salesEmployees: reps.get(i.id) ?? [],
     }));
 
