@@ -97,6 +97,7 @@ export const PERMISSION_CATALOG: PermissionGroupDef[] = [
       { module: 'attendance', labelAr: 'الحضور والانصراف', actions: [A.VIEW, A.MANAGE] },
       { module: 'leaves', labelAr: 'إجازات الموظفين', actions: [A.VIEW, A.CREATE, A.APPROVE, A.MANAGE] },
       { module: 'hr_requests', labelAr: 'طلبات الموظفين', actions: [A.VIEW, A.MANAGE] },
+      { module: 'work_permissions', labelAr: 'أذونات الموظفين (مأمورية / شخصي)', actions: [A.VIEW, A.CREATE, A.APPROVE, A.MANAGE] },
     ],
   },
   {

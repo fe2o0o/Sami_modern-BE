@@ -1,4 +1,5 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, HttpCode, NotFoundException, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
@@ -9,9 +10,12 @@ import { AttendancePunchService } from './attendance-punch.service';
 import { LeaveService } from './leave.service';
 import { HrRequestService } from './hr-request.service';
 import { PortalService } from './portal.service';
+import { MySalesService } from './my-sales.service';
+import { PermissionService } from './permission.service';
+import { PermissionBodyDto, PermissionPreviewQueryDto } from './dto/permission.dto';
 import { AppFeature, HrRequestStatus, LeaveRequestStatus, RequestSource, appFeaturesOf } from './attendance.enum';
 import { cairoToday } from './attendance-time.util';
-import { AppListQueryDto, HrRequestBodyDto, LeavePreviewQueryDto, LeaveRequestBodyDto } from './dto/leave.dto';
+import { AppListQueryDto, MySalesQueryDto, HrRequestBodyDto, LeavePreviewQueryDto, LeaveRequestBodyDto } from './dto/leave.dto';
 
 /** «بوابة الموظف» — home summary, leave, HR requests, product catalog, customer balances. */
 @ApiTags('Employee App')
@@ -26,6 +30,9 @@ export class EmployeePortalController {
     private readonly leave: LeaveService,
     private readonly requests: HrRequestService,
     private readonly portal: PortalService,
+    private readonly sales: MySalesService,
+    private readonly permissions: PermissionService,
+    private readonly dataSource: DataSource,
   ) {}
 
   @Get('home')
@@ -42,6 +49,8 @@ export class EmployeePortalController {
     if (features.includes(AppFeature.LEAVE)) {
       const year = Number(cairoToday().slice(0, 4));
       const [balances, mine] = await Promise.all([this.leave.balancesFor([e.id], year), this.leave.mine(e.id)]);
+      const perm = await this.permissions.mine(e.id);
+      out['permissions'] = { pending: perm.items.filter((x) => x.status === LeaveRequestStatus.PENDING).length, balance: perm.balance };
       out['leave'] = {
         balances: (balances.get(e.id) ?? []).filter((b) => b.hasBalance),
         pending: mine.filter((l) => l.status === LeaveRequestStatus.PENDING).length,
@@ -51,6 +60,9 @@ export class EmployeePortalController {
     if (features.includes(AppFeature.REQUESTS)) {
       const mine = await this.requests.mine(e.id);
       out['requests'] = { open: mine.filter((r) => r.status === HrRequestStatus.NEW || r.status === HrRequestStatus.IN_PROGRESS).length };
+    }
+    if (features.includes(AppFeature.SALES)) {
+      out['sales'] = await this.sales.monthCard(e);
     }
     return out;
   }
@@ -84,6 +96,35 @@ export class EmployeePortalController {
   @ResponseMessage('تم سحب الطلب')
   cancelLeave(@CurrentEmployee() e: Employee, @Param('id', ParseUUIDPipe) id: string) {
     return this.leave.cancelMine(e.id, id);
+  }
+
+  // ── permissions (مأمورية / شخصي) — part of the leave section ──
+  @Get('permissions')
+  @RequireAppFeature(AppFeature.LEAVE)
+  @ApiOperation({ summary: 'أذوناتي ورصيد الإذن الشخصي هذا الشهر' })
+  myPermissions(@CurrentEmployee() e: Employee) {
+    return this.permissions.mine(e.id);
+  }
+
+  @Get('permissions/preview')
+  @RequireAppFeature(AppFeature.LEAVE)
+  previewPermission(@CurrentEmployee() e: Employee, @Query() q: PermissionPreviewQueryDto) {
+    return this.permissions.preview(e, q);
+  }
+
+  @Post('permissions')
+  @RequireAppFeature(AppFeature.LEAVE)
+  @ResponseMessage('تم إرسال طلب الإذن')
+  requestPermission(@CurrentEmployee() e: Employee, @Body() dto: PermissionBodyDto) {
+    return this.permissions.create(e, dto, RequestSource.APP, null);
+  }
+
+  @Post('permissions/:id/cancel')
+  @HttpCode(200)
+  @RequireAppFeature(AppFeature.LEAVE)
+  @ResponseMessage('تم سحب الطلب')
+  cancelPermission(@CurrentEmployee() e: Employee, @Param('id', ParseUUIDPipe) id: string) {
+    return this.permissions.cancelMine(e.id, id);
   }
 
   // ── HR requests ──
@@ -138,5 +179,24 @@ export class EmployeePortalController {
   @RequireAppFeature(AppFeature.CUSTOMERS)
   customer(@CurrentEmployee() e: Employee, @Param('id', ParseUUIDPipe) id: string) {
     return this.portal.customer(e, id);
+  }
+
+  // ── «مبيعاتي» ──
+  @Get('sales')
+  @RequireAppFeature(AppFeature.SALES)
+  @ApiOperation({ summary: 'مبيعاتي: الفواتير والعملاء والمنتجات وحالة التسليم (بدون عمولات)' })
+  async mySales(@CurrentEmployee() e: Employee, @Query() q: MySalesQueryDto) {
+    if (!q.employeeId || q.employeeId === e.id) return this.sales.mySales(e, q.from, q.to);
+    if (!appFeaturesOf(e).includes(AppFeature.SALES_ALL)) throw new ForbiddenException('عرض مبيعات الموظفين الآخرين غير متاح لك');
+    const other = await this.dataSource.getRepository(Employee).findOne({ where: { id: q.employeeId }, withDeleted: true });
+    if (!other) throw new NotFoundException('الموظف غير موجود');
+    return this.sales.mySales(other, q.from, q.to, await this.portal.branchIdsOf(e.id));
+  }
+
+  @Get('sales/team')
+  @RequireAppFeature(AppFeature.SALES_ALL)
+  @ApiOperation({ summary: 'مبيعات كل الموظفين (في فروعي) — بدون عمولات' })
+  async salesTeam(@CurrentEmployee() e: Employee, @Query() q: MySalesQueryDto) {
+    return this.sales.team(q.from, q.to, await this.portal.branchIdsOf(e.id));
   }
 }

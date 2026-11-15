@@ -5,7 +5,8 @@ import { AttendanceShift } from './entities/attendance-shift.entity';
 import { AttendanceHoliday } from './entities/attendance-holiday.entity';
 import { AttendancePunch } from './entities/attendance-punch.entity';
 import { LeaveRequest } from './entities/leave-request.entity';
-import { AttendanceDayStatus, LeaveRequestStatus, PunchStatus, PunchType } from './attendance.enum';
+import { AttendancePermission } from './entities/attendance-permission.entity';
+import { AttendanceDayStatus, LeaveRequestStatus, PERMISSION_TYPE_LABELS, PermissionType, PunchStatus, PunchType } from './attendance.enum';
 import { addDays, cairoParts, hhmmToMinutes, minutesToHhmm, weekdayOf } from './attendance-time.util';
 
 /** One employee-day, computed from the accepted punches (Cairo time). */
@@ -29,6 +30,30 @@ export interface AttendanceDay {
   overtimeMinutes: number;
   punchCount: number;
   branchName: string | null;
+  /** Approved permissions of the day («مأمورية 10:00–12:00 · إذن شخصي 09:00–10:00»). */
+  permissionNote: string | null;
+  /** Minutes credited as work by approved missions (already inside workedMinutes). */
+  missionMinutes: number;
+}
+
+type Interval = [number, number];
+/** Merge overlapping intervals. */
+function union(list: Interval[]): Interval[] {
+  const sorted = list.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+  const out: Interval[] = [];
+  for (const [a, b] of sorted) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+const lengthOf = (list: Interval[]) => union(list).reduce((s, [a, b]) => s + (b - a), 0);
+/** Minutes of [a, b] NOT covered by `cover`. */
+function uncovered(a: number, b: number, cover: Interval[]): number {
+  if (b <= a) return 0;
+  const inside = union(cover).reduce((s, [x, y]) => s + Math.max(0, Math.min(b, y) - Math.max(a, x)), 0);
+  return Math.max(0, b - a - inside);
 }
 
 export interface AttendanceTotals {
@@ -96,7 +121,7 @@ export class AttendanceCalcService {
     if (!employees.length) return out;
     const ids = employees.map((e) => e.id);
 
-    const [shifts, defShift, punches, holidays, leaves] = await Promise.all([
+    const [shifts, defShift, punches, holidays, leaves, permissions] = await Promise.all([
       this.shiftsById(),
       this.defaultShift(),
       this.dataSource
@@ -118,6 +143,13 @@ export class AttendanceCalcService {
         .where('l.employeeId IN (:...ids)', { ids })
         .andWhere('l.status = :ls', { ls: LeaveRequestStatus.APPROVED })
         .andWhere('l.fromDate <= :to AND l.toDate >= :from', { from, to })
+        .getMany(),
+      this.dataSource
+        .getRepository(AttendancePermission)
+        .createQueryBuilder('x')
+        .where('x.employeeId IN (:...ids)', { ids })
+        .andWhere('x.status = :xs', { xs: LeaveRequestStatus.APPROVED })
+        .andWhere('x.permissionDate BETWEEN :from AND :to', { from, to })
         .getMany(),
     ]);
 
@@ -153,7 +185,8 @@ export class AttendanceCalcService {
           null;
         const holiday = holidays.find((h) => h.holidayDate === d && (!h.branchId || branchIds.includes(h.branchId))) ?? null;
         const leave = leaves.find((l) => l.employeeId === e.id && l.fromDate <= d && l.toDate >= d) ?? null;
-        days.push(this.computeDay(e, d, shift, holiday, dayPunches, now, leave));
+        const dayPermissions = permissions.filter((x) => x.employeeId === e.id && x.permissionDate === d);
+        days.push(this.computeDay(e, d, shift, holiday, dayPunches, now, leave, dayPermissions));
       }
       out.set(e.id, days);
     }
@@ -168,6 +201,7 @@ export class AttendanceCalcService {
     punches: AttendancePunch[],
     now: { date: string; minutes: number },
     leave: LeaveRequest | null = null,
+    permissions: AttendancePermission[] = [],
   ): AttendanceDay {
     const weekday = weekdayOf(date);
     const start = shift ? hhmmToMinutes(shift.startTime)! : null;
@@ -192,6 +226,12 @@ export class AttendanceCalcService {
       overtimeMinutes: 0,
       punchCount: punches.length,
       branchName: punches.find((p) => p.branchName)?.branchName ?? null,
+      permissionNote: permissions.length
+        ? permissions
+            .map((x) => `${PERMISSION_TYPE_LABELS[x.permissionType]}${x.fullDay ? ' (يوم كامل)' : ` ${x.fromTime}–${x.toTime}`}`)
+            .join(' · ')
+        : null,
+      missionMinutes: 0,
     };
 
     if ((e.hireDate && date < e.hireDate) || (e.exitDate && date > e.exitDate)) {
@@ -211,6 +251,7 @@ export class AttendanceCalcService {
     let first: number | null = null;
     let last: number | null = null;
     let worked = 0;
+    const pairs: Interval[] = [];
     for (const p of punches) {
       const m = rel(p);
       if (p.punchType === PunchType.IN) {
@@ -218,6 +259,7 @@ export class AttendanceCalcService {
         if (first === null) first = m;
       } else if (open !== null) {
         worked += m - open;
+        pairs.push([open, m]);
         open = null;
         last = m;
       }
@@ -249,18 +291,53 @@ export class AttendanceCalcService {
       return day;
     }
 
-    if (first === null) {
+    // Approved permissions as intervals on the work date's minute axis (an overnight
+    // shift's after-midnight times → +1440). Missions = presence; both excuse lateness / early leave.
+    const at = (t: string | null) => {
+      const m = hhmmToMinutes(t)!;
+      return end > 1440 && m < start ? m + 1440 : m;
+    };
+    const toInterval = (x: AttendancePermission): Interval => {
+      if (x.fullDay) return [start, end];
+      const a = at(x.fromTime);
+      let b = at(x.toTime);
+      if (b <= a) b += 1440;
+      return [a, b];
+    };
+    const missions = permissions.filter((x) => x.permissionType === PermissionType.MISSION).map(toInterval);
+    const excused = permissions.map(toInterval);
+
+    if (first === null && !missions.length) {
       day.status = nowRel > end ? AttendanceDayStatus.ABSENT : AttendanceDayStatus.PENDING;
       return day;
     }
 
-    const late = Math.floor(first - start);
+    // Presence = punched pairs ∪ missions: first arrival, last departure, worked time.
+    const presence = union([...pairs, ...missions]);
+    if (missions.length) {
+      const all = lengthOf(presence);
+      day.missionMinutes = Math.floor(all - lengthOf(pairs));
+      day.workedMinutes = Math.floor(all);
+    }
+    const firstAt = Math.min(first ?? Number.POSITIVE_INFINITY, ...missions.map(([a]) => a));
+    const missionEnd = missions.length ? Math.max(...missions.map(([, b]) => b)) : null;
+    const lastAt = open !== null ? null : Math.max(last ?? Number.NEGATIVE_INFINITY, missionEnd ?? Number.NEGATIVE_INFINITY);
+    if (first === null) day.firstIn = null;
+
+    const late = Math.floor(uncovered(start, firstAt, excused));
     day.lateMinutes = late > (shift.lateGraceMinutes ?? 0) ? late : 0;
-    if (last !== null && open === null) {
-      const early = Math.floor(end - last);
+    if (lastAt !== null && Number.isFinite(lastAt)) {
+      const early = Math.floor(uncovered(lastAt, end, excused));
       day.earlyLeaveMinutes = early > (shift.earlyLeaveGraceMinutes ?? 0) ? early : 0;
-      const over = Math.floor(last - end);
-      day.overtimeMinutes = over > 0 && over >= (shift.overtimeAfterMinutes ?? 0) ? over : 0;
+      // Overtime = time after the shift end, but only once the shift's hours are complete:
+      // a late arrival / personal permission is made up first (missions count as work).
+      // Only real punches after the end count (a mission ending late is not overtime).
+      if (last !== null) {
+        const afterEnd = Math.floor(last - end);
+        const beyondShift = Math.floor(day.workedMinutes - (end - start));
+        const over = Math.min(afterEnd, beyondShift);
+        day.overtimeMinutes = over > 0 && over >= (shift.overtimeAfterMinutes ?? 0) ? over : 0;
+      }
     }
     day.status = open !== null ? openStatus() : AttendanceDayStatus.PRESENT;
     return day;

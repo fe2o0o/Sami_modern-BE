@@ -94,6 +94,14 @@ export class ApproveAdvanceRequestDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(4000) reply?: string | null;
 }
 
+/** «مبيعاتي» period (default: this month, Egypt time). */
+export class MySalesQueryDto {
+  @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateString({}, { message: 'تاريخ البداية غير صحيح' }) from?: string;
+  @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateString({}, { message: 'تاريخ النهاية غير صحيح' }) to?: string;
+  /** Another employee's sales — needs «مبيعات كل الموظفين». */
+  @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() employeeId?: string;
+}
+
 // ── employee app: catalog / customers ──────────────────
 export class AppListQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(100) search?: string;

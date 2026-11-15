@@ -1,3 +1,5 @@
+import { EmployeeModule } from '../employee/employee.module';
+import { MySalesService } from './my-sales.service';
 import { HrModule } from '../hr/hr.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -24,18 +26,23 @@ import { EmployeeLeaveBalance } from './entities/employee-leave-balance.entity';
 import { LeaveRequest } from './entities/leave-request.entity';
 import { HrRequest } from './entities/hr-request.entity';
 import { CustomerModule } from '../customer/customer.module';
+import { AttendancePermission } from './entities/attendance-permission.entity';
+import { AttendanceSetting } from './entities/attendance-setting.entity';
+import { PermissionService } from './permission.service';
+import { PermissionController } from './permission.controller';
 
 /** HR self-service: attendance (phase 4), leave (phase 5), HR requests and «بوابة الموظف» API (Egypt time). */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Employee, Branch, AttendanceShift, AttendanceHoliday, AttendancePunch, LeaveType, EmployeeLeaveBalance, LeaveRequest, HrRequest]),
+    TypeOrmModule.forFeature([Employee, Branch, AttendanceShift, AttendanceHoliday, AttendancePunch, LeaveType, EmployeeLeaveBalance, LeaveRequest, HrRequest, AttendancePermission, AttendanceSetting]),
     CustomerModule,
+    EmployeeModule, // EmployeeCommissionReportService → «مبيعاتي»
     HrModule, // AdvanceService: approved advance requests become employee advances
     // Secrets are passed per call (the employee-app key is derived from jwt.secret).
     JwtModule.register({}),
   ],
-  controllers: [AttendanceController, EmployeeAppController, EmployeePortalController, LeaveController],
-  providers: [AttendanceCalcService, AttendancePunchService, AttendanceService, EmployeeAppAuthService, EmployeeAppGuard, LeaveService, HrRequestService, PortalService],
+  controllers: [AttendanceController, EmployeeAppController, EmployeePortalController, LeaveController, PermissionController],
+  providers: [AttendanceCalcService, AttendancePunchService, AttendanceService, EmployeeAppAuthService, EmployeeAppGuard, LeaveService, HrRequestService, PortalService, MySalesService, PermissionService],
   exports: [AttendanceCalcService, AttendanceService],
 })
 export class AttendanceModule {}

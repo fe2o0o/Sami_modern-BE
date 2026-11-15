@@ -56,7 +56,7 @@ export class EmployeeAppController {
       mobile: e.mobile,
       shift: shift ? { name: shift.name, startTime: shift.startTime, endTime: shift.endTime, weeklyOffDays: shift.weeklyOffDays } : null,
       branches: branches.all,
-      maxAccuracyM: maxAccuracyM(),
+      maxAccuracyM: Math.max(maxAccuracyM(), ...branches.points.map((p) => p.radius)),
       /** Sections HR opened for this employee. */
       features: appFeaturesOf(e),
     };

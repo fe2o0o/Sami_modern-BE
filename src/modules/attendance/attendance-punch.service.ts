@@ -106,9 +106,11 @@ export class AttendancePunchService {
       .sort((x, y) => x.d - y.d);
     const nearest = measured[0];
 
-    const max = maxAccuracyM();
+    // The accepted GPS accuracy follows the branch radius HR sets (a 200 m radius
+    // accepts readings up to ±200 m); ATTENDANCE_MAX_ACCURACY_M is only the floor.
+    const max = Math.max(maxAccuracyM(), nearest.b.radius);
     if (dto.accuracy !== undefined && dto.accuracy > max) {
-      return reject(`دقة الموقع ضعيفة (${Math.round(dto.accuracy)} م) — فعّل الـ GPS وحاول في مكان مفتوح`, nearest);
+      return reject(`دقة الموقع ضعيفة (${Math.round(dto.accuracy)} م، المسموح ${Math.round(max)} م) — فعّل الـ GPS وحاول في مكان مفتوح`, nearest);
     }
 
     const inside = measured.find((m) => m.d <= m.b.radius);
