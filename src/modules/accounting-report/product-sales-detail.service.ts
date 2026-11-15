@@ -14,6 +14,7 @@ import { Customer } from '../customer/entities/customer.entity';
 import { Branch } from '../branch/entities/branch.entity';
 import { Supplier } from '../supplier/entities/supplier.entity';
 import { Product } from '../product/entities/product.entity';
+import { ProductCategory } from '../product-category/entities/product-category.entity';
 import { categorySubtreeIds } from '../product-category/category-subtree.util';
 import { ProductSalesDetailQueryDto } from './dto/product-sales-detail-query.dto';
 import { round2 } from './ledger-math';
@@ -35,6 +36,9 @@ export interface ProductSalesDetailRow {
   productId: string;
   productCode: string | null;
   productName: string;
+  /** Product category (current, from the product file). */
+  categoryId: string | null;
+  categoryName: string | null;
   lineType: SalesLineType;
   factoryName: string | null;
   quantity: number;
@@ -139,6 +143,8 @@ export class ProductSalesDetailService {
         .addSelect('ii.productId', 'productId')
         .addSelect('COALESCE(ii.productCode, p.code)', 'productCode')
         .addSelect('COALESCE(ii.productName, p.name)', 'productName')
+        .addSelect('pc.id', 'categoryId')
+        .addSelect('pc.name', 'categoryName')
         .addSelect('ii.lineType', 'lineType')
         .addSelect('sup.name', 'factoryName')
         .addSelect('ii.quantity', 'quantity')
@@ -214,6 +220,8 @@ export class ProductSalesDetailService {
         productId: String(r.productId),
         productCode: (r.productCode as string | null) ?? null,
         productName: (r.productName as string | null) ?? '—',
+        categoryId: (r.categoryId as string | null) ?? null,
+        categoryName: (r.categoryName as string | null) ?? null,
         lineType,
         factoryName: lineType === SalesLineType.MANUFACTURING ? ((r.factoryName as string | null) ?? null) : null,
         quantity,
@@ -265,6 +273,7 @@ export class ProductSalesDetailService {
       .leftJoin(Customer, 'c', 'c.id = si.customerId')
       .leftJoin(Branch, 'b', 'b.id = si.branchId')
       .leftJoin(Product, 'p', 'p.id = ii.productId')
+      .leftJoin(ProductCategory, 'pc', 'pc.id = p.categoryId')
       .leftJoin(Supplier, 'sup', 'sup.id = ii.factorySupplierId')
       // delivered cost per invoice line
       .leftJoin(

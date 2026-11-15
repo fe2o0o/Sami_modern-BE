@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsDateString, IsNumber, IsOptional, IsUUID, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsDateString, IsNumber, IsOptional, IsUUID, Min, ValidateNested, IsString, MinLength, MaxLength } from 'class-validator';
 import { ManufacturingComponentDto } from './manufacturing-component.dto';
 
 /**
@@ -35,4 +35,17 @@ export class ProduceManufacturingOrderDto {
   @ValidateNested({ each: true })
   @Type(() => ManufacturingComponentDto)
   components?: ManufacturingComponentDto[];
+}
+
+/** Reverse an executed production (finished goods out, components back, entries reversed) → the order is cancelled. */
+export class ReverseProductionDto {
+  @ApiProperty({ format: 'date' })
+  @IsDateString({}, { message: 'تاريخ العكس غير صحيح' })
+  reversalDate!: string;
+
+  @ApiProperty({ minLength: 3 })
+  @IsString({ message: 'سبب العكس مطلوب' })
+  @MinLength(3, { message: 'اكتب سبب عكس الإنتاج (3 أحرف على الأقل)' })
+  @MaxLength(500)
+  reason!: string;
 }

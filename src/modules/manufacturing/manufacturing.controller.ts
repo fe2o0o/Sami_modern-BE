@@ -18,7 +18,7 @@ import {
   UpdateManufacturingOrderDto,
   UpdateManufacturingStatusDto,
 } from './dto/update-manufacturing-order.dto';
-import { ProduceManufacturingOrderDto } from './dto/produce-manufacturing-order.dto';
+import { ProduceManufacturingOrderDto, ReverseProductionDto } from './dto/produce-manufacturing-order.dto';
 import { ManufacturingOrderQueryDto } from './dto/manufacturing-order-query.dto';
 import { ManufacturingOrderStatus } from './enums/manufacturing.enum';
 import { ResponseMessage } from '../../common/decorators/response-message.decorator';
@@ -115,6 +115,19 @@ export class ManufacturingController {
     @BranchScope() branchScope: string[] | null,
   ) {
     return this.production.produce(id, dto, actorId, branchScope);
+  }
+
+  @Post(':id/reverse-production')
+  @RequirePermissions('manufacturing.reverse')
+  @ResponseMessage('تم عكس الإنتاج وإلغاء أمر التصنيع')
+  @ApiOperation({ summary: 'عكس الإنتاج: إخراج المنتج من المخزن، إرجاع المكوّنات، عكس القيود والرسوم، ثم إلغاء الأمر' })
+  reverseProduction(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReverseProductionDto,
+    @CurrentUser('userId') actorId: string,
+    @BranchScope() branchScope: string[] | null,
+  ) {
+    return this.production.reverseProduction(id, dto, actorId, branchScope);
   }
 
   @Delete(':id')

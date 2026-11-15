@@ -273,9 +273,9 @@ export class SalesReturnService {
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
-          w.where('r.returnNumber LIKE :s', { s: `%${query.search}%` }).orWhere('r.invoiceNumber LIKE :s', {
-            s: `%${query.search}%`,
-          });
+          w.where('r.returnNumber LIKE :s', { s: `%${query.search}%` })
+            .orWhere('r.invoiceNumber LIKE :s', { s: `%${query.search}%` })
+            .orWhere('EXISTS (SELECT 1 FROM customers sc WHERE sc.id = r.customer_id AND (sc.name LIKE :s OR sc.code LIKE :s OR sc.mobile LIKE :s))', { s: `%${query.search}%` });
         }),
       );
     }
