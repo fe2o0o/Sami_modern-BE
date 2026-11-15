@@ -1,3 +1,4 @@
+import { CompanyModule } from '../company/company.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AiController } from './ai.controller';
@@ -59,6 +60,7 @@ import { ProductCategoryModule } from '../product-category/product-category.modu
   imports: [
     TypeOrmModule.forFeature([AiAuditLog, AiConversation, AiMessage]),
     CustomerModule,
+    CompanyModule,
     SupplierModule,
     SalesInvoiceModule,
     PurchaseInvoiceModule,

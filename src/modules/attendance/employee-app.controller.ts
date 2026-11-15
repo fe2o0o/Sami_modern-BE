@@ -1,3 +1,4 @@
+import { CompanyService } from '../company/company.service';
 import { Body, Controller, Get, HttpCode, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
@@ -21,6 +22,7 @@ import { EmployeeAppChangePinDto, EmployeeAppLoginDto, EmployeeAppMonthQueryDto,
 @Controller('employee-app')
 export class EmployeeAppController {
   constructor(
+    private readonly company: CompanyService,
     private readonly auth: EmployeeAppAuthService,
     private readonly punch: AttendancePunchService,
     private readonly calc: AttendanceCalcService,
@@ -59,6 +61,10 @@ export class EmployeeAppController {
       maxAccuracyM: Math.max(maxAccuracyM(), ...branches.points.map((p) => p.radius)),
       /** Sections HR opened for this employee. */
       features: appFeaturesOf(e),
+      company: await this.company
+        .profile()
+        .then((c) => ({ name: c.name, nameEn: c.nameEn, logo: c.logo, currency: c.currency }))
+        .catch(() => null),
     };
   }
 

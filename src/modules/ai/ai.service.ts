@@ -1,3 +1,4 @@
+import { CompanyService } from '../company/company.service';
 import {
   Injectable,
   Logger,
@@ -54,6 +55,7 @@ export class AiService implements OnModuleInit {
     private readonly financeTools: FinanceAiTools,
     private readonly accountingTools: AccountingAiTools,
     private readonly contextTools: ContextAiTools,
+    private readonly company: CompanyService,
     private readonly navigationTools: NavigationAiTools,
     private readonly voucherTools: VoucherAiTools,
     private readonly referenceTools: ReferenceAiTools,
@@ -120,7 +122,7 @@ export class AiService implements OnModuleInit {
 
     const tools = this.registry.openAiTools(ctx);
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: buildSystemPrompt(ctx) },
+      { role: 'system', content: buildSystemPrompt(ctx, await this.company.profile().catch(() => null)) },
       ...priorMessages.map((m) =>
         m.role === 'assistant'
           ? ({ role: 'assistant', content: m.content } as const)

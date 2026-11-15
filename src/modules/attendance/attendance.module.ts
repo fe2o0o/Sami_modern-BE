@@ -1,3 +1,4 @@
+import { CompanyModule } from '../company/company.module';
 import { EmployeeModule } from '../employee/employee.module';
 import { MySalesService } from './my-sales.service';
 import { HrModule } from '../hr/hr.module';
@@ -36,6 +37,7 @@ import { PermissionController } from './permission.controller';
   imports: [
     TypeOrmModule.forFeature([Employee, Branch, AttendanceShift, AttendanceHoliday, AttendancePunch, LeaveType, EmployeeLeaveBalance, LeaveRequest, HrRequest, AttendancePermission, AttendanceSetting]),
     CustomerModule,
+    CompanyModule, // Company Profile shown in the employee portal
     EmployeeModule, // EmployeeCommissionReportService → «مبيعاتي»
     HrModule, // AdvanceService: approved advance requests become employee advances
     // Secrets are passed per call (the employee-app key is derived from jwt.secret).

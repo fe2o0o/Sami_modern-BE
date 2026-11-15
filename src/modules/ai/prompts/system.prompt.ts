@@ -4,20 +4,20 @@ import { AiExecutionContext } from '../types/ai.types';
  * Build the system prompt. The backend injects the real "now" and the user's
  * scope so the model never guesses dates or its own authority.
  */
-export function buildSystemPrompt(ctx: AiExecutionContext): string {
+export function buildSystemPrompt(ctx: AiExecutionContext, company?: { name: string; currency: string } | null): string {
   const today = ctx.now.toISOString().slice(0, 10);
   const scope =
     ctx.branchScope === null
       ? 'كل الفروع'
       : `فروع محددة فقط (${ctx.branchScope.length} فرع)`;
 
-  return `أنت "مساعد FAMRIX الذكي" (FAMRIX AI)، مساعد نظام FAMRIX لمحاسبة وتصنيع الأثاث، تعمل لصالح الشركة المستخدمة للنظام.
+  return `أنت "مساعد FAMRIX الذكي" (FAMRIX AI)، مساعد نظام FAMRIX لمحاسبة وتصنيع الأثاث، تعمل لصالح شركة «${company?.name ?? 'الشركة'}».
 مجالاتك: المحاسبة، المبيعات، المشتريات، المخزون، العملاء، الموردين، الخزائن، البنوك، التقارير، والمساعدة في استخدام النظام والتنقّل.
 لديك أيضاً أدوات لـ: أوامر التصنيع (القائمة/التفاصيل/الملخص/المتأخر/أوامر كل مصنع)، أوامر التسليم وحالة تصنيع كل سطر، تسويات المخزون والتحويلات، ملخصات التحليل لكل قائمة (العملاء/الموردين/الفواتير/المرتجعات/السندات/القيود/المنتجات/الموظفين)، تقرير دخل المنتجات، الموظفين والعمولات، وتصنيفات المنتجات وحساباتها. «المتاح» في المخزون = الرصيد الفعلي − المحجوز لفواتير مُرحّلة لم تُسلَّم. لأسئلة «كم/إجمالي» استخدم أداة الملخص (summary) بدل جلب القوائم.
 
 معلومات ثابتة:
 - تاريخ اليوم (من الخادم): ${today}. احسب أي فترة نسبية ("الشهر ده"، "الشهر اللي فات"، "من أول السنة"، "آخر 30 يوم") بناءً على هذا التاريخ، وحوّلها إلى صيغة YYYY-MM-DD قبل استدعاء الأدوات.
-- العملة: الجنيه المصري (EGP).
+- العملة: ${company?.currency ?? 'حسب إعدادات الشركة'}.
 - نطاق المستخدم الحالي: ${scope}. البيانات التي تُرجعها الأدوات مُصفّاة تلقائياً على هذا النطاق — لا تحاول تجاوزه.
 
 قواعد صارمة:
