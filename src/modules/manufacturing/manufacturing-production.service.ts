@@ -397,6 +397,140 @@ export class ManufacturingProductionService {
   }
 
   // =========================================================
+  // REVERSE PRODUCTION
+  // =========================================================
+  /**
+   * Undo an executed production in one transaction, then CANCEL the order:
+   *  - the finished product leaves the warehouse at the exact unit cost it entered at;
+   *  - every component returns to its warehouse at the cost it was consumed at;
+   *  - every posted manufacturing entry of the order (start fee, fee adjustments,
+   *    the production entry) is mirrored and marked reversed;
+   *  - the factory's statement gets the fee back.
+   * The linked delivery line then offers «أمر تصنيع جديد» / «تسليم من المخزون».
+   * Refused once anything was delivered from the order.
+   */
+  async reverseProduction(
+    orderId: string,
+    input: { reversalDate: string; reason: string },
+    actorId?: string,
+    branchScope: string[] | null = null,
+  ): Promise<ManufacturingOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const order = await manager.findOne(ManufacturingOrder, {
+        where: { id: orderId },
+        relations: { components: true },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order || !isWithinBranchScope(order.branchId, branchScope)) throw new NotFoundException('لم يتم العثور على أمر التصنيع');
+      if ((order.status !== ManufacturingOrderStatus.PRODUCED && order.status !== ManufacturingOrderStatus.DONE) || !order.producedAt) {
+        throw new BadRequestException('عكس الإنتاج متاح لأمر تم تنفيذ إنتاجه فقط');
+      }
+      if (!order.warehouseId) throw new BadRequestException('مخزن الإنتاج غير محدد على الأمر');
+      const reason = input.reason.trim();
+      const date = input.reversalDate;
+
+      // Nothing may have been handed to the customer from this order.
+      const lines = await manager.getRepository(SalesDeliveryItem).find({ where: { manufacturingOrderId: order.id } });
+      const delivered = round3(lines.reduce((s, l) => s + (Number(l.deliveredQuantity) || 0), 0));
+      if (delivered > 0) {
+        throw new BadRequestException(`تم تسليم ${delivered} من إنتاج هذا الأمر للعميل — اعكس التسليم من إذن التسليم أولاً`);
+      }
+
+      const { fiscalYear, period } = await this.resolvePostingContext(date, manager);
+      const ref = { sourceType: JournalSourceType.MANUFACTURING, sourceId: order.id, sourceNumber: order.orderNumber, movementDate: date, actorId };
+
+      // 1) Finished product out, at exactly the cost it was produced at.
+      const unitCost = order.quantity > 0 ? round2(Number(order.totalCost) / Number(order.quantity)) : 0;
+      await this.stockService.issue(
+        [{ warehouseId: order.warehouseId, productId: order.productId, productName: order.productName ?? undefined, quantity: order.quantity, exactUnitCost: unitCost }],
+        manager,
+        { ...ref, movementType: StockMovementType.MANUFACTURING, respectReservations: true },
+      );
+
+      // 2) Components back to their warehouses at their consumed cost.
+      const back = (order.components ?? []).filter((c) => (Number(c.quantity) || 0) > 0);
+      if (back.length) {
+        await this.stockService.receive(
+          back.map((c) => ({
+            warehouseId: c.warehouseId ?? order.warehouseId!,
+            productId: c.componentProductId,
+            productName: c.componentProductName ?? undefined,
+            quantity: Number(c.quantity),
+            unitCost: Number(c.unitCost) || 0,
+          })),
+          manager,
+          { ...ref, movementType: StockMovementType.MANUFACTURING },
+        );
+      }
+
+      // 3) Mirror every posted, not-yet-reversed manufacturing entry of the order.
+      const entries = await manager.getRepository(JournalEntry).find({
+        where: { sourceType: JournalSourceType.MANUFACTURING, sourceId: order.id, status: JournalEntryStatus.POSTED },
+        order: { createdAt: 'ASC' },
+      });
+      const description = `عكس إنتاج أمر التصنيع ${order.orderNumber ?? ''} — ${reason}`;
+      for (const entry of entries.filter((e) => !e.reversalOfJournalEntryId)) {
+        const original = await this.journalService.findWithLines(entry.id);
+        if (!original) throw new BadRequestException('تعذّر إيجاد قيد أمر التصنيع الأصلي');
+        const reversal = await this.journalService.createSystemJournalEntry(
+          {
+            sourceType: JournalSourceType.MANUFACTURING,
+            sourceId: order.id,
+            sourceNumber: order.orderNumber,
+            entryDate: date,
+            fiscalYearId: fiscalYear.id,
+            accountingPeriodId: period.id,
+            branchId: order.branchId,
+            description,
+            lines: original.lines.map((l) => ({
+              accountId: l.accountId,
+              debit: l.credit,
+              credit: l.debit,
+              description: l.description ? `عكس: ${l.description}` : description,
+              supplierId: l.supplierId,
+              productId: l.productId,
+              warehouseId: l.warehouseId,
+            })),
+            actorId,
+            reversalOfJournalEntryId: original.id,
+          },
+          manager,
+        );
+        await this.journalService.markEntryReversed(original.id, reversal.id, 'عكس إنتاج أمر التصنيع', actorId, manager);
+      }
+
+      // 4) The factory's statement: the whole fee (start ± adjustments) comes back.
+      const fee = round2(order.manufacturingFee ?? 0);
+      if (order.factorySupplierId && fee > 0) {
+        await this.supplierLedger.record(
+          {
+            supplierId: order.factorySupplierId,
+            transactionDate: date,
+            type: SupplierTransactionType.REVERSAL,
+            sourceType: JournalSourceType.MANUFACTURING,
+            sourceId: order.id,
+            sourceNumber: order.orderNumber,
+            debit: fee,
+            credit: 0,
+            description: `عكس ${this.feeDescription(order)} — ${reason}`,
+            actorId,
+          },
+          manager,
+        );
+      }
+
+      // 5) The order is cancelled; its delivery line now asks for a new order or stock.
+      order.status = ManufacturingOrderStatus.CANCELLED;
+      order.doneAt = null;
+      order.updatedBy = actorId ?? null;
+      order.notes = [order.notes, `عكس الإنتاج بتاريخ ${date}: ${reason}`].filter(Boolean).join(' — ');
+      await manager.getRepository(ManufacturingOrder).save(order);
+
+      return manager.findOne(ManufacturingOrder, { where: { id: orderId }, relations: { components: true } }) as Promise<ManufacturingOrder>;
+    });
+  }
+
+  // =========================================================
   // PRODUCE
   // =========================================================
   async produce(
