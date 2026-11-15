@@ -199,7 +199,9 @@ export class PurchaseInvoiceService {
         new Brackets((w) => {
           w.where('pi.invoiceNumber LIKE :s', { s: `%${query.search}%` })
             .orWhere('pi.supplierInvoiceNumber LIKE :s', { s: `%${query.search}%` })
-            .orWhere('pi.notes LIKE :s', { s: `%${query.search}%` });
+            .orWhere('pi.notes LIKE :s', { s: `%${query.search}%` })
+            // supplier name / code / mobile
+            .orWhere('EXISTS (SELECT 1 FROM suppliers ss WHERE ss.id = pi.supplier_id AND (ss.name LIKE :s OR ss.code LIKE :s OR ss.mobile LIKE :s))', { s: `%${query.search}%` });
         }),
       );
     }

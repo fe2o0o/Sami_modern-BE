@@ -13,6 +13,7 @@ import { Branch } from '../branch/entities/branch.entity';
 import { Warehouse } from '../warehouse/entities/warehouse.entity';
 import { Supplier } from '../supplier/entities/supplier.entity';
 import { Product } from '../product/entities/product.entity';
+import { ProductCategory } from '../product-category/entities/product-category.entity';
 import { categorySubtreeIds } from '../product-category/category-subtree.util';
 import { DeliveredItemsQueryDto } from './dto/delivered-items-query.dto';
 import { round2 } from './ledger-math';
@@ -31,6 +32,9 @@ export interface DeliveredItemRow {
   productId: string;
   productCode: string | null;
   productName: string;
+  /** Product category (current, from the product file). */
+  categoryId: string | null;
+  categoryName: string | null;
   lineType: SalesLineType;
   /** Warehouse the goods left from (stock and produced manufacturing goods). */
   warehouseName: string | null;
@@ -116,6 +120,8 @@ export class DeliveredItemsService {
         .addSelect('di.productId', 'productId')
         .addSelect('COALESCE(di.productCode, p.code)', 'productCode')
         .addSelect('COALESCE(di.productName, p.name)', 'productName')
+        .addSelect('pc.id', 'categoryId')
+        .addSelect('pc.name', 'categoryName')
         .addSelect('di.lineType', 'lineType')
         .addSelect('w.name', 'warehouseName')
         .addSelect('COALESCE(mo.factorySupplierName, sup.name)', 'factoryName')
@@ -180,6 +186,8 @@ export class DeliveredItemsService {
         productId: String(r.productId),
         productCode: (r.productCode as string | null) ?? null,
         productName: (r.productName as string | null) ?? '—',
+        categoryId: (r.categoryId as string | null) ?? null,
+        categoryName: (r.categoryName as string | null) ?? null,
         lineType,
         warehouseName: (r.warehouseName as string | null) ?? null,
         factoryName: isMfg ? ((r.factoryName as string | null) ?? null) : null,
@@ -228,6 +236,7 @@ export class DeliveredItemsService {
       .leftJoin(Customer, 'c', 'c.id = sd.customerId')
       .leftJoin(Branch, 'b', 'b.id = sd.branchId')
       .leftJoin(Product, 'p', 'p.id = di.productId')
+      .leftJoin(ProductCategory, 'pc', 'pc.id = p.categoryId')
       .where('sd.status <> :rev', { rev: SalesDeliveryStatus.REVERSED })
       .andWhere('di.deliveredQuantity > 0')
       .andWhere(`${DELIVERY_DATE} BETWEEN :from AND :to`, { from, to });

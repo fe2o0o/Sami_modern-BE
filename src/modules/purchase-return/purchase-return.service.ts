@@ -180,9 +180,9 @@ export class PurchaseReturnService {
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
-          w.where('r.returnNumber LIKE :s', { s: `%${query.search}%` }).orWhere('r.invoiceNumber LIKE :s', {
-            s: `%${query.search}%`,
-          });
+          w.where('r.returnNumber LIKE :s', { s: `%${query.search}%` })
+            .orWhere('r.invoiceNumber LIKE :s', { s: `%${query.search}%` })
+            .orWhere('EXISTS (SELECT 1 FROM suppliers ss WHERE ss.id = r.supplier_id AND (ss.name LIKE :s OR ss.code LIKE :s OR ss.mobile LIKE :s))', { s: `%${query.search}%` });
         }),
       );
     }

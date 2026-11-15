@@ -13,6 +13,7 @@ import { Brand } from '../brand/entities/brand.entity';
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
 import { ProductIncomeCompare, ProductIncomePreset, ProductIncomeQueryDto } from './dto/product-income-query.dto';
+import { categorySubtreeIds } from '../product-category/category-subtree.util';
 import { daysBetween, growthPct, previousRange, productMetrics, r2, r3, summariseMetrics } from './product-income-math';
 
 /**
@@ -50,6 +51,9 @@ import { daysBetween, growthPct, previousRange, productMetrics, r2, r3, summaris
  * Aggregation is done in SQL (grouped by product); only per-product totals
  * reach memory.
  */
+
+/** The query plus the resolved category subtree (set once in summary()). */
+type IncomeQuery = ProductIncomeQueryDto & { categoryIds?: string[] | null };
 
 export interface ProductIncomeSummary {
   grossRevenue: number;
@@ -135,7 +139,9 @@ const addDays = (d: Date, days: number) => new Date(d.getFullYear(), d.getMonth(
 export class ProductIncomeReportService {
   constructor(private readonly dataSource: DataSource) {}
 
-  async summary(q: ProductIncomeQueryDto, scope: BranchScope = null): Promise<ProductIncomeReport> {
+  async summary(query: ProductIncomeQueryDto, scope: BranchScope = null): Promise<ProductIncomeReport> {
+    // A parent category covers all its subcategories (same as the detail reports).
+    const q: IncomeQuery = { ...query, categoryIds: await categorySubtreeIds(this.dataSource.manager, query.categoryId) };
     const { range, preset } = await this.resolveRange(q);
     if (parse(range.from) > parse(range.to)) throw new BadRequestException('تاريخ البداية بعد تاريخ النهاية');
 
@@ -234,10 +240,11 @@ export class ProductIncomeReportService {
   // SQL aggregates (grouped by product)
   // =========================================================
   /** Product-side filters shared by the three aggregates (joins `p`). */
-  private productFilters(qb: SelectQueryBuilder<ObjectLiteral>, itemAlias: string, q: ProductIncomeQueryDto): void {
+  private productFilters(qb: SelectQueryBuilder<ObjectLiteral>, itemAlias: string, q: IncomeQuery): void {
     qb.innerJoin(Product, 'p', `p.id = ${itemAlias}.productId`);
     if (q.productId) qb.andWhere(`${itemAlias}.productId = :productId`, { productId: q.productId });
-    if (q.categoryId) qb.andWhere('p.categoryId = :categoryId', { categoryId: q.categoryId });
+    const categoryIds = q.categoryIds ?? (q.categoryId ? [q.categoryId] : null);
+    if (categoryIds?.length) qb.andWhere('p.categoryId IN (:...categoryIds)', { categoryIds });
     if (q.brandId) qb.andWhere('p.brandId = :brandId', { brandId: q.brandId });
     if (q.search) qb.andWhere('(p.name LIKE :s OR p.code LIKE :s OR p.barcode LIKE :s)', { s: `%${q.search}%` });
   }

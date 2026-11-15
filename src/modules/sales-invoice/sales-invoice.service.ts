@@ -326,10 +326,11 @@ export class SalesInvoiceService {
     if (query.search) {
       qb.andWhere(
         new Brackets((w) => {
-          w.where('si.invoiceNumber LIKE :s', { s: `%${query.search}%` }).orWhere(
-            'si.notes LIKE :s',
-            { s: `%${query.search}%` },
-          );
+          w.where('si.invoiceNumber LIKE :s', { s: `%${query.search}%` })
+            .orWhere('si.notes LIKE :s', { s: `%${query.search}%` })
+            // customer name / code / mobile, and the walk-in name of a quick sale
+            .orWhere('si.walkInCustomerName LIKE :s', { s: `%${query.search}%` })
+            .orWhere('EXISTS (SELECT 1 FROM customers sc WHERE sc.id = si.customer_id AND (sc.name LIKE :s OR sc.code LIKE :s OR sc.mobile LIKE :s))', { s: `%${query.search}%` });
         }),
       );
     }
