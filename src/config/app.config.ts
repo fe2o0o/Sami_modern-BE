@@ -8,7 +8,7 @@ export default registerAs('app', () => ({
   env: process.env.NODE_ENV ?? 'development',
   port: parseInt(process.env.PORT ?? '3000', 10),
   apiPrefix: process.env.API_PREFIX ?? 'api/v1',
-  name: process.env.APP_NAME ?? 'Sami Furniture Accountant API',
+  name: process.env.APP_NAME ?? 'FAMRIX API',
   /** Comma-separated list of allowed CORS origins, or `*`. */
   corsOrigins: process.env.CORS_ORIGINS ?? '*',
 }));

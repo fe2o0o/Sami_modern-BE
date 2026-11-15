@@ -5,7 +5,7 @@ export class AppService {
   health() {
     return {
       status: 'ok',
-      service: 'Sami Furniture Accountant API',
+      service: 'FAMRIX API',
       uptime: process.uptime(),
     };
   }

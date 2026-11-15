@@ -3,7 +3,7 @@ import { BaseEntity } from '../../../shared/entities/base.entity';
 import { Branch } from '../../branch/entities/branch.entity';
 
 /**
- * The single company record for the whole system (Sami Furniture).
+ * The company (tenant) using this FAMRIX installation — one record per installation.
  * There is exactly ONE row — no create/delete/list, only view + update.
  */
 @Entity('companies')
