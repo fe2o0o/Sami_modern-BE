@@ -48,6 +48,10 @@ export class Branch extends BaseEntity {
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
   longitude!: number | null;
 
+  /** Attendance geofence: check-ins count within this many metres of the branch. */
+  @Column({ type: 'int', default: 100 })
+  attendanceRadiusM!: number;
+
   @Column({ type: 'boolean', default: false })
   isMain!: boolean;
 

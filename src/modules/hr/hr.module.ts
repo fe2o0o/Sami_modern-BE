@@ -44,6 +44,6 @@ import { EmployeeHrController } from './employee-hr.controller';
   ],
   controllers: [HrController, EmployeeHrController, HrMoneyController, PayrollController],
   providers: [DepartmentService, JobGradeService, EmployeeHrService, SalaryService, HrPostingHelper, AdvanceService, CustodyService, EmployeeStatementService, PayrollService],
-  exports: [EmployeeHrService, SalaryService],
+  exports: [EmployeeHrService, SalaryService, AdvanceService],
 })
 export class HrModule {}

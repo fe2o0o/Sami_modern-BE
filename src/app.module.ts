@@ -49,6 +49,7 @@ import { LookupsModule } from './modules/lookups/lookups.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { AiModule } from './modules/ai/ai.module';
 import { ExcelModule } from './common/excel/excel.module';
+import { AttendanceModule } from './modules/attendance/attendance.module';
 
 @Module({
   imports: [
@@ -81,6 +82,7 @@ import { ExcelModule } from './common/excel/excel.module';
     ManufacturingModule,
     VoucherModule,
     EmployeeModule,
+    AttendanceModule,
     InventoryAdjustmentModule,
     StockTransferModule,
     SalesReturnModule,

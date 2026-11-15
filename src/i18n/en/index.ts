@@ -5,6 +5,7 @@ import { finance } from './finance';
 import { inventory } from './inventory';
 import { masterData } from './master-data';
 import { settingsReports } from './settings-reports';
+import { attendance } from './attendance';
 
 /**
  * Arabic API message → English (see common/i18n/i18n.ts). One file per area:
@@ -24,4 +25,5 @@ export const EN: Record<string, string> = {
   ...inventory,
   ...masterData,
   ...settingsReports,
+  ...attendance,
 };

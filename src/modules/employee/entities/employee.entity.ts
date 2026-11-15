@@ -148,4 +148,34 @@ export class Employee extends BaseEntity {
   /** Stored photo file name (private storage, served through an authenticated endpoint). */
   @Column({ type: 'varchar', length: 255, nullable: true })
   photoName!: string | null;
+
+  // ── Attendance (Phase 4) ───────────────────────────────
+  /** Work shift; null = the default shift. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  shiftId!: string | null;
+
+  /** May check in / out from the employee app (mobile + PIN). */
+  @Column({ type: 'boolean', default: false })
+  attendanceEnabled!: boolean;
+
+  /** bcrypt of the employee-app PIN — never selected by default. */
+  @Column({ type: 'varchar', length: 255, nullable: true, select: false })
+  attendancePinHash!: string | null;
+
+  /** Changing the PIN signs the employee out of every phone (tokens carry it). */
+  @Column({ type: 'datetime', nullable: true })
+  attendancePinChangedAt!: Date | null;
+
+  @Column({ type: 'int', default: 0 })
+  attendancePinFailedCount!: number;
+
+  @Column({ type: 'datetime', nullable: true })
+  attendanceLockedUntil!: Date | null;
+
+  /**
+   * Sections of «بوابة الموظف» this employee may open (see APP_FEATURES).
+   * null = the defaults (attendance, leave, requests).
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  appPermissions!: string[] | null;
 }

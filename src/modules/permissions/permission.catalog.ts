@@ -94,6 +94,9 @@ export const PERMISSION_CATALOG: PermissionGroupDef[] = [
       { module: 'advances', labelAr: 'سلف الموظفين', actions: [A.VIEW, A.CREATE, A.EDIT, A.DELETE, A.APPROVE, A.POST, A.REVERSE] },
       { module: 'custody', labelAr: 'عُهد الموظفين', actions: DOC },
       { module: 'payroll', labelAr: 'مسير الرواتب', actions: [A.VIEW, A.CREATE, A.DELETE, A.APPROVE, A.PAY, A.REVERSE] },
+      { module: 'attendance', labelAr: 'الحضور والانصراف', actions: [A.VIEW, A.MANAGE] },
+      { module: 'leaves', labelAr: 'إجازات الموظفين', actions: [A.VIEW, A.CREATE, A.APPROVE, A.MANAGE] },
+      { module: 'hr_requests', labelAr: 'طلبات الموظفين', actions: [A.VIEW, A.MANAGE] },
     ],
   },
   {

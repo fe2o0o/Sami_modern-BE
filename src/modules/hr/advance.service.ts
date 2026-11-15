@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { DataSource, EntityManager, SelectQueryBuilder } from 'typeorm';
+import { DataSource, EntityManager, In, SelectQueryBuilder } from 'typeorm';
 import { applyBranchScope, BranchScope, isWithinBranchScope } from '../../common/utils/branch-scope.util';
 import { paginate } from '../../common/utils/pagination.util';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
@@ -14,6 +14,8 @@ import { JournalEntryStatus } from '../journal-entry/enums/journal-entry.enum';
 import { JournalEntry } from '../journal-entry/entities/journal-entry.entity';
 import { AdvanceStatus, HrCashMethod, HrMovementStatus, InstallmentStatus } from './enums/advance.enum';
 import { HrPostingHelper } from './hr-posting.helper';
+import { HrRequest } from '../attendance/entities/hr-request.entity';
+import { HrRequestStatus } from '../attendance/attendance.enum';
 
 const round2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 const today = () => {
@@ -147,6 +149,39 @@ export class AdvanceService {
     });
   }
 
+  /**
+   * From an employee-portal advance request («بوابة الموظف»): the advance is created
+   * already APPROVED inside the caller's transaction. No journal entry, no cash —
+   * it is paid later from the advances page like any approved advance.
+   */
+  async createApproved(dto: CreateAdvanceDto, actorId: string | undefined, scope: BranchScope, manager: EntityManager): Promise<EmployeeAdvance> {
+    const employee = await this.activeEmployee(dto.employeeId, manager);
+    const advance = manager.getRepository(EmployeeAdvance).create({
+      employeeId: employee.id,
+      employeeName: employee.name,
+      branchId: this.resolveBranch(employee, scope),
+      requestDate: dto.requestDate,
+      amount: round2(dto.amount),
+      installmentsCount: dto.installments?.length || dto.installmentsCount,
+      firstDeductionMonth: monthStart(dto.installments?.[0]?.dueMonth ?? dto.firstDeductionMonth),
+      reason: dto.reason?.trim() || null,
+      status: AdvanceStatus.APPROVED,
+      approvedAt: new Date(),
+      approvedBy: actorId ?? null,
+      createdBy: actorId ?? null,
+      installments: this.schedule(dto),
+    });
+    await this.checkCeiling(employee, advance.amount);
+    return manager.getRepository(EmployeeAdvance).save(advance);
+  }
+
+  /** Closes the portal request linked to this advance (if any, and still open). */
+  private async closeLinkedRequest(advanceId: string, status: HrRequestStatus, reply: string, actorId: string | undefined, manager: EntityManager): Promise<void> {
+    await manager
+      .getRepository(HrRequest)
+      .update({ advanceId, status: In([HrRequestStatus.NEW, HrRequestStatus.IN_PROGRESS]) }, { status, reply, handledByUserId: actorId ?? null, handledAt: new Date() });
+  }
+
   async update(id: string, dto: CreateAdvanceDto, actorId: string | undefined, scope: BranchScope) {
     return this.dataSource.transaction(async (manager) => {
       const a = await this.lock(id, manager, scope);
@@ -237,7 +272,9 @@ export class AdvanceService {
       a.status = AdvanceStatus.CANCELLED;
       a.cancelReason = dto.reason.trim();
       a.updatedBy = actorId ?? null;
-      return manager.getRepository(EmployeeAdvance).save(a);
+      const saved = await manager.getRepository(EmployeeAdvance).save(a);
+      await this.closeLinkedRequest(a.id, HrRequestStatus.REJECTED, `تم إلغاء السلفة: ${a.cancelReason}`, actorId, manager);
+      return saved;
     });
   }
 
@@ -284,7 +321,9 @@ export class AdvanceService {
         journalEntryId: je.id,
         updatedBy: actorId ?? null,
       });
-      return manager.getRepository(EmployeeAdvance).save(a);
+      const saved = await manager.getRepository(EmployeeAdvance).save(a);
+      await this.closeLinkedRequest(a.id, HrRequestStatus.DONE, `تم صرف السلفة ${number} بتاريخ ${dto.paidDate} — تُخصم على ${a.installmentsCount} قسط`, actorId, manager);
+      return saved;
     });
   }
 
@@ -393,7 +432,9 @@ export class AdvanceService {
         fromExistingBalance: true,
         updatedBy: actorId ?? null,
       });
-      return manager.getRepository(EmployeeAdvance).save(a);
+      const saved = await manager.getRepository(EmployeeAdvance).save(a);
+      await this.closeLinkedRequest(a.id, HrRequestStatus.DONE, `تم تسجيل السلفة ${number} — تُخصم على ${a.installmentsCount} قسط`, actorId, manager);
+      return saved;
     });
   }
 
