@@ -283,7 +283,7 @@ export class UserService {
   }
 
   private generatePassword(): string {
-    // e.g. "Sami@3f9a2b" — readable + reasonably strong for a one-time reset.
-    return `Sami@${randomBytes(4).toString('hex')}`;
+    // e.g. "Temp@3f9a2b" — readable + reasonably strong for a one-time reset.
+    return `Temp@${randomBytes(4).toString('hex')}`;
   }
 }

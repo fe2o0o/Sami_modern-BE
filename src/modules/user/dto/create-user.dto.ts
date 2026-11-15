@@ -21,7 +21,7 @@ export class CreateUserDto {
   @MaxLength(100, { message: 'اسم المستخدم يجب ألا يتجاوز 100 حرف' })
   username!: string;
 
-  @ApiProperty({ example: 'admin@samy.com' })
+  @ApiProperty({ example: 'admin@example.com' })
   @IsEmail({}, { message: 'صيغة البريد الإلكتروني غير صحيحة' })
   email!: string;
 

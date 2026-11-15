@@ -28,7 +28,7 @@ const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'type', header: 'النوع', example: 'مخزن', note: 'مخزن / معرض / إنتاج / عبور (افتراضي: مخزن)' },
   { field: 'managerName', header: 'اسم المسؤول', example: 'محمد سعيد' },
   { field: 'phone', header: 'الهاتف', example: '0221000000' },
-  { field: 'email', header: 'البريد الإلكتروني', example: 'wh@sami.com' },
+  { field: 'email', header: 'البريد الإلكتروني', example: 'warehouse@example.com' },
   { field: 'address', header: 'العنوان', example: '' },
   { field: 'allowNegativeStock', header: 'يسمح بالرصيد السالب', type: 'boolean', example: 'لا' },
   { field: 'isDefault', header: 'افتراضي للفرع', type: 'boolean', example: 'لا', note: 'نعم/لا' },

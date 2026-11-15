@@ -31,7 +31,7 @@ const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'managerName', header: 'اسم المدير', example: 'أحمد علي' },
   { field: 'phone', header: 'الهاتف', example: '0221000000' },
   { field: 'mobile', header: 'الجوال', example: '01000000000' },
-  { field: 'email', header: 'البريد الإلكتروني', example: 'branch@sami.com' },
+  { field: 'email', header: 'البريد الإلكتروني', example: 'branch@example.com' },
   { field: 'country', header: 'الدولة', example: 'مصر' },
   { field: 'city', header: 'المدينة', example: 'الإسكندرية' },
   { field: 'address', header: 'العنوان', example: 'شارع فؤاد' },

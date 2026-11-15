@@ -26,7 +26,7 @@ import { CodeSettingService } from '../code-setting/code-setting.service';
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', example: 'BNK-002', note: 'كود فريد للحساب البنكي' },
   { field: 'bankName', header: 'اسم البنك', required: true, example: 'البنك الأهلي' },
-  { field: 'accountName', header: 'اسم الحساب', required: true, example: 'سامي للأثاث' },
+  { field: 'accountName', header: 'اسم الحساب', required: true, example: 'اسم الشركة' },
   { field: 'accountNumber', header: 'رقم الحساب', example: '1234567890' },
   { field: 'iban', header: 'الآيبان', example: 'EG380000000000000001234567890' },
   { field: 'branchCodes', header: 'أكواد الفروع', example: 'BR-001,BR-002', note: 'أكواد فروع مفصولة بفاصلة. اتركها فارغة ليكون متاحًا لكل الفروع' },
