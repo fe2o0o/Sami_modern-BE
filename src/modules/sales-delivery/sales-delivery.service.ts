@@ -364,6 +364,8 @@ export class SalesDeliveryService {
       .addSelect(`SUM(CASE WHEN d.status = 'posted' THEN 1 ELSE 0 END)`, 'posted')
       .addSelect(`SUM(CASE WHEN d.status = 'reversed' THEN 1 ELSE 0 END)`, 'reversed')
       .addSelect(`SUM(CASE WHEN ${pending} THEN 1 ELSE 0 END)`, 'pending')
+      // Fully delivered: a posted note, or an order whose lines were all confirmed (it stays «draft» as a document).
+      .addSelect(`SUM(CASE WHEN d.status = 'posted' OR (d.status = 'draft' AND d.deliveryProgress = 'delivered') THEN 1 ELSE 0 END)`, 'delivered')
       .addSelect(`SUM(CASE WHEN ${pending} AND d.deliveryProgress = 'partial' THEN 1 ELSE 0 END)`, 'partial')
       .addSelect(
         `SUM(CASE WHEN ${pending} AND d.expectedDeliveryDate IS NOT NULL AND d.expectedDeliveryDate < CURDATE() THEN 1 ELSE 0 END)`,
@@ -401,6 +403,7 @@ export class SalesDeliveryService {
       postedCount: n(raw, 'posted'),
       reversedCount: n(raw, 'reversed'),
       pendingCount: n(raw, 'pending'),
+      deliveredCount: n(raw, 'delivered'),
       partialCount: n(raw, 'partial'),
       overdueCount: n(raw, 'overdue'),
       orderedQuantity: ordered,

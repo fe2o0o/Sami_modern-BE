@@ -157,6 +157,11 @@ export class SalesReturnService {
         id: invoice.id,
         invoiceNumber: invoice.invoiceNumber,
         customerId: invoice.customerId,
+        // Shown on the return form as soon as the invoice is picked (a quick sale shows its walk-in name).
+        customerName:
+          invoice.walkInCustomerName ||
+          (await this.customerRepository.findOne({ where: { id: invoice.customerId }, select: { id: true, name: true } }))?.name ||
+          null,
         warehouseId: invoice.warehouseId,
         paymentType: invoice.paymentType,
         branchId: invoice.branchId,

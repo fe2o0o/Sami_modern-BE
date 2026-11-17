@@ -8,12 +8,11 @@ import { PayComponent } from './entities/pay-component.entity';
 import { SalaryPackage, SalaryPackageLine } from './entities/salary-package.entity';
 import { CreatePayComponentDto, CreateSalaryPackageDto, UpdatePayComponentDto } from './dto/salary.dto';
 import { PayCalcType, PayComponentType } from './enums/hr.enum';
+import { businessToday } from '../../common/utils/business-date.util';
 
 const round2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`;
-};
+/** «Today» in Egypt (the server may run on UTC). */
+const today = () => businessToday();
 
 export interface SalaryStructureQuery {
   search?: string;

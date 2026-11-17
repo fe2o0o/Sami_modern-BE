@@ -26,6 +26,7 @@ import { User } from '../user/entities/user.entity';
 import { SequenceService } from '../sequence/sequence.service';
 import { paginate } from '../../common/utils/pagination.util';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
+import { businessToday } from '../../common/utils/business-date.util';
 
 export interface ManufacturingOrderListItem {
   id: string;
@@ -67,11 +68,9 @@ export interface SupplierManufacturingStatement {
 
 const OPEN_STATUSES = [ManufacturingOrderStatus.NEW, ManufacturingOrderStatus.IN_PROGRESS];
 
+/** «Today» in Egypt (the server may run on UTC). */
 function todayIso(): string {
-  const d = new Date();
-  const m = `${d.getMonth() + 1}`.padStart(2, '0');
-  const day = `${d.getDate()}`.padStart(2, '0');
-  return `${d.getFullYear()}-${m}-${day}`;
+  return businessToday();
 }
 
 /** One manufacturing line to spawn an order from (from a sales invoice). */

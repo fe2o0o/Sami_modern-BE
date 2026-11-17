@@ -27,14 +27,13 @@ import { SalesInvoiceItem } from '../sales-invoice/entities/sales-invoice-item.e
 import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { SalesInvoiceStatus } from '../sales-invoice/enums/sales-invoice.enum';
 import { unitCostsOf } from '../sales-invoice/product-unit-cost.util';
+import { businessToday } from '../../common/utils/business-date.util';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
+/** «Today» in Egypt (the server may run on UTC). */
 function todayIso(): string {
-  const d = new Date();
-  const m = `${d.getMonth() + 1}`.padStart(2, '0');
-  const day = `${d.getDate()}`.padStart(2, '0');
-  return `${d.getFullYear()}-${m}-${day}`;
+  return businessToday();
 }
 
 /**
@@ -874,8 +873,7 @@ export class ManufacturingProductionService {
         components += (Number(c.quantity) || 0) * cost;
       }
       const total = round2(components + (Number(order.manufacturingFee) || 0));
-      const t = new Date();
-      const today = `${t.getFullYear()}-${`${t.getMonth() + 1}`.padStart(2, '0')}-${`${t.getDate()}`.padStart(2, '0')}`;
+      const today = todayIso();
       await this.syncInvoiceLineCost(order, round2(total / order.quantity), today, 'estimate', actorId, manager);
     });
   }

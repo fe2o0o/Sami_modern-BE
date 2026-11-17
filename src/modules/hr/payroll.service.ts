@@ -29,13 +29,12 @@ import {
 import { CreatePayrollRunDto, PayPayrollDto, PayrollQueryDto, UpdatePayrollLineDto } from './dto/payroll.dto';
 import { HrReasonDto } from './dto/advance.dto';
 import { HrPostingHelper } from './hr-posting.helper';
+import { businessToday } from '../../common/utils/business-date.util';
 
 const round2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 const pad = (n: number) => `${n}`.padStart(2, '0');
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
+/** «Today» in Egypt (the server may run on UTC). */
+const today = () => businessToday();
 /** 'YYYY-MM' (or any date in the month) → first / last day. */
 const monthStart = (m: string) => `${m.slice(0, 7)}-01`;
 const monthEnd = (m: string) => {

@@ -9,6 +9,7 @@ import { EmployeeStatusChange } from './entities/employee-status-change.entity';
 import { EmployeeDocument } from './entities/employee-document.entity';
 import { ChangeEmployeeStatusDto, UploadEmployeeDocumentDto } from './dto/employee-hr.dto';
 import { EMPLOYMENT_STATUS_LABELS, EmployeeDocumentType, EmploymentStatus, EXIT_STATUSES } from './enums/hr.enum';
+import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
 
 /**
  * PRIVATE storage root — deliberately NOT under the public `/uploads` static
@@ -38,10 +39,8 @@ export interface StoredFile {
 /** Days before expiry at which a document is flagged. */
 export const DOCUMENT_EXPIRY_WARNING_DAYS = 30;
 
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`;
-};
+/** «Today» in Egypt (the server may run on UTC). */
+const today = () => businessToday();
 
 /** Employee HR actions: status lifecycle, documents and photo. */
 @Injectable()
@@ -148,13 +147,12 @@ export class EmployeeHrService {
 
   /** Documents expiring within the warning window (or already expired) — for cards/dashboard. */
   async expiringDocumentsCount(employeeIds?: string[]): Promise<number> {
-    const limit = new Date();
-    limit.setDate(limit.getDate() + DOCUMENT_EXPIRY_WARNING_DAYS);
+    const limit = addDaysIso(today(), DOCUMENT_EXPIRY_WARNING_DAYS);
     const qb = this.documents
       .createQueryBuilder('d')
       .innerJoin(Employee, 'e', 'e.id = d.employeeId AND e.deletedAt IS NULL AND e.isActive = 1')
       .where('d.expiryDate IS NOT NULL')
-      .andWhere('d.expiryDate <= :limit', { limit: limit.toISOString().slice(0, 10) });
+      .andWhere('d.expiryDate <= :limit', { limit });
     if (employeeIds) {
       if (!employeeIds.length) return 0;
       qb.andWhere('d.employeeId IN (:...ids)', { ids: employeeIds });
@@ -166,9 +164,8 @@ export class EmployeeHrService {
     let expiryState: 'none' | 'valid' | 'expiring' | 'expired' = 'none';
     if (d.expiryDate) {
       const t = today();
-      const limit = new Date();
-      limit.setDate(limit.getDate() + DOCUMENT_EXPIRY_WARNING_DAYS);
-      expiryState = d.expiryDate < t ? 'expired' : d.expiryDate <= limit.toISOString().slice(0, 10) ? 'expiring' : 'valid';
+      const limit = addDaysIso(t, DOCUMENT_EXPIRY_WARNING_DAYS);
+      expiryState = d.expiryDate < t ? 'expired' : d.expiryDate <= limit ? 'expiring' : 'valid';
     }
     const { storedName: _s, ...rest } = d;
     return { ...rest, expiryState };

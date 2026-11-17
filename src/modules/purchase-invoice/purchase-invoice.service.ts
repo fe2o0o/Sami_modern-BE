@@ -60,6 +60,8 @@ export interface PurchaseProductOption {
   costPrice: number;
   imageUrl: string | null;
   onHand: number;
+  /** Weighted-average cost in the chosen warehouse (0 when it holds none yet). */
+  avgCost: number;
 }
 
 @Injectable()
@@ -347,6 +349,7 @@ export class PurchaseInvoiceService {
       this.imageRepository.find({ where: { productId: In(ids), isPrimary: true } }),
     ]);
     const qtyByProduct = new Map(stocks.map((s): [string, number] => [s.productId, s.quantity]));
+    const avgByProduct = new Map(stocks.map((s): [string, number] => [s.productId, Number(s.avgCost) || 0]));
     const imgByProduct = new Map(images.map((i): [string, string] => [i.productId, i.url]));
 
     return products.map((p) => ({
@@ -358,6 +361,7 @@ export class PurchaseInvoiceService {
       costPrice: p.costPrice,
       imageUrl: imgByProduct.get(p.id) ?? null,
       onHand: qtyByProduct.get(p.id) ?? 0,
+      avgCost: avgByProduct.get(p.id) ?? 0,
     }));
   }
 

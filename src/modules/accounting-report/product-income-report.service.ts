@@ -15,6 +15,7 @@ import { AccountingPeriod } from '../accounting-period/entities/accounting-perio
 import { ProductIncomeCompare, ProductIncomePreset, ProductIncomeQueryDto } from './dto/product-income-query.dto';
 import { categorySubtreeIds } from '../product-category/category-subtree.util';
 import { daysBetween, growthPct, previousRange, productMetrics, r2, r3, summariseMetrics } from './product-income-math';
+import { businessTodayDate } from '../../common/utils/business-date.util';
 
 /**
  * Product Income Summary — product-level revenue, returns, COGS and gross
@@ -199,7 +200,7 @@ export class ProductIncomeReportService {
   // Period resolution (server-side normalisation)
   // =========================================================
   private async resolveRange(q: ProductIncomeQueryDto): Promise<{ range: Range; preset: ProductIncomePreset }> {
-    const today = new Date();
+    const today = businessTodayDate(); // Egypt's date, whatever the server timezone
     const y = today.getFullYear();
     const m = today.getMonth();
     const preset: ProductIncomePreset = q.preset ?? (q.from || q.to ? 'custom' : 'this_month');

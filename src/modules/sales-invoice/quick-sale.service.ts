@@ -17,14 +17,13 @@ import { AccountingPeriod } from '../accounting-period/entities/accounting-perio
 import { Treasury } from '../treasury/entities/treasury.entity';
 import { BankAccount } from '../bank-account/entities/bank-account.entity';
 import { SalesCashSplit } from './entities/sales-invoice.entity';
+import { businessToday } from '../../common/utils/business-date.util';
 
 /** The one system customer every quick sale is booked against. */
 export const QUICK_SALE_CUSTOMER_CODE = 'QUICK-SALE';
 
-const todayIso = (): string => {
-  const d = new Date();
-  return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`;
-};
+/** «Today» in Egypt (the server may run on UTC). */
+const todayIso = (): string => businessToday();
 
 /**
  * Quick sale (بيع سريع): builds a CASH stock invoice for a walk-in customer and

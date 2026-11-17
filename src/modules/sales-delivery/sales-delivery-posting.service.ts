@@ -41,6 +41,7 @@ import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { Customer } from '../customer/entities/customer.entity';
 import { missingAccountMessage } from '../product/product-accounts';
+import { businessToday } from '../../common/utils/business-date.util';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
@@ -873,7 +874,7 @@ export class SalesDeliveryPostingService {
   }
 }
 
+/** «Today» in Egypt (the server may run on UTC). */
 function todayIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`;
+  return businessToday();
 }

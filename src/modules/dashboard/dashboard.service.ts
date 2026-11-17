@@ -15,6 +15,7 @@ import { BankTransaction } from '../bank-account/entities/bank-transaction.entit
 import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
 import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
 import { DashboardQueryDto } from './dto/dashboard-query.dto';
+import { businessTodayDate } from '../../common/utils/business-date.util';
 
 const POSTED = 'posted';
 
@@ -541,7 +542,7 @@ export class DashboardService {
   }
 
   private resolveRange(q: DashboardQueryDto): Range {
-    const today = new Date();
+    const today = businessTodayDate(); // Egypt's date, whatever the server timezone
     const from = q.dateFrom ?? this.iso(new Date(today.getFullYear(), today.getMonth(), 1));
     const to = q.dateTo ?? this.iso(new Date(today.getFullYear(), today.getMonth() + 1, 0));
     const fromD = new Date(from + 'T00:00:00');

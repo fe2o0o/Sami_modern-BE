@@ -18,6 +18,7 @@ import { ProductCategory } from '../product-category/entities/product-category.e
 import { categorySubtreeIds } from '../product-category/category-subtree.util';
 import { ProductSalesDetailQueryDto } from './dto/product-sales-detail-query.dto';
 import { round2 } from './ledger-math';
+import { businessTodayDate } from '../../common/utils/business-date.util';
 
 /** How the line's cost was obtained. */
 export type CostBasis = 'actual' | 'partial' | 'estimated' | 'service' | 'none';
@@ -122,7 +123,7 @@ export class ProductSalesDetailService {
   constructor(private readonly dataSource: DataSource) {}
 
   async report(q: ProductSalesDetailQueryDto, scope: BranchScope = null): Promise<ProductSalesDetailReport> {
-    const today = new Date();
+    const today = businessTodayDate(); // Egypt's date, whatever the server timezone
     const from = q.dateFrom ?? ymd(new Date(today.getFullYear(), today.getMonth(), 1));
     const to = q.dateTo ?? ymd(today);
     if (from > to) throw new BadRequestException('تاريخ البداية بعد تاريخ النهاية');

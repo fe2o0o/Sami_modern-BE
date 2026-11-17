@@ -13,12 +13,11 @@ import { EmployeeCustody, EmployeeCustodySettlement } from './entities/employee-
 import { CreateCustodyDto, CustodyQueryDto, HrReasonDto, SettleCustodyDto } from './dto/advance.dto';
 import { CustodySettlementType, CustodyStatus, HrCashMethod, HrMovementStatus } from './enums/advance.enum';
 import { HrPostingHelper } from './hr-posting.helper';
+import { businessToday } from '../../common/utils/business-date.util';
 
 const round2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`;
-};
+/** «Today» in Egypt (the server may run on UTC). */
+const today = () => businessToday();
 
 /**
  * Employee custody (phase 3): draft → posted (DR employee custody [employee] /

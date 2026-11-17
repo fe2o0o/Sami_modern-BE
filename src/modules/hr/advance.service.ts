@@ -16,12 +16,11 @@ import { AdvanceStatus, HrCashMethod, HrMovementStatus, InstallmentStatus } from
 import { HrPostingHelper } from './hr-posting.helper';
 import { HrRequest } from '../attendance/entities/hr-request.entity';
 import { HrRequestStatus } from '../attendance/attendance.enum';
+import { businessToday } from '../../common/utils/business-date.util';
 
 const round2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`;
-};
+/** «Today» in Egypt (the server may run on UTC). */
+const today = () => businessToday();
 /** First day of the month of an ISO date, shifted by `add` months. */
 const monthStart = (iso: string, add = 0): string => {
   const [y, m] = iso.split('-').map(Number);

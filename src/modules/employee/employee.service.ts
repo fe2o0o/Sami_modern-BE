@@ -23,6 +23,7 @@ import { ExcelService } from '../../common/excel/excel.service';
 import { ImportRegistry } from '../../common/excel/import.registry';
 import { ImportColumn, ImportResult, UploadedExcel } from '../../common/excel/excel.types';
 import { str, optStr, optNum, bool } from '../../common/excel/import.helpers';
+import { businessToday, businessYear } from '../../common/utils/business-date.util';
 
 const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'code', header: 'الكود', example: 'EMP-001', note: 'كود فريد للموظف' },
@@ -39,10 +40,8 @@ const IMPORT_COLUMNS: ImportColumn[] = [
 /** Fields only changed through their own flows (status endpoint, salary packages, photo upload). */
 const NOT_EDITABLE = ['isActive', 'netSalary', 'employmentStatus', 'exitDate', 'exitReason', 'photoName'] as const;
 
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`;
-};
+/** «Today» in Egypt (the server may run on UTC). */
+const today = () => businessToday();
 
 @Injectable()
 export class EmployeeService extends BaseCrudService<Employee> {
@@ -220,7 +219,7 @@ export class EmployeeService extends BaseCrudService<Employee> {
     await this.salary.syncDueNetSalaries();
     const qb = this.employeeRepository.createQueryBuilder('employee');
     this.applyListFilters(qb, query, scope);
-    const year = new Date().getFullYear();
+    const year = businessYear();
     const raw = await qb
       .clone()
       .select('COUNT(*)', 'cnt')
