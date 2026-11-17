@@ -94,6 +94,13 @@ export class QuickSaleDto {
   @IsDateString({}, { message: 'التاريخ غير صحيح' })
   invoiceDate?: string;
 
+  /** The sale's branch, picked on the form. Every row warehouse must belong to it
+   *  (or be shared). Omitted → taken from the warehouses. */
+  @ApiPropertyOptional({ format: 'uuid', description: 'الفرع' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'الفرع غير صحيح' })
+  branchId?: string | null;
+
   @ApiProperty({ format: 'uuid', description: 'المخزن الذي تخرج منه البضاعة' })
   @IsUUID(undefined, { message: 'اختر المخزن' })
   warehouseId!: string;
