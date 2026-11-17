@@ -10,6 +10,7 @@ import { SalesInvoiceService } from './sales-invoice.service';
 import { SalesInvoicePostingService } from './sales-invoice-posting.service';
 import { Customer } from '../customer/entities/customer.entity';
 import { Warehouse } from '../warehouse/entities/warehouse.entity';
+import { Branch } from '../branch/entities/branch.entity';
 import { Product } from '../product/entities/product.entity';
 import { ProductType } from '../product/enums/product-type.enum';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
@@ -67,7 +68,15 @@ export class QuickSaleService {
     }
     const branchIds = [...new Set(warehouses.map((w) => w.branchId).filter((b): b is string => !!b))];
     if (branchIds.length > 1) throw new BadRequestException('كل المخازن في الفاتورة يجب أن تكون من نفس الفرع');
-    const saleBranchId = branchIds[0] ?? null;
+    // A branch picked on the form wins; its warehouses (or shared ones) only.
+    if (dto.branchId) {
+      if (!isWithinBranchScope(dto.branchId, branchScope)) throw new BadRequestException('الفرع خارج نطاق فروعك');
+      const branch = await this.dataSource.getRepository(Branch).findOne({ where: { id: dto.branchId } });
+      if (!branch) throw new NotFoundException('الفرع غير موجود');
+      const foreign = warehouses.find((w) => w.branchId && w.branchId !== dto.branchId);
+      if (foreign) throw new BadRequestException(`المخزن «${foreign.name}» ليس من فرع «${branch.name}»`);
+    }
+    const saleBranchId = dto.branchId ?? branchIds[0] ?? null;
 
     // Stock goods only — nothing made to order, no services.
     const productIds = [...new Set(dto.items.map((i) => i.productId))];

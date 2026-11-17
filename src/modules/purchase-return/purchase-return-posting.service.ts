@@ -17,7 +17,11 @@ import { AccountingSetting } from '../accounting-setting/entities/accounting-set
 import { FiscalYear } from '../fiscal-year/entities/fiscal-year.entity';
 import { AccountingPeriod } from '../accounting-period/entities/accounting-period.entity';
 import { StockLineInput, StockService } from '../stock/stock.service';
-import { StockMovementType } from '../stock/enums/stock.enum';
+import { StockDirection, StockMovementType } from '../stock/enums/stock.enum';
+import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
+import { StockMovement } from '../stock/entities/stock-movement.entity';
+import { Warehouse } from '../warehouse/entities/warehouse.entity';
+import { PurchaseReturnItem } from './entities/purchase-return-item.entity';
 import { SequenceService } from '../sequence/sequence.service';
 import { SupplierLedgerService } from '../supplier/supplier-ledger.service';
 import { SupplierTransactionType } from '../supplier/enums/supplier-transaction.enum';
@@ -32,6 +36,7 @@ import { Supplier } from '../supplier/entities/supplier.entity';
 import { missingAccountMessage } from '../product/product-accounts';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
+function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
 
 /**
  * Accounting/inventory side-effects of a purchase return — the inverse of a
@@ -67,12 +72,19 @@ export class PurchaseReturnPostingService {
 
       const number = await this.sequenceService.nextDocumentNumber('PR', fiscalYear, manager);
 
-      // Issue the returned goods out of the warehouse.
+      // Goods that are no longer in the warehouse can not be sent back to the supplier.
+      await this.assertOnHand(ret, manager);
+
+      // Issue the returned goods at the cost they were PURCHASED at (not the warehouse
+      // average): the stock value then drops by exactly what the journal credits to
+      // inventory, and the average of what is left is recomputed.
+      ret.items.forEach((i) => (i.unitCostAtPost = this.purchaseUnitCost(i)));
       const stockLines: StockLineInput[] = ret.items.map((i) => ({
         warehouseId: ret.warehouseId,
         productId: i.productId,
         productName: i.productName ?? undefined,
         quantity: i.quantity,
+        exactUnitCost: i.unitCostAtPost,
       }));
       await this.stockService.issue(stockLines, manager, {
         movementType: StockMovementType.PURCHASE_RETURN,
@@ -81,6 +93,7 @@ export class PurchaseReturnPostingService {
         sourceNumber: number,
         movementDate: ret.returnDate,
         actorId,
+        // On-hand already checked above (strictly, whatever the warehouse setting).
         allowNegative: true,
       });
 
@@ -166,9 +179,17 @@ export class PurchaseReturnPostingService {
       const original = ret.journalEntryId ? await this.journalService.findWithLines(ret.journalEntryId) : null;
       if (!original) throw new BadRequestException('تعذّر إيجاد القيد الأصلي للمردود');
 
-      // Reversing the return receives the goods back at their original cost.
+      // Reversing the return receives the goods back at the cost they actually LEFT at
+      // (its own stock movements), so the warehouse is exactly as before the return —
+      // also for returns posted before they went out at the purchase cost.
+      const leftAt = await this.issuedUnitCosts(ret.id, manager);
       await this.stockService.receive(
-        ret.items.map((i) => ({ warehouseId: ret.warehouseId, productId: i.productId, quantity: i.quantity, unitCost: i.unitCostAtPost })),
+        ret.items.map((i) => ({
+          warehouseId: ret.warehouseId,
+          productId: i.productId,
+          quantity: i.quantity,
+          unitCost: leftAt.get(i.productId) ?? this.purchaseUnitCost(i),
+        })),
         manager,
         {
           movementType: StockMovementType.PURCHASE_RETURN,
@@ -307,6 +328,51 @@ export class PurchaseReturnPostingService {
   // =========================================================
   // HELPERS
   // =========================================================
+  /** Net unit cost the line was bought at: the purchase line's snapshot, else (older
+   *  invoices posted before the snapshot existed) the line's net ÷ quantity. */
+  private purchaseUnitCost(item: PurchaseReturnItem): number {
+    if (Number(item.unitCostAtPost) > 0) return Number(item.unitCostAtPost);
+    const qty = Number(item.quantity) || 0;
+    return qty > 0 ? round2((Number(item.netBeforeTax) || 0) / qty) : 0;
+  }
+
+  /** Refuse the return when the warehouse no longer holds the quantity being sent back. */
+  private async assertOnHand(ret: PurchaseReturn, manager: EntityManager): Promise<void> {
+    const wanted = new Map<string, { qty: number; name: string }>();
+    for (const i of ret.items) {
+      const w = wanted.get(i.productId) ?? { qty: 0, name: i.productName ?? '' };
+      w.qty = round3(w.qty + (Number(i.quantity) || 0));
+      wanted.set(i.productId, w);
+    }
+    const stock = await manager.getRepository(WarehouseStock).find({
+      where: { warehouseId: ret.warehouseId, productId: In([...wanted.keys()]) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    const onHand = new Map(stock.map((s): [string, number] => [s.productId, Number(s.quantity) || 0]));
+    const short = [...wanted.entries()].filter(([id, w]) => (onHand.get(id) ?? 0) + 1e-6 < w.qty);
+    if (!short.length) return;
+    const wh = await manager.getRepository(Warehouse).findOne({ where: { id: ret.warehouseId }, select: { id: true, name: true } });
+    const lines = short.map(([id, w]) => `«${w.name}»: الموجود ${round3(Math.max(0, onHand.get(id) ?? 0))} والمطلوب إرجاعه ${w.qty}`);
+    throw new BadRequestException(
+      `لا يمكن ترحيل المرتجع لأن الكمية غير موجودة في المخزن «${wh?.name ?? ''}» — ${lines.join(' · ')}`,
+    );
+  }
+
+  /** Unit cost each product left the warehouse at when this return was posted. */
+  private async issuedUnitCosts(returnId: string, manager: EntityManager): Promise<Map<string, number>> {
+    const rows = await manager.getRepository(StockMovement).find({
+      where: { sourceId: returnId, sourceType: JournalSourceType.PURCHASE_RETURN, direction: StockDirection.OUT },
+    });
+    const sums = new Map<string, { qty: number; value: number }>();
+    for (const r of rows) {
+      const s = sums.get(r.productId) ?? { qty: 0, value: 0 };
+      s.qty += Number(r.quantity) || 0;
+      s.value += (Number(r.quantity) || 0) * (Number(r.unitCost) || 0);
+      sums.set(r.productId, s);
+    }
+    return new Map([...sums.entries()].filter(([, s]) => s.qty > 0).map(([id, s]): [string, number] => [id, round2(s.value / s.qty)]));
+  }
+
   private async lock(manager: EntityManager, id: string): Promise<PurchaseReturn> {
     const r = await manager.findOne(PurchaseReturn, {
       where: { id },
