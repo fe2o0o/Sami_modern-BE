@@ -38,6 +38,13 @@ export class PurchaseInvoiceController {
     return this.service.purchaseProducts(warehouseId);
   }
 
+  @Get('manufacturing-orders')
+  @RequirePermissions('purchase_invoices.view')
+  @ApiOperation({ summary: 'أوامر التصنيع المتاحة للشراء المباشر عليها (جديد / قيد التنفيذ)' })
+  directMaterialOrders(@BranchScope() branchScope: string[] | null) {
+    return this.service.directMaterialOrders(branchScope);
+  }
+
   @Get('summary')
   @RequirePermissions('purchase_invoices.view')
   @ApiOperation({ summary: 'تحليل فواتير المشتريات حسب نفس فلاتر القائمة' })

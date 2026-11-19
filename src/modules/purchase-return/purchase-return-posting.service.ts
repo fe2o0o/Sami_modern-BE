@@ -22,6 +22,15 @@ import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
 import { StockMovement } from '../stock/entities/stock-movement.entity';
 import { Warehouse } from '../warehouse/entities/warehouse.entity';
 import { PurchaseReturnItem } from './entities/purchase-return-item.entity';
+import { PurchaseInvoiceItem } from '../purchase-invoice/entities/purchase-invoice-item.entity';
+import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
+import { MANUFACTURING_ORDER_STATUS_LABELS, ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
+import { DIRECT_MATERIAL_OPEN_STATUSES } from '../manufacturing/direct-material.util';
+import { ManufacturingProductionService } from '../manufacturing/manufacturing-production.service';
+
+/** A returned line of material bought straight onto a manufacturing order: credited to the
+ *  order's product cost account (where its purchase was debited), no stock movement. */
+interface DirectTarget { accountId: string; order: ManufacturingOrder }
 import { SequenceService } from '../sequence/sequence.service';
 import { SupplierLedgerService } from '../supplier/supplier-ledger.service';
 import { SupplierTransactionType } from '../supplier/enums/supplier-transaction.enum';
@@ -53,6 +62,7 @@ export class PurchaseReturnPostingService {
     private readonly cashSubledger: CashSubledgerService,
     private readonly journalService: JournalEntryService,
     private readonly dataSource: DataSource,
+    private readonly manufacturing: ManufacturingProductionService,
   ) {}
 
   async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<PurchaseReturn> {
@@ -72,34 +82,40 @@ export class PurchaseReturnPostingService {
 
       const number = await this.sequenceService.nextDocumentNumber('PR', fiscalYear, manager);
 
+      // Material bought straight onto a still-open manufacturing order: its cost leaves
+      // the order (no stock). Refused once the order was produced.
+      const direct = await this.directLines(ret, settings, manager, 'post');
+
       // Goods that are no longer in the warehouse can not be sent back to the supplier.
-      await this.assertOnHand(ret, manager);
+      await this.assertOnHand(ret, manager, direct);
 
       // Issue the returned goods at the cost they were PURCHASED at (not the warehouse
       // average): the stock value then drops by exactly what the journal credits to
       // inventory, and the average of what is left is recomputed.
       ret.items.forEach((i) => (i.unitCostAtPost = this.purchaseUnitCost(i)));
-      const stockLines: StockLineInput[] = ret.items.map((i) => ({
-        warehouseId: ret.warehouseId,
+      const stockLines: StockLineInput[] = ret.items.filter((i) => !direct.has(i.id)).map((i) => ({
+        warehouseId: i.warehouseId ?? ret.warehouseId,
         productId: i.productId,
         productName: i.productName ?? undefined,
         quantity: i.quantity,
         exactUnitCost: i.unitCostAtPost,
       }));
-      await this.stockService.issue(stockLines, manager, {
-        movementType: StockMovementType.PURCHASE_RETURN,
-        sourceType: JournalSourceType.PURCHASE_RETURN,
-        sourceId: ret.id,
-        sourceNumber: number,
-        movementDate: ret.returnDate,
-        actorId,
-        // On-hand already checked above (strictly, whatever the warehouse setting).
-        allowNegative: true,
-      });
+      if (stockLines.length) {
+        await this.stockService.issue(stockLines, manager, {
+          movementType: StockMovementType.PURCHASE_RETURN,
+          sourceType: JournalSourceType.PURCHASE_RETURN,
+          sourceId: ret.id,
+          sourceNumber: number,
+          movementDate: ret.returnDate,
+          actorId,
+          // On-hand already checked above (strictly, whatever the warehouse setting).
+          allowNegative: true,
+        });
+      }
 
       const supplier = await manager.getRepository(Supplier).findOne({ where: { id: ret.supplierId }, select: { id: true, name: true } });
       const supplierName = supplier?.name ?? '';
-      const lines = this.buildJournalLines(ret, products, settings, number, supplierName);
+      const lines = this.buildJournalLines(ret, products, settings, number, supplierName, direct);
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.PURCHASE_RETURN,
@@ -160,6 +176,10 @@ export class PurchaseReturnPostingService {
       ret.updatedBy = actorId ?? null;
 
       await manager.getRepository(PurchaseReturn).save(ret);
+      // The returned material's cost leaves its orders (and their sales-invoice estimate).
+      for (const orderId of new Set([...direct.values()].map((t) => t.order.id))) {
+        await this.manufacturing.refreshDirectMaterialWithin(orderId, manager, { date: ret.returnDate, actorId });
+      }
       return this.reload(manager, id);
     });
   }
@@ -182,24 +202,32 @@ export class PurchaseReturnPostingService {
       // Reversing the return receives the goods back at the cost they actually LEFT at
       // (its own stock movements), so the warehouse is exactly as before the return —
       // also for returns posted before they went out at the purchase cost.
+      // Lines that were returned straight off a manufacturing order (no stock moved):
+      // their cost goes back onto the order — only while it is still unproduced.
+      const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+      if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
+      const direct = await this.directLines(ret, settings, manager, 'reverse');
       const leftAt = await this.issuedUnitCosts(ret.id, manager);
-      await this.stockService.receive(
-        ret.items.map((i) => ({
-          warehouseId: ret.warehouseId,
-          productId: i.productId,
-          quantity: i.quantity,
-          unitCost: leftAt.get(i.productId) ?? this.purchaseUnitCost(i),
-        })),
-        manager,
-        {
-          movementType: StockMovementType.PURCHASE_RETURN,
-          sourceType: JournalSourceType.PURCHASE_RETURN,
-          sourceId: ret.id,
-          sourceNumber: ret.returnNumber,
-          movementDate: dto.reversalDate,
-          actorId,
-        },
-      );
+      const back = ret.items.filter((i) => !direct.has(i.id));
+      if (back.length) {
+        await this.stockService.receive(
+          back.map((i) => ({
+            warehouseId: i.warehouseId ?? ret.warehouseId,
+            productId: i.productId,
+            quantity: i.quantity,
+            unitCost: leftAt.get(i.productId) ?? this.purchaseUnitCost(i),
+          })),
+          manager,
+          {
+            movementType: StockMovementType.PURCHASE_RETURN,
+            sourceType: JournalSourceType.PURCHASE_RETURN,
+            sourceId: ret.id,
+            sourceNumber: ret.returnNumber,
+            movementDate: dto.reversalDate,
+            actorId,
+          },
+        );
+      }
 
       const reversalLines: JournalLineInput[] = original.lines.map((l) => ({
         accountId: l.accountId,
@@ -269,6 +297,9 @@ export class PurchaseReturnPostingService {
       ret.updatedBy = actorId ?? null;
 
       await manager.getRepository(PurchaseReturn).save(ret);
+      for (const orderId of new Set([...direct.values()].map((t) => t.order.id))) {
+        await this.manufacturing.refreshDirectMaterialWithin(orderId, manager, { date: dto.reversalDate, actorId });
+      }
       return this.reload(manager, id);
     });
   }
@@ -276,7 +307,14 @@ export class PurchaseReturnPostingService {
   // =========================================================
   // ACCOUNTING (inverse of the purchase)
   // =========================================================
-  private buildJournalLines(ret: PurchaseReturn, products: Map<string, Product>, settings: AccountingSetting, number: string, supplierName: string): JournalLineInput[] {
+  private buildJournalLines(
+    ret: PurchaseReturn,
+    products: Map<string, Product>,
+    settings: AccountingSetting,
+    number: string,
+    supplierName: string,
+    direct: Map<string, DirectTarget> = new Map(),
+  ): JournalLineInput[] {
     const b = new JournalLineBuilder();
     const ref = `مردود مشتريات ${number}`;
 
@@ -289,7 +327,12 @@ export class PurchaseReturnPostingService {
 
     // Credit inventory (goods leave) at the returned net cost.
     for (const item of ret.items) {
-      b.add(this.resolveInventoryAccount(products.get(item.productId)!, settings)!, 0, item.netBeforeTax, `إخراج بضاعة مرتجعة من المخزن — ${ref}`, { warehouseId: ret.warehouseId });
+      const target = direct.get(item.id);
+      if (target) {
+        b.add(target.accountId, 0, item.netBeforeTax, `مرتجع خامة مباشرة «${item.productName ?? ''}» من أمر تصنيع ${target.order.orderNumber ?? ''} (${target.order.productName ?? ''}) — ${ref}`, { productId: target.order.productId });
+        continue;
+      }
+      b.add(this.resolveInventoryAccount(products.get(item.productId)!, settings)!, 0, item.netBeforeTax, `إخراج بضاعة مرتجعة من المخزن — ${ref}`, { warehouseId: item.warehouseId ?? ret.warehouseId });
     }
     // Credit recoverable input VAT (reduce it).
     if (ret.vatAmount > 0) b.add(settings.inputVatAccountId!, 0, ret.vatAmount, `عكس ضريبة القيمة المضافة (مدخلات) — ${ref}`);
@@ -337,25 +380,89 @@ export class PurchaseReturnPostingService {
   }
 
   /** Refuse the return when the warehouse no longer holds the quantity being sent back. */
-  private async assertOnHand(ret: PurchaseReturn, manager: EntityManager): Promise<void> {
-    const wanted = new Map<string, { qty: number; name: string }>();
+  private async assertOnHand(ret: PurchaseReturn, manager: EntityManager, direct: Map<string, DirectTarget> = new Map()): Promise<void> {
+    // Per warehouse + product (a line of material moved off a cancelled order returns from its own warehouse).
+    const wanted = new Map<string, { warehouseId: string; productId: string; qty: number; name: string }>();
     for (const i of ret.items) {
-      const w = wanted.get(i.productId) ?? { qty: 0, name: i.productName ?? '' };
+      if (direct.has(i.id)) continue;
+      const warehouseId = i.warehouseId ?? ret.warehouseId;
+      const key = `${warehouseId}|${i.productId}`;
+      const w = wanted.get(key) ?? { warehouseId, productId: i.productId, qty: 0, name: i.productName ?? '' };
       w.qty = round3(w.qty + (Number(i.quantity) || 0));
-      wanted.set(i.productId, w);
+      wanted.set(key, w);
     }
-    const stock = await manager.getRepository(WarehouseStock).find({
-      where: { warehouseId: ret.warehouseId, productId: In([...wanted.keys()]) },
-      lock: { mode: 'pessimistic_write' },
-    });
-    const onHand = new Map(stock.map((s): [string, number] => [s.productId, Number(s.quantity) || 0]));
-    const short = [...wanted.entries()].filter(([id, w]) => (onHand.get(id) ?? 0) + 1e-6 < w.qty);
+    if (!wanted.size) return;
+    const short: { w: { warehouseId: string; productId: string; qty: number; name: string }; onHand: number }[] = [];
+    for (const w of wanted.values()) {
+      const s = await manager.getRepository(WarehouseStock).findOne({
+        where: { warehouseId: w.warehouseId, productId: w.productId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const onHand = Number(s?.quantity) || 0;
+      if (onHand + 1e-6 < w.qty) short.push({ w, onHand });
+    }
     if (!short.length) return;
-    const wh = await manager.getRepository(Warehouse).findOne({ where: { id: ret.warehouseId }, select: { id: true, name: true } });
-    const lines = short.map(([id, w]) => `«${w.name}»: الموجود ${round3(Math.max(0, onHand.get(id) ?? 0))} والمطلوب إرجاعه ${w.qty}`);
-    throw new BadRequestException(
-      `لا يمكن ترحيل المرتجع لأن الكمية غير موجودة في المخزن «${wh?.name ?? ''}» — ${lines.join(' · ')}`,
-    );
+    const whs = await manager.getRepository(Warehouse).find({ where: { id: In([...new Set(short.map((x) => x.w.warehouseId))]) }, select: { id: true, name: true } });
+    const whName = new Map(whs.map((w) => [w.id, w.name]));
+    const lines = short.map((x) => `«${x.w.name}» في «${whName.get(x.w.warehouseId) ?? ''}»: الموجود ${round3(Math.max(0, x.onHand))} والمطلوب إرجاعه ${x.w.qty}`);
+    throw new BadRequestException(`لا يمكن ترحيل المرتجع لأن الكمية غير موجودة في المخزن — ${lines.join(' · ')}`);
+  }
+
+  /**
+   * Return lines of material bought straight onto a manufacturing order whose cost is
+   * (still) on the order → the order's product cost account. On posting: the material
+   * did not move into a warehouse. On reversal: it had not moved when the return was
+   * posted (moved later = the order was cancelled → nothing to put back). Either way the
+   * order must still be unproduced.
+   */
+  private async directLines(
+    ret: PurchaseReturn,
+    settings: AccountingSetting,
+    manager: EntityManager,
+    mode: 'post' | 'reverse',
+  ): Promise<Map<string, DirectTarget>> {
+    const out = new Map<string, DirectTarget>();
+    const srcIds = ret.items.map((i) => i.purchaseInvoiceItemId).filter((v): v is string => !!v);
+    if (!srcIds.length) return out;
+    const srcs = await manager.getRepository(PurchaseInvoiceItem).find({ where: { id: In(srcIds) } });
+    const srcById = new Map(srcs.map((s) => [s.id, s]));
+    const postedAt = ret.postedAt ? new Date(ret.postedAt).getTime() : 0;
+    if (mode === 'post') {
+      // A draft made before the order was cancelled: the material now lives where it was moved to.
+      for (const i of ret.items) {
+        const s = i.purchaseInvoiceItemId ? srcById.get(i.purchaseInvoiceItemId) : undefined;
+        if (s?.releasedWarehouseId) i.warehouseId = s.releasedWarehouseId;
+      }
+    }
+    const linked = ret.items.filter((i) => {
+      const s = i.purchaseInvoiceItemId ? srcById.get(i.purchaseInvoiceItemId) : undefined;
+      if (!s?.manufacturingOrderId) return false;
+      if (!s.releasedAt) return true;
+      return mode === 'reverse' && new Date(s.releasedAt).getTime() > postedAt;
+    });
+    if (!linked.length) return out;
+    const orderIds = [...new Set(linked.map((i) => srcById.get(i.purchaseInvoiceItemId!)!.manufacturingOrderId!))];
+    const orders = await manager.find(ManufacturingOrder, { where: { id: In(orderIds) }, lock: { mode: 'pessimistic_write' } });
+    const orderById = new Map(orders.map((o) => [o.id, o]));
+    const orderProducts = await manager.getRepository(Product).find({ where: { id: In(orders.map((o) => o.productId)) }, withDeleted: true });
+    await applyEffectiveAccounts(orderProducts, manager);
+    const productById = new Map(orderProducts.map((p) => [p.id, p]));
+    for (const item of linked) {
+      const order = orderById.get(srcById.get(item.purchaseInvoiceItemId!)!.manufacturingOrderId!);
+      if (!order) throw new BadRequestException(`أمر التصنيع المرتبط بالصنف «${item.productName ?? ''}» غير موجود`);
+      if (!DIRECT_MATERIAL_OPEN_STATUSES.includes(order.status)) {
+        const state = MANUFACTURING_ORDER_STATUS_LABELS[order.status as ManufacturingOrderStatus] ?? order.status;
+        throw new BadRequestException(
+          mode === 'post'
+            ? `الخامة «${item.productName ?? ''}» مشتراة مباشرة على أمر التصنيع ${order.orderNumber ?? ''} وهو ${state} — المرتجع قبل تنفيذ الإنتاج فقط`
+            : `أمر التصنيع ${order.orderNumber ?? ''} ${state} — لا يمكن إعادة تكلفة الخامة «${item.productName ?? ''}» عليه بعكس هذا المردود`,
+        );
+      }
+      const accountId = productById.get(order.productId)?.inventoryAccountId ?? settings.finishedGoodsInventoryAccountId;
+      if (!accountId) throw new BadRequestException(missingAccountMessage('inventory', order.productName ?? ''));
+      out.set(item.id, { accountId, order });
+    }
+    return out;
   }
 
   /** Unit cost each product left the warehouse at when this return was posted. */

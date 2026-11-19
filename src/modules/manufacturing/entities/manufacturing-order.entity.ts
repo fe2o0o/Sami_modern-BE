@@ -97,8 +97,13 @@ export class ManufacturingOrder extends BaseEntity {
   @Column({ type: 'datetime', nullable: true })
   feeBookedAt!: Date | null;
 
+  /** Raw material bought straight onto this order (purchase lines linked to it):
+   *  posted purchases − their posted returns, at net cost. Part of the product's cost. */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  directMaterialCost!: number;
+
   // ── Production result ──
-  /** Total cost capitalised into the finished product = components + fee. */
+  /** Total cost capitalised into the finished product = components + fee + direct material. */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   totalCost!: number;
 

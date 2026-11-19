@@ -100,7 +100,7 @@ export class ManufacturingController {
   ) {
     // Starting books the fee to the supplier; cancelling reverses it — both post.
     if (dto.status === ManufacturingOrderStatus.IN_PROGRESS) return this.production.start(id, actorId, branchScope);
-    if (dto.status === ManufacturingOrderStatus.CANCELLED) return this.production.cancel(id, actorId, branchScope);
+    if (dto.status === ManufacturingOrderStatus.CANCELLED) return this.production.cancel(id, actorId, branchScope, dto.materialWarehouseId ?? null);
     return this.service.setStatus(id, dto.status, actorId);
   }
 

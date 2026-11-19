@@ -48,4 +48,11 @@ export class ReverseProductionDto {
   @MinLength(3, { message: 'اكتب سبب عكس الإنتاج (3 أحرف على الأقل)' })
   @MaxLength(500)
   reason!: string;
+
+  /** Warehouse for the raw material bought straight onto the order (default: each
+   *  purchase invoice's own warehouse). */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'المخزن غير صحيح' })
+  materialWarehouseId?: string | null;
 }

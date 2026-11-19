@@ -27,6 +27,7 @@ import { SequenceService } from '../sequence/sequence.service';
 import { paginate } from '../../common/utils/pagination.util';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
 import { businessToday } from '../../common/utils/business-date.util';
+import { directMaterialLinesOf } from './direct-material.util';
 
 export interface ManufacturingOrderListItem {
   id: string;
@@ -195,6 +196,10 @@ export class ManufacturingService {
     const order = await this.getEditable(id, branchScope);
 
     if (dto.productId && dto.productId !== order.productId) {
+      // Material bought straight onto the order sits in THIS product's cost account.
+      if ((await directMaterialLinesOf(this.dataSource.manager, order.id)).length) {
+        throw new BadRequestException('تم شراء خامات مباشرة على هذا الأمر بتكلفة المنتج الحالي — لا يمكن تغيير المنتج');
+      }
       const product = await this.productRepository.findOne({ where: { id: dto.productId } });
       if (!product) throw new NotFoundException('المنتج غير موجود');
       order.productId = dto.productId;
@@ -296,6 +301,9 @@ export class ManufacturingService {
     const order = await this.findOne(id, branchScope);
     if (order.status !== ManufacturingOrderStatus.NEW) {
       throw new BadRequestException('لا يمكن حذف أمر بدأ تنفيذه — يمكن إلغاؤه بدلاً من ذلك');
+    }
+    if ((await directMaterialLinesOf(this.dataSource.manager, order.id)).length) {
+      throw new BadRequestException('على هذا الأمر خامات مشتراة مباشرة — ألغِ الأمر بدلاً من حذفه (تنتقل الخامات للمخزن)');
     }
     await this.orderRepository.update(id, { deletedBy: actorId ?? null });
     await this.orderRepository.softDelete(id);
@@ -486,7 +494,7 @@ export class ManufacturingService {
   async findOneDetailed(id: string, branchScope: BranchScope = null): Promise<Record<string, unknown>> {
     const order = await this.findOne(id, branchScope);
     await this.fillSupplierNames([order]);
-    const [branch, fiscalYear, users, components, invoiceLine] = await Promise.all([
+    const [branch, fiscalYear, users, components, invoiceLine, directMaterials] = await Promise.all([
       order.branchId ? this.branchRepository.findOne({ where: { id: order.branchId } }) : null,
       order.fiscalYearId ? this.fiscalYearRepository.findOne({ where: { id: order.fiscalYearId } }) : null,
       this.userNames([order.createdBy, order.updatedBy]),
@@ -499,6 +507,8 @@ export class ManufacturingService {
             .getRepository(SalesInvoiceItem)
             .findOne({ where: { id: order.salesInvoiceItemId } })
         : null,
+      // Raw material bought straight onto the order (posted purchase lines).
+      directMaterialLinesOf(this.dataSource.manager, id),
     ]);
     return {
       ...order,
@@ -506,6 +516,7 @@ export class ManufacturingService {
       fiscalYearName: fiscalYear?.name ?? null,
       createdByName: users.get(order.createdBy ?? '') ?? null,
       components,
+      directMaterials,
       // Selling side (from the sales invoice) for the profit view.
       sellingUnitPrice: invoiceLine?.unitPrice ?? null,
       sellingNet: invoiceLine?.netBeforeTax ?? null,

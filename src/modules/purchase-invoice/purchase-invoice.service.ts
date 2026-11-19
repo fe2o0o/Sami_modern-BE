@@ -32,6 +32,9 @@ import { User } from '../user/entities/user.entity';
 import { WarehouseStock } from '../stock/entities/warehouse-stock.entity';
 import { ProductImage } from '../product/entities/product-image.entity';
 import { paginate } from '../../common/utils/pagination.util';
+import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
+import { MANUFACTURING_ORDER_STATUS_LABELS, ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
+import { DIRECT_MATERIAL_OPEN_STATUSES, DIRECT_MATERIAL_TYPES } from '../manufacturing/direct-material.util';
 import { PaginatedResult } from '../../common/interfaces/api-response.interface';
 
 export interface PurchaseInvoiceListItem {
@@ -62,6 +65,23 @@ export interface PurchaseProductOption {
   onHand: number;
   /** Weighted-average cost in the chosen warehouse (0 when it holds none yet). */
   avgCost: number;
+  /** raw_material / semi_finished can be bought straight onto a manufacturing order. */
+  productType: string;
+}
+
+/** An order a purchase line can be bought straight onto (new / in progress). */
+export interface DirectMaterialOrderOption {
+  id: string;
+  orderNumber: string | null;
+  status: string;
+  statusLabel: string;
+  productName: string | null;
+  quantity: number;
+  customerName: string | null;
+  sourceNumber: string | null;
+  material: string | null;
+  color: string | null;
+  branchId: string | null;
 }
 
 @Injectable()
@@ -101,7 +121,7 @@ export class PurchaseInvoiceService {
     branchScope: BranchScope = null,
   ): Promise<PurchaseInvoice> {
     await this.assertHeaderRefs(dto);
-    const items = await this.buildItems(dto.items, dto.warehouseId);
+    const items = await this.buildItems(dto.items, dto.warehouseId, branchScope);
     const { totals } = computeInvoice(this.toLineInputs(dto.items));
 
     const invoice = this.invoiceRepository.create({
@@ -163,7 +183,7 @@ export class PurchaseInvoiceService {
     return this.dataSource.transaction(async (manager) => {
       if (dto.items) {
         await manager.delete(PurchaseInvoiceItem, { purchaseInvoiceId: id });
-        const items = await this.buildItems(dto.items, invoice.warehouseId);
+        const items = await this.buildItems(dto.items, invoice.warehouseId, branchScope);
         const { totals } = computeInvoice(this.toLineInputs(dto.items));
         invoice.subtotal = totals.subtotal;
         invoice.discountAmount = totals.discountAmount;
@@ -319,8 +339,26 @@ export class PurchaseInvoiceService {
         this.userNames([invoice.createdBy, invoice.postedBy, invoice.reversedBy]),
       ]);
 
+    const orderIds = [...new Set((invoice.items ?? []).map((i) => i.manufacturingOrderId).filter((v): v is string => !!v))];
+    const orders = orderIds.length ? await this.dataSource.getRepository(ManufacturingOrder).find({ where: { id: In(orderIds) }, withDeleted: true }) : [];
+    const orderById = new Map(orders.map((o): [string, ManufacturingOrder] => [o.id, o]));
+    const releasedIds = [...new Set((invoice.items ?? []).map((i) => i.releasedWarehouseId).filter((v): v is string => !!v))];
+    const releasedWh = releasedIds.length ? await this.warehouseRepository.find({ where: { id: In(releasedIds) } }) : [];
+    const whName = new Map(releasedWh.map((w): [string, string] => [w.id, w.name]));
+    const items = (invoice.items ?? []).map((i) => {
+      const o = i.manufacturingOrderId ? orderById.get(i.manufacturingOrderId) : undefined;
+      return {
+        ...i,
+        manufacturingOrderNumber: o?.orderNumber ?? null,
+        manufacturingOrderStatus: o?.status ?? null,
+        manufacturingProductName: o?.productName ?? null,
+        manufacturingCustomerName: o?.customerName ?? null,
+        releasedWarehouseName: i.releasedWarehouseId ? whName.get(i.releasedWarehouseId) ?? null : null,
+      };
+    });
     return {
       ...invoice,
+      items,
       supplierName: supplier?.name ?? null,
       warehouseName: warehouse?.name ?? null,
       branchName: branch?.name ?? null,
@@ -362,6 +400,32 @@ export class PurchaseInvoiceService {
       imageUrl: imgByProduct.get(p.id) ?? null,
       onHand: qtyByProduct.get(p.id) ?? 0,
       avgCost: avgByProduct.get(p.id) ?? 0,
+      productType: p.productType,
+    }));
+  }
+
+  /** Orders a purchase line can be bought straight onto: not yet produced, in the user's branches. */
+  async directMaterialOrders(branchScope: BranchScope = null): Promise<DirectMaterialOrderOption[]> {
+    const qb = this.dataSource
+      .getRepository(ManufacturingOrder)
+      .createQueryBuilder('mo')
+      .where('mo.status IN (:...open)', { open: DIRECT_MATERIAL_OPEN_STATUSES })
+      .orderBy('mo.orderDate', 'DESC')
+      .addOrderBy('mo.orderNumber', 'DESC');
+    applyBranchScope(qb, 'mo.branchId', branchScope);
+    const rows = await qb.getMany();
+    return rows.map((o) => ({
+      id: o.id,
+      orderNumber: o.orderNumber,
+      status: o.status,
+      statusLabel: MANUFACTURING_ORDER_STATUS_LABELS[o.status] ?? o.status,
+      productName: o.productName,
+      quantity: Number(o.quantity) || 0,
+      customerName: o.customerName,
+      sourceNumber: o.sourceNumber,
+      material: o.material,
+      color: o.color,
+      branchId: o.branchId,
     }));
   }
 
@@ -382,7 +446,13 @@ export class PurchaseInvoiceService {
   private async buildItems(
     itemsDto: PurchaseInvoiceItemDto[],
     warehouseId: string,
+    branchScope: BranchScope = null,
   ): Promise<PurchaseInvoiceItem[]> {
+    // Lines bought straight onto a manufacturing order: the order must exist, be in the
+    // user's branches and not be produced yet (re-checked when the invoice is posted).
+    const orderIds = [...new Set(itemsDto.map((i) => i.manufacturingOrderId).filter((v): v is string => !!v))];
+    const orders = orderIds.length ? await this.dataSource.getRepository(ManufacturingOrder).find({ where: { id: In(orderIds) } }) : [];
+    const orderById = new Map(orders.map((o): [string, ManufacturingOrder] => [o.id, o]));
     const productIds = [...new Set(itemsDto.map((i) => i.productId))];
     const products = await this.productRepository.find({
       where: { id: In(productIds) },
@@ -429,6 +499,24 @@ export class PurchaseInvoiceService {
       item.vatAmount = line.vatAmount;
       item.lineTotal = line.lineTotal;
       item.unitCostAtPost = 0;
+      item.manufacturingOrderId = null;
+      item.directDescription = null;
+      item.releasedWarehouseId = null;
+      item.releasedAt = null;
+      if (dto.manufacturingOrderId) {
+        if (!DIRECT_MATERIAL_TYPES.includes(product.productType)) {
+          throw new BadRequestException(`«${product.name}» ليس مادة خام أو نصف مصنّع — الشراء المباشر على أمر تصنيع للخامات فقط`);
+        }
+        const order = orderById.get(dto.manufacturingOrderId);
+        if (!order || !isWithinBranchScope(order.branchId, branchScope)) throw new BadRequestException('أمر التصنيع المختار غير موجود');
+        if (!DIRECT_MATERIAL_OPEN_STATUSES.includes(order.status)) {
+          throw new BadRequestException(
+            `أمر التصنيع ${order.orderNumber ?? ''} ${MANUFACTURING_ORDER_STATUS_LABELS[order.status as ManufacturingOrderStatus] ?? order.status} — الشراء المباشر على الأمر قبل تنفيذ الإنتاج فقط`,
+          );
+        }
+        item.manufacturingOrderId = order.id;
+        item.directDescription = dto.directDescription?.trim() || null;
+      }
       return item;
     });
   }

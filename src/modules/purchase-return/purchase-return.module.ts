@@ -21,6 +21,8 @@ import { SupplierModule } from '../supplier/supplier.module';
 import { JournalEntryModule } from '../journal-entry/journal-entry.module';
 import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
 
+import { ManufacturingModule } from '../manufacturing/manufacturing.module';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -42,6 +44,7 @@ import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
     SupplierModule,
     JournalEntryModule,
     CashSubledgerModule,
+    ManufacturingModule,
   ],
   controllers: [PurchaseReturnController],
   providers: [PurchaseReturnService, PurchaseReturnPostingService],

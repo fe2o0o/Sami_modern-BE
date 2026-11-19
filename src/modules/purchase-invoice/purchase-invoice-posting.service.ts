@@ -34,6 +34,13 @@ import { JournalSourceType } from '../journal-entry/enums/journal-entry.enum';
 import { JournalLineBuilder } from '../journal-entry/journal-line-builder';
 import { Supplier } from '../supplier/entities/supplier.entity';
 import { missingAccountMessage } from '../product/product-accounts';
+import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-order.entity';
+import { MANUFACTURING_ORDER_STATUS_LABELS, ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
+import { DIRECT_MATERIAL_OPEN_STATUSES, DIRECT_MATERIAL_TYPES } from '../manufacturing/direct-material.util';
+import { ManufacturingProductionService } from '../manufacturing/manufacturing-production.service';
+
+/** Where a line bought straight onto a manufacturing order is debited: the order's product cost account. */
+interface DirectTarget { accountId: string; order: ManufacturingOrder }
 
 /**
  * Owns the accounting/inventory side-effects of a purchase invoice. Posting and
@@ -52,6 +59,7 @@ export class PurchaseInvoicePostingService {
     private readonly cashSubledger: CashSubledgerService,
     private readonly journalService: JournalEntryService,
     private readonly dataSource: DataSource,
+    private readonly manufacturing: ManufacturingProductionService,
   ) {}
 
   // =========================================================
@@ -91,26 +99,32 @@ export class PurchaseInvoicePostingService {
 
       // All account mappings must resolve BEFORE we touch stock.
       this.validateAccounts(invoice, items, products, settings);
+      // Lines bought straight onto a manufacturing order: re-checked now (the order may
+      // have been produced since the draft was saved) and routed to its product cost account.
+      const direct = await this.resolveDirectTargets(items, products, settings, manager);
 
       // Mint the invoice number up-front so every side-effect shares it.
       const invoiceNumber = await this.sequenceService.nextDocumentNumber('PI', fiscalYear, manager);
 
-      // Receive inventory at the net (after-discount, pre-VAT) unit cost.
-      const stockLines: StockLineInput[] = items.map((i) => ({
+      // Receive inventory at the net (after-discount, pre-VAT) unit cost — every line
+      // except those bought straight onto a manufacturing order (they never enter stock).
+      const stockLines: StockLineInput[] = items.filter((i) => !direct.has(i.id)).map((i) => ({
         warehouseId: invoice.warehouseId,
         productId: i.productId,
         productName: i.productName ?? products.get(i.productId)?.name,
         quantity: i.quantity,
         unitCost: this.netUnitCost(i),
       }));
-      await this.stockService.receive(stockLines, manager, {
-        movementType: StockMovementType.PURCHASE,
-        sourceType: JournalSourceType.PURCHASE_INVOICE,
-        sourceId: invoice.id,
-        sourceNumber: invoiceNumber,
-        movementDate: invoice.invoiceDate,
-        actorId,
-      });
+      if (stockLines.length) {
+        await this.stockService.receive(stockLines, manager, {
+          movementType: StockMovementType.PURCHASE,
+          sourceType: JournalSourceType.PURCHASE_INVOICE,
+          sourceId: invoice.id,
+          sourceNumber: invoiceNumber,
+          movementDate: invoice.invoiceDate,
+          actorId,
+        });
+      }
       // Snapshot the net cost each line was received at (for returns / reversal).
       items.forEach((item) => (item.unitCostAtPost = this.netUnitCost(item)));
 
@@ -119,7 +133,7 @@ export class PurchaseInvoicePostingService {
       const supplier = await manager.getRepository(Supplier).findOne({ where: { id: invoice.supplierId }, select: { id: true, name: true } });
       const supplierName = supplier?.name ?? '';
       const paymentLabel = invoice.paymentType === PurchasePaymentType.CREDIT ? 'آجلة' : 'نقدية';
-      const lines = this.buildJournalLines(invoice, items, products, settings, invoiceNumber, supplierName);
+      const lines = this.buildJournalLines(invoice, items, products, settings, invoiceNumber, supplierName, direct);
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.PURCHASE_INVOICE,
@@ -187,6 +201,10 @@ export class PurchaseInvoicePostingService {
       await manager.getRepository(PurchaseInvoice).save(invoice);
       // The last purchase price becomes the product's cost (card).
       await this.refreshLastPurchaseCost((invoice.items ?? []).map((i) => i.productId), manager);
+      // The orders now carry this material in their cost (and their sales-invoice estimate).
+      for (const orderId of new Set([...direct.values()].map((t) => t.order.id))) {
+        await this.manufacturing.refreshDirectMaterialWithin(orderId, manager, { date: invoice.invoiceDate, actorId });
+      }
       return this.reload(manager, id);
     });
   }
@@ -225,23 +243,29 @@ export class PurchaseInvoicePostingService {
         : null;
       if (!original) throw new BadRequestException('تعذّر إيجاد القيد الأصلي للفاتورة');
 
+      // Lines bought straight onto a manufacturing order: only while the order is unproduced
+      // (its cost then simply leaves the order); never once the material went into a warehouse.
+      const directOrderIds = await this.assertDirectLinesReversible(invoice.items, manager, 'عكس الفاتورة');
+
       // Reverse inventory: issue the received quantities back OUT of the
       // warehouse (allowNegative — a later sale may already have depleted it).
-      const stockLines: StockLineInput[] = invoice.items.map((i) => ({
+      const stockLines: StockLineInput[] = invoice.items.filter((i) => !i.manufacturingOrderId).map((i) => ({
         warehouseId: invoice.warehouseId,
         productId: i.productId,
         productName: i.productName ?? undefined,
         quantity: i.quantity,
       }));
-      await this.stockService.issue(stockLines, manager, {
-        movementType: StockMovementType.PURCHASE_RETURN,
-        sourceType: JournalSourceType.PURCHASE_INVOICE,
-        sourceId: invoice.id,
-        sourceNumber: invoice.invoiceNumber,
-        movementDate: dto.reversalDate,
-        actorId,
-        allowNegative: true,
-      });
+      if (stockLines.length) {
+        await this.stockService.issue(stockLines, manager, {
+          movementType: StockMovementType.PURCHASE_RETURN,
+          sourceType: JournalSourceType.PURCHASE_INVOICE,
+          sourceId: invoice.id,
+          sourceNumber: invoice.invoiceNumber,
+          movementDate: dto.reversalDate,
+          actorId,
+          allowNegative: true,
+        });
+      }
 
       // Reverse the journal via an opposite POSTED entry.
       const reversalLines: JournalLineInput[] = original.lines.map((l) => ({
@@ -316,6 +340,10 @@ export class PurchaseInvoicePostingService {
       await manager.getRepository(PurchaseInvoice).save(invoice);
       // Back to the latest purchase price still standing (unchanged when none is left).
       await this.refreshLastPurchaseCost((invoice.items ?? []).map((i) => i.productId), manager);
+      // The material's cost leaves its orders (and their sales-invoice estimate).
+      for (const orderId of directOrderIds) {
+        await this.manufacturing.refreshDirectMaterialWithin(orderId, manager, { date: dto.reversalDate, actorId });
+      }
       return this.reload(manager, id);
     });
   }
@@ -362,12 +390,20 @@ export class PurchaseInvoicePostingService {
     settings: AccountingSetting,
     invoiceNumber: string,
     supplierName: string,
+    direct: Map<string, DirectTarget> = new Map(),
   ): JournalLineInput[] {
     const b = new JournalLineBuilder();
     const ref = `فاتورة مشتريات ${invoiceNumber}`;
 
-    // Debit inventory (per product's resolved inventory account) at net cost.
+    // Debit inventory (per product's resolved inventory account) at net cost — or, for a
+    // line bought straight onto a manufacturing order, that order's product cost account.
     for (const item of items) {
+      const target = direct.get(item.id);
+      if (target) {
+        const what = `${item.productName ?? ''}${item.directDescription ? ' — ' + item.directDescription : ''}`;
+        b.add(target.accountId, item.netBeforeTax, 0, `خامة مباشرة «${what}» على أمر تصنيع ${target.order.orderNumber ?? ''} (${target.order.productName ?? ''}) — ${ref}`, { productId: target.order.productId });
+        continue;
+      }
       const product = products.get(item.productId)!;
       const inventoryAccount = this.resolveInventoryAccount(product, settings)!;
       b.add(inventoryAccount, item.netBeforeTax, 0, `استلام بضاعة في المخزن — ${ref}`, { warehouseId: invoice.warehouseId });
@@ -418,6 +454,70 @@ export class PurchaseInvoicePostingService {
     if (invoice.vatAmount > 0 && !settings.inputVatAccountId) {
       block('حساب ضريبة القيمة المضافة على المشتريات غير محدد في إعدادات المحاسبة.');
     }
+  }
+
+  /**
+   * Lines bought straight onto a manufacturing order → the account they are debited to
+   * (the order's product cost account, like the fee booked at «بدء التنفيذ»). Locks the
+   * orders and refuses any that is no longer open or a product that is not a raw material.
+   */
+  private async resolveDirectTargets(
+    items: PurchaseInvoiceItem[],
+    products: Map<string, Product>,
+    settings: AccountingSetting,
+    manager: EntityManager,
+  ): Promise<Map<string, DirectTarget>> {
+    const out = new Map<string, DirectTarget>();
+    const linked = items.filter((i) => i.manufacturingOrderId);
+    if (!linked.length) return out;
+    const ids = [...new Set(linked.map((i) => i.manufacturingOrderId!))];
+    const orders = await manager.find(ManufacturingOrder, { where: { id: In(ids) }, lock: { mode: 'pessimistic_write' } });
+    const orderById = new Map(orders.map((o) => [o.id, o]));
+    const orderProducts = await manager.getRepository(Product).find({ where: { id: In(orders.map((o) => o.productId)) }, withDeleted: true });
+    await applyEffectiveAccounts(orderProducts, manager);
+    const productById = new Map(orderProducts.map((p) => [p.id, p]));
+    for (const item of linked) {
+      const product = products.get(item.productId);
+      if (!product || !DIRECT_MATERIAL_TYPES.includes(product.productType)) {
+        throw new BadRequestException(`«${item.productName ?? ''}» ليس مادة خام أو نصف مصنّع — الشراء المباشر على أمر تصنيع للخامات فقط`);
+      }
+      const order = orderById.get(item.manufacturingOrderId!);
+      if (!order) throw new BadRequestException(`أمر التصنيع المرتبط بالصنف «${item.productName ?? ''}» غير موجود`);
+      if (!DIRECT_MATERIAL_OPEN_STATUSES.includes(order.status)) {
+        throw new BadRequestException(
+          `أمر التصنيع ${order.orderNumber ?? ''} ${MANUFACTURING_ORDER_STATUS_LABELS[order.status as ManufacturingOrderStatus] ?? order.status} — الشراء المباشر على الأمر قبل تنفيذ الإنتاج فقط`,
+        );
+      }
+      const accountId = productById.get(order.productId)?.inventoryAccountId ?? settings.finishedGoodsInventoryAccountId;
+      if (!accountId) throw new BadRequestException(missingAccountMessage('inventory', order.productName ?? ''));
+      out.set(item.id, { accountId, order });
+    }
+    return out;
+  }
+
+  /**
+   * Reversing (or returning) lines bought straight onto an order: allowed only while the
+   * order is unproduced and the material never moved into a warehouse. Returns the orders.
+   */
+  private async assertDirectLinesReversible(items: PurchaseInvoiceItem[], manager: EntityManager, action: string): Promise<string[]> {
+    const linked = items.filter((i) => i.manufacturingOrderId);
+    if (!linked.length) return [];
+    const released = linked.find((i) => i.releasedAt);
+    if (released) {
+      throw new BadRequestException(
+        `الخامة «${released.productName ?? ''}» انتقلت للمخزن بعد إلغاء أمر التصنيع — لا يمكن ${action}؛ استخدم مردود المشتريات`,
+      );
+    }
+    const ids = [...new Set(linked.map((i) => i.manufacturingOrderId!))];
+    const orders = await manager.find(ManufacturingOrder, { where: { id: In(ids) }, lock: { mode: 'pessimistic_write' } });
+    for (const o of orders) {
+      if (!DIRECT_MATERIAL_OPEN_STATUSES.includes(o.status)) {
+        throw new BadRequestException(
+          `أمر التصنيع ${o.orderNumber ?? ''} ${MANUFACTURING_ORDER_STATUS_LABELS[o.status as ManufacturingOrderStatus] ?? o.status} وعليه خامات من هذه الفاتورة — لا يمكن ${action}`,
+        );
+      }
+    }
+    return ids;
   }
 
   private resolveInventoryAccount(

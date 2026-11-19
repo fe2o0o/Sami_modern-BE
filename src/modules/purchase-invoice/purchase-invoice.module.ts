@@ -26,6 +26,8 @@ import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
  * SequenceService, SupplierLedgerService and the central JournalEntryService —
  * so all financial effects stay atomic and go through one accounting path.
  */
+import { ManufacturingModule } from '../manufacturing/manufacturing.module';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -47,6 +49,7 @@ import { CashSubledgerModule } from '../cash-subledger/cash-subledger.module';
     SupplierModule,
     JournalEntryModule,
     CashSubledgerModule,
+    ManufacturingModule,
   ],
   controllers: [PurchaseInvoiceController],
   providers: [PurchaseInvoiceService, PurchaseInvoicePostingService],

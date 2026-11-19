@@ -308,7 +308,8 @@ export class PurchaseReturnService {
       item.lineNumber = index + 1;
       item.purchaseInvoiceItemId = src.id;
       item.productId = src.productId;
-      item.warehouseId = invoice.warehouseId;
+      // Material bought straight onto a cancelled order lives where it was moved to.
+      item.warehouseId = src.releasedWarehouseId ?? invoice.warehouseId;
       item.unitId = src.unitId;
       item.productCode = src.productCode;
       item.productName = src.productName;

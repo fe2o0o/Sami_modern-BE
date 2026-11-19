@@ -28,6 +28,8 @@ import { SalesInvoice } from '../sales-invoice/entities/sales-invoice.entity';
 import { SalesInvoiceStatus } from '../sales-invoice/enums/sales-invoice.enum';
 import { unitCostsOf } from '../sales-invoice/product-unit-cost.util';
 import { businessToday } from '../../common/utils/business-date.util';
+import { directMaterialCostOf, directMaterialLinesOf } from './direct-material.util';
+import { PurchaseInvoiceItem } from '../purchase-invoice/entities/purchase-invoice-item.entity';
 
 function round2(v: number): number { return Math.round((v + Number.EPSILON) * 100) / 100; }
 function round3(v: number): number { return Math.round((v + Number.EPSILON) * 1000) / 1000; }
@@ -295,8 +297,13 @@ export class ManufacturingProductionService {
   // =========================================================
   // CANCEL — reverses a booked fee first
   // =========================================================
-  async cancel(orderId: string, actorId?: string, branchScope: string[] | null = null): Promise<ManufacturingOrder> {
-    return this.dataSource.transaction((manager) => this.cancelWithin(orderId, manager, { actorId, branchScope }));
+  async cancel(
+    orderId: string,
+    actorId?: string,
+    branchScope: string[] | null = null,
+    materialWarehouseId?: string | null,
+  ): Promise<ManufacturingOrder> {
+    return this.dataSource.transaction((manager) => this.cancelWithin(orderId, manager, { actorId, branchScope, materialWarehouseId }));
   }
 
   /**
@@ -307,7 +314,7 @@ export class ManufacturingProductionService {
   async cancelWithin(
     orderId: string,
     manager: EntityManager,
-    opts: { actorId?: string; branchScope?: string[] | null; date?: string; reason?: string } = {},
+    opts: { actorId?: string; branchScope?: string[] | null; date?: string; reason?: string; materialWarehouseId?: string | null } = {},
   ): Promise<ManufacturingOrder> {
     const actorId = opts.actorId;
     const branchScope = opts.branchScope ?? null;
@@ -388,6 +395,14 @@ export class ManufacturingProductionService {
         }
       }
 
+      // Material bought straight onto the order still exists → into a warehouse at its cost.
+      await this.releaseDirectMaterialsWithin(order, manager, {
+        date: opts.date ?? todayIso(),
+        warehouseId: opts.materialWarehouseId ?? null,
+        actorId,
+        reason: opts.reason ?? 'إلغاء أمر التصنيع',
+      });
+
       order.status = ManufacturingOrderStatus.CANCELLED;
       order.updatedBy = actorId ?? null;
       if (opts.reason) order.notes = [order.notes, opts.reason].filter(Boolean).join(' — ');
@@ -410,7 +425,7 @@ export class ManufacturingProductionService {
    */
   async reverseProduction(
     orderId: string,
-    input: { reversalDate: string; reason: string },
+    input: { reversalDate: string; reason: string; materialWarehouseId?: string | null },
     actorId?: string,
     branchScope: string[] | null = null,
   ): Promise<ManufacturingOrder> {
@@ -498,6 +513,16 @@ export class ManufacturingProductionService {
         await this.journalService.markEntryReversed(original.id, reversal.id, 'عكس إنتاج أمر التصنيع', actorId, manager);
       }
 
+      // 3b) Material bought straight onto the order: its cost left the warehouse inside the
+      //     finished product (step 1) but still sits in the product cost account → it goes
+      //     back into a warehouse as the material it is, at its purchase cost.
+      await this.releaseDirectMaterialsWithin(order, manager, {
+        date,
+        warehouseId: input.materialWarehouseId ?? null,
+        actorId,
+        reason: `عكس الإنتاج — ${reason}`,
+      });
+
       // 4) The factory's statement: the whole fee (start ± adjustments) comes back.
       const fee = round2(order.manufacturingFee ?? 0);
       if (order.factorySupplierId && fee > 0) {
@@ -562,6 +587,10 @@ export class ManufacturingProductionService {
       const components = dto.components?.length
         ? await this.rebuildComponents(order, dto.components, manager)
         : order.components;
+      // Keep the order holding the rows it really consumed: saving it later with the list
+      // loaded above would unlink the rebuilt rows (cascade), and «عكس الإنتاج» would then
+      // have no components to put back into the warehouse.
+      order.components = components;
       const date = dto.productionDate;
       const warehouseId = dto.warehouseId;
 
@@ -579,8 +608,10 @@ export class ManufacturingProductionService {
           throw new BadRequestException('المورّد مُرحّلة عليه الرسوم عند بدء التنفيذ ولا يمكن تغييره هنا');
         }
       }
-      // A production must have something to it: at least components OR a fee.
-      if (!components.length && fee <= 0) {
+      // Raw material bought straight onto the order (already in the product cost account).
+      const directCost = await directMaterialCostOf(manager, order.id);
+      // A production must have something to it: components, a fee or direct material.
+      if (!components.length && fee <= 0 && directCost <= 0) {
         throw new BadRequestException('لا يمكن التصنيع بدون مكوّنات وبدون رسوم — أضف مكوّنات أو رسوم تصنيع');
       }
 
@@ -662,9 +693,10 @@ export class ManufacturingProductionService {
         c.lineCost = round2(c.quantity * issued[i].unitCost);
       });
       const componentCost = round2(components.reduce((s, c) => s + c.lineCost, 0));
-      // Cost = consumed components + manufacturing fee. The manufactured product's
-      // own master cost price is NOT used — its value is what goes into it here.
-      const totalCost = round2(componentCost + fee);
+      // Cost = consumed components + manufacturing fee + material bought straight onto
+      // the order (exact purchase cost). The manufactured product's own master cost
+      // price is NOT used — its value is what goes into it here.
+      const totalCost = round2(componentCost + fee + directCost);
       const unitCost = round2(totalCost / order.quantity);
 
       // 2) Produce the finished product into the warehouse at the computed cost.
@@ -688,7 +720,8 @@ export class ManufacturingProductionService {
       // production only moves the consumed components into finished goods.
       // A raised fee adds its difference to finished goods here; a lowered one is
       // credited back out of finished goods (separate line below).
-      const bookedIntoFinished = feeBooked ? round2(componentCost + Math.max(feeDiff, 0)) : totalCost;
+      // Direct material was debited to this account when its purchase was posted → never again here.
+      const bookedIntoFinished = feeBooked ? round2(componentCost + Math.max(feeDiff, 0)) : round2(componentCost + fee);
       const lines: JournalLineInput[] = [];
       if (bookedIntoFinished > 0) {
         lines.push({ accountId: finishedAcc, debit: bookedIntoFinished, credit: 0, productId: order.productId, warehouseId, description: `إنتاج ${order.productName ?? ''} (${order.quantity}) — ${orderRef}` });
@@ -787,6 +820,7 @@ export class ManufacturingProductionService {
       order.manufacturingFee = fee;
       order.factorySupplierId = factoryId;
       order.factorySupplierName = supplier?.name ?? order.factorySupplierName ?? null;
+      order.directMaterialCost = directCost;
       order.totalCost = totalCost;
       order.journalEntryId = journal?.id ?? null;
       order.accountingPeriodId = period.id;
@@ -867,15 +901,115 @@ export class ManufacturingProductionService {
       const order = await manager.findOne(ManufacturingOrder, { where: { id: orderId }, relations: { components: true }, lock: { mode: 'pessimistic_write' } });
       if (!order || order.quantity <= 0) return;
       if (order.status !== ManufacturingOrderStatus.NEW && order.status !== ManufacturingOrderStatus.IN_PROGRESS) return;
-      let components = 0;
-      for (const c of order.components ?? []) {
-        const cost = (await unitCostsOf(manager, [c.componentProductId], c.warehouseId ?? null)).get(c.componentProductId)?.cost ?? 0;
-        components += (Number(c.quantity) || 0) * cost;
-      }
-      const total = round2(components + (Number(order.manufacturingFee) || 0));
+      const total = await this.estimatedTotal(order, manager);
       const today = todayIso();
       await this.syncInvoiceLineCost(order, round2(total / order.quantity), today, 'estimate', actorId, manager);
     });
+  }
+
+  /** Estimated cost of an unproduced order: components at today's cost + fee + direct material. */
+  private async estimatedTotal(order: ManufacturingOrder, manager: EntityManager): Promise<number> {
+    let components = 0;
+    for (const c of order.components ?? []) {
+      const cost = (await unitCostsOf(manager, [c.componentProductId], c.warehouseId ?? null)).get(c.componentProductId)?.cost ?? 0;
+      components += (Number(c.quantity) || 0) * cost;
+    }
+    return round2(components + (Number(order.manufacturingFee) || 0) + (Number(order.directMaterialCost) || 0));
+  }
+
+  // =========================================================
+  // DIRECT MATERIAL (raw material bought straight onto the order)
+  // =========================================================
+  /**
+   * Inside the caller's transaction (a purchase / purchase return being posted or
+   * reversed): recompute the order's direct material cost from its documents and,
+   * while the order is unproduced, bring the sales-invoice cost estimate to it
+   * («تسوية تكلفة مبيعات» dated `date`).
+   */
+  async refreshDirectMaterialWithin(orderId: string, manager: EntityManager, opts: { date: string; actorId?: string }): Promise<void> {
+    const order = await manager.findOne(ManufacturingOrder, { where: { id: orderId }, relations: { components: true }, lock: { mode: 'pessimistic_write' } });
+    if (!order) return;
+    order.directMaterialCost = await directMaterialCostOf(manager, order.id);
+    await manager.update(ManufacturingOrder, order.id, { directMaterialCost: order.directMaterialCost, updatedBy: opts.actorId ?? null });
+    if ((order.status === ManufacturingOrderStatus.NEW || order.status === ManufacturingOrderStatus.IN_PROGRESS) && order.quantity > 0) {
+      const total = await this.estimatedTotal(order, manager);
+      await this.syncInvoiceLineCost(order, round2(total / order.quantity), opts.date, 'estimate', opts.actorId, manager);
+    }
+  }
+
+  /**
+   * The order is being cancelled (or its production reversed): the material bought
+   * straight onto it physically exists, so what is left of it (bought − returned)
+   * moves into a warehouse at exactly the cost it was bought at:
+   *  stock IN (each material at its purchase net unit cost), and
+   *  DR the material's inventory account / CR the product cost account it sat in.
+   * Default warehouse: the purchase invoice's own.
+   */
+  private async releaseDirectMaterialsWithin(
+    order: ManufacturingOrder,
+    manager: EntityManager,
+    opts: { date: string; warehouseId?: string | null; actorId?: string; reason?: string },
+  ): Promise<void> {
+    const lines = (await directMaterialLinesOf(manager, order.id)).filter(
+      (l) => !l.releasedAt && round3(l.quantity - l.returnedQuantity) > 0 && l.netCost > 0,
+    );
+    if (!lines.length) return;
+    const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+    if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
+    const ids = [...new Set([order.productId, ...lines.map((l) => l.productId)])];
+    const products = await manager.getRepository(Product).find({ where: { id: In(ids) }, withDeleted: true });
+    await applyEffectiveAccounts(products, manager);
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const orderProduct = byId.get(order.productId);
+    const productCostAcc = orderProduct?.inventoryAccountId ?? settings.finishedGoodsInventoryAccountId;
+    if (!productCostAcc) throw new BadRequestException(missingAccountMessage('inventory', order.productName ?? ''));
+    const materialAcc = (productId: string): string => {
+      const p = byId.get(productId);
+      const acc = p?.inventoryAccountId ?? (p?.productType === ProductType.RAW_MATERIAL ? settings.rawMaterialInventoryAccountId : settings.finishedGoodsInventoryAccountId);
+      if (!acc) throw new BadRequestException(missingAccountMessage('inventory', p?.name ?? productId));
+      return acc;
+    };
+    const { fiscalYear, period } = await this.resolvePostingContext(opts.date, manager);
+    const orderRef = `أمر تصنيع ${order.orderNumber ?? ''}`;
+
+    const moves = lines.map((l) => {
+      const qty = round3(l.quantity - l.returnedQuantity);
+      return { line: l, qty, value: l.netCost, warehouseId: opts.warehouseId || l.invoiceWarehouseId };
+    });
+    await this.stockService.receive(
+      moves.map((m) => ({ warehouseId: m.warehouseId, productId: m.line.productId, productName: m.line.productName ?? undefined, quantity: m.qty, unitCost: round2(m.value / m.qty) })),
+      manager,
+      { movementType: StockMovementType.MANUFACTURING, sourceType: JournalSourceType.MANUFACTURING, sourceId: order.id, sourceNumber: order.orderNumber, movementDate: opts.date, actorId: opts.actorId },
+    );
+    const total = round2(moves.reduce((s, m) => s + m.value, 0));
+    const entryLines: JournalLineInput[] = moves.map((m) => ({
+      accountId: materialAcc(m.line.productId),
+      debit: m.value,
+      credit: 0,
+      productId: m.line.productId,
+      warehouseId: m.warehouseId,
+      description: `إرجاع خامة «${m.line.productName ?? ''}${m.line.description ? ' — ' + m.line.description : ''}» للمخزن بعد إلغاء ${orderRef}`,
+    }));
+    entryLines.push({ accountId: productCostAcc, debit: 0, credit: total, productId: order.productId, description: `خامات مباشرة خرجت من تكلفة ${order.productName ?? 'المنتج'} — ${orderRef}` });
+    await this.journalService.createSystemJournalEntry(
+      {
+        sourceType: JournalSourceType.MANUFACTURING,
+        sourceId: order.id,
+        sourceNumber: order.orderNumber,
+        entryDate: opts.date,
+        fiscalYearId: fiscalYear.id,
+        accountingPeriodId: period.id,
+        branchId: order.branchId,
+        description: `نقل الخامات المشتراة مباشرة لـ ${orderRef} إلى المخزن${opts.reason ? ' — ' + opts.reason : ''}`,
+        lines: entryLines,
+        actorId: opts.actorId ?? null,
+      },
+      manager,
+    );
+    const now = new Date();
+    for (const m of moves) {
+      await manager.update(PurchaseInvoiceItem, m.line.purchaseInvoiceItemId, { releasedWarehouseId: m.warehouseId, releasedAt: now });
+    }
   }
 
   /**

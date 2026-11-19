@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../../shared/entities/base.entity';
 import { numericTransformer } from '../../../shared/transformers/numeric.transformer';
 import { PurchaseDiscountType } from '../enums/purchase-invoice.enum';
@@ -76,4 +76,22 @@ export class PurchaseInvoiceItem extends BaseEntity {
   /** Net unit cost captured at posting (for returns / reversal at original cost). */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   unitCostAtPost!: number;
+
+  // ── Raw material bought straight onto a manufacturing order ──
+  /** Set → the line never enters a warehouse; its net cost goes onto this order
+   *  (raw materials / semi-finished only). */
+  @Index('IDX_purchase_invoice_items_mo')
+  @Column({ type: 'uuid', nullable: true })
+  manufacturingOrderId!: string | null;
+
+  /** What exactly was bought for the customer (e.g. «قطيفة كحلي»). */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  directDescription!: string | null;
+
+  /** The order was cancelled → what was left of the material moved into this warehouse. */
+  @Column({ type: 'uuid', nullable: true })
+  releasedWarehouseId!: string | null;
+
+  @Column({ type: 'datetime', nullable: true })
+  releasedAt!: Date | null;
 }

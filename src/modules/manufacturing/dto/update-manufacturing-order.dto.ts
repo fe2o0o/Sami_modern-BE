@@ -1,5 +1,5 @@
-import { ApiProperty, PartialType } from '@nestjs/swagger';
-import { IsEnum } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+import { IsEnum, IsOptional, IsUUID } from 'class-validator';
 import { CreateManufacturingOrderDto } from './create-manufacturing-order.dto';
 import { ManufacturingOrderStatus } from '../enums/manufacturing.enum';
 
@@ -11,4 +11,11 @@ export class UpdateManufacturingStatusDto {
   @ApiProperty({ enum: ManufacturingOrderStatus })
   @IsEnum(ManufacturingOrderStatus, { message: 'حالة غير صحيحة' })
   status!: ManufacturingOrderStatus;
+
+  /** Cancelling: warehouse for the raw material bought straight onto the order
+   *  (default: each purchase invoice's own warehouse). */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'المخزن غير صحيح' })
+  materialWarehouseId?: string | null;
 }
