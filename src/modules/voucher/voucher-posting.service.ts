@@ -63,241 +63,268 @@ export class VoucherPostingService {
   // POST
   // =========================================================
   async post(id: string, actorId?: string, branchScope: string[] | null = null): Promise<Voucher> {
-    return this.dataSource.transaction(async (manager) => {
-      const voucher = await this.lock(manager, id);
-      if (!isWithinBranchScope(voucher.branchId, branchScope)) {
-        throw new NotFoundException('لم يتم العثور على السند');
-      }
-      if (voucher.status !== VoucherStatus.DRAFT) {
-        throw new BadRequestException('لا يمكن ترحيل سند غير مسودة');
-      }
-      if (voucher.amount <= 0) throw new BadRequestException('المبلغ يجب أن يكون أكبر من صفر');
+    return this.dataSource.transaction((manager) => this.postWithin(manager, id, actorId, branchScope));
+  }
 
-      const { fiscalYear } = await this.assertOpenPostingContext(
-        voucher.fiscalYearId, voucher.accountingPeriodId, voucher.voucherDate, manager,
-      );
-      const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
-      if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
+  /** Post inside the caller's transaction. A voucher created by another document
+   *  (`sourceType`) is posted only by that document (`fromSource`). */
+  async postWithin(
+    manager: EntityManager,
+    id: string,
+    actorId?: string,
+    branchScope: string[] | null = null,
+    fromSource = false,
+  ): Promise<Voucher> {
+    const voucher = await this.lock(manager, id);
+    if (voucher.sourceType && !fromSource) {
+      throw new BadRequestException('هذا السند ناتج عن مستند آخر ويُرحَّل معه');
+    }
+    if (!isWithinBranchScope(voucher.branchId, branchScope)) {
+      throw new NotFoundException('لم يتم العثور على السند');
+    }
+    if (voucher.status !== VoucherStatus.DRAFT) {
+      throw new BadRequestException('لا يمكن ترحيل سند غير مسودة');
+    }
+    if (voucher.amount <= 0) throw new BadRequestException('المبلغ يجب أن يكون أكبر من صفر');
 
-      const cash = await this.resolveCashLeg(voucher, manager);
-      const controlAccount = this.resolveControlAccount(voucher, settings);
-      const branchId = voucher.branchId ?? cash.branchId;
+    const { fiscalYear } = await this.assertOpenPostingContext(
+      voucher.fiscalYearId, voucher.accountingPeriodId, voucher.voucherDate, manager,
+    );
+    const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
+    if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
 
-      const prefix = voucher.type === VoucherType.RECEIPT ? 'RV' : 'PV';
-      const voucherNumber = await this.sequenceService.nextDocumentNumber(prefix, fiscalYear, manager);
-      const sourceType =
-        voucher.type === VoucherType.RECEIPT
-          ? JournalSourceType.RECEIPT_VOUCHER
-          : JournalSourceType.PAYMENT_VOUCHER;
-      // The voucher's notes go into the narration so they show on every statement
-      // (party, treasury / bank, journal) — capped to the 500-char ledger columns.
-      const notes = voucher.notes?.trim().replace(/\s+/g, ' ');
-      const description = `${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucherNumber} — ${voucher.partyName ?? ''}${notes ? ` — ${notes}` : ''}`.slice(0, 500);
+    const cash = await this.resolveCashLeg(voucher, manager);
+    const controlAccount = this.resolveControlAccount(voucher, settings);
+    const branchId = voucher.branchId ?? cash.branchId;
 
-      // Journal: RECEIPT → DR cash / CR customer-control; PAYMENT → DR supplier-control / CR cash.
-      const lines: JournalLineInput[] =
-        voucher.type === VoucherType.RECEIPT
-          ? [
-              { accountId: cash.accountId, debit: voucher.amount, credit: 0, description },
-              { accountId: controlAccount, debit: 0, credit: voucher.amount, description },
-            ]
-          : [
-              { accountId: controlAccount, debit: voucher.amount, credit: 0, description },
-              { accountId: cash.accountId, debit: 0, credit: voucher.amount, description },
-            ];
-      const journalEntry = await this.journalService.createSystemJournalEntry(
+    const prefix = voucher.type === VoucherType.RECEIPT ? 'RV' : 'PV';
+    const voucherNumber = await this.sequenceService.nextDocumentNumber(prefix, fiscalYear, manager);
+    const sourceType =
+      voucher.type === VoucherType.RECEIPT
+        ? JournalSourceType.RECEIPT_VOUCHER
+        : JournalSourceType.PAYMENT_VOUCHER;
+    // The voucher's notes go into the narration so they show on every statement
+    // (party, treasury / bank, journal) — capped to the 500-char ledger columns.
+    const notes = voucher.notes?.trim().replace(/\s+/g, ' ');
+    const description = `${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucherNumber} — ${voucher.partyName ?? ''}${notes ? ` — ${notes}` : ''}`.slice(0, 500);
+
+    // Journal: RECEIPT → DR cash / CR customer-control; PAYMENT → DR supplier-control / CR cash.
+    const lines: JournalLineInput[] =
+      voucher.type === VoucherType.RECEIPT
+        ? [
+            { accountId: cash.accountId, debit: voucher.amount, credit: 0, description },
+            { accountId: controlAccount, debit: 0, credit: voucher.amount, description },
+          ]
+        : [
+            { accountId: controlAccount, debit: voucher.amount, credit: 0, description },
+            { accountId: cash.accountId, debit: 0, credit: voucher.amount, description },
+          ];
+    const journalEntry = await this.journalService.createSystemJournalEntry(
+      {
+        sourceType,
+        sourceId: voucher.id,
+        sourceNumber: voucherNumber,
+        entryDate: voucher.voucherDate,
+        fiscalYearId: voucher.fiscalYearId,
+        accountingPeriodId: voucher.accountingPeriodId,
+        branchId,
+        description,
+        lines,
+        actorId,
+      },
+      manager,
+    );
+
+    // Party subledger (skipped for an ACCOUNT voucher — it has no party).
+    if (voucher.partyType === VoucherPartyType.CUSTOMER) {
+      await this.customerLedger.record(
         {
+          customerId: voucher.partyId!,
+          transactionDate: voucher.voucherDate,
+          type: CustomerTransactionType.RECEIPT,
           sourceType,
           sourceId: voucher.id,
           sourceNumber: voucherNumber,
-          entryDate: voucher.voucherDate,
-          fiscalYearId: voucher.fiscalYearId,
-          accountingPeriodId: voucher.accountingPeriodId,
-          branchId,
+          debit: 0,
+          credit: voucher.amount,
           description,
-          lines,
           actorId,
         },
         manager,
       );
+    } else if (voucher.partyType === VoucherPartyType.SUPPLIER) {
+      await this.supplierLedger.record(
+        {
+          supplierId: voucher.partyId!,
+          transactionDate: voucher.voucherDate,
+          type: SupplierTransactionType.PAYMENT,
+          sourceType,
+          sourceId: voucher.id,
+          sourceNumber: voucherNumber,
+          debit: voucher.amount,
+          credit: 0,
+          description,
+          actorId,
+        },
+        manager,
+      );
+    }
 
-      // Party subledger (skipped for an ACCOUNT voucher — it has no party).
-      if (voucher.partyType === VoucherPartyType.CUSTOMER) {
-        await this.customerLedger.record(
-          {
-            customerId: voucher.partyId!,
-            transactionDate: voucher.voucherDate,
-            type: CustomerTransactionType.RECEIPT,
-            sourceType,
-            sourceId: voucher.id,
-            sourceNumber: voucherNumber,
-            debit: 0,
-            credit: voucher.amount,
-            description,
-            actorId,
-          },
-          manager,
-        );
-      } else if (voucher.partyType === VoucherPartyType.SUPPLIER) {
-        await this.supplierLedger.record(
-          {
-            supplierId: voucher.partyId!,
-            transactionDate: voucher.voucherDate,
-            type: SupplierTransactionType.PAYMENT,
-            sourceType,
-            sourceId: voucher.id,
-            sourceNumber: voucherNumber,
-            debit: voucher.amount,
-            credit: 0,
-            description,
-            actorId,
-          },
-          manager,
-        );
-      }
+    // Treasury / bank subledger (RECEIPT = money in = debit; PAYMENT = out = credit).
+    const isReceipt = voucher.type === VoucherType.RECEIPT;
+    await this.recordCashLeg(voucher, {
+      debit: isReceipt ? voucher.amount : 0,
+      credit: isReceipt ? 0 : voucher.amount,
+      typeReceipt: isReceipt,
+      sourceType,
+      sourceNumber: voucherNumber,
+      journalEntryId: journalEntry.id,
+      description,
+      actorId,
+    }, manager);
 
-      // Treasury / bank subledger (RECEIPT = money in = debit; PAYMENT = out = credit).
-      const isReceipt = voucher.type === VoucherType.RECEIPT;
-      await this.recordCashLeg(voucher, {
-        debit: isReceipt ? voucher.amount : 0,
-        credit: isReceipt ? 0 : voucher.amount,
-        typeReceipt: isReceipt,
-        sourceType,
-        sourceNumber: voucherNumber,
-        journalEntryId: journalEntry.id,
-        description,
-        actorId,
-      }, manager);
+    voucher.voucherNumber = voucherNumber;
+    voucher.status = VoucherStatus.POSTED;
+    voucher.journalEntryId = journalEntry.id;
+    voucher.postedAt = new Date();
+    voucher.postedBy = actorId ?? null;
+    voucher.updatedBy = actorId ?? null;
 
-      voucher.voucherNumber = voucherNumber;
-      voucher.status = VoucherStatus.POSTED;
-      voucher.journalEntryId = journalEntry.id;
-      voucher.postedAt = new Date();
-      voucher.postedBy = actorId ?? null;
-      voucher.updatedBy = actorId ?? null;
-
-      await manager.getRepository(Voucher).save(voucher);
-      return this.reload(manager, id);
-    });
+    await manager.getRepository(Voucher).save(voucher);
+    return this.reload(manager, id);
   }
 
   // =========================================================
   // REVERSE
   // =========================================================
   async reverse(id: string, dto: ReverseVoucherDto, actorId?: string, branchScope: string[] | null = null): Promise<Voucher> {
-    return this.dataSource.transaction(async (manager) => {
-      const voucher = await this.lock(manager, id);
-      if (!isWithinBranchScope(voucher.branchId, branchScope)) {
-        throw new NotFoundException('لم يتم العثور على السند');
-      }
-      if (voucher.status === VoucherStatus.REVERSED) {
-        throw new ConflictException('السند معكوس بالفعل');
-      }
-      if (voucher.status !== VoucherStatus.POSTED) {
-        throw new BadRequestException('لا يمكن عكس سند غير مُرحّل');
-      }
+    return this.dataSource.transaction((manager) => this.reverseWithin(manager, id, dto, actorId, branchScope));
+  }
 
-      const period = await this.getOpenPeriod(dto.accountingPeriodId, manager);
-      this.assertDateWithin(dto.reversalDate, period.startDate, period.endDate,
-        'تاريخ العكس خارج نطاق الفترة المحاسبية المختارة');
+  /** Reverse inside the caller's transaction. A voucher created by another document
+   *  is reversed only together with that document (`fromSource`). */
+  async reverseWithin(
+    manager: EntityManager,
+    id: string,
+    dto: ReverseVoucherDto,
+    actorId?: string,
+    branchScope: string[] | null = null,
+    fromSource = false,
+  ): Promise<Voucher> {
+    const voucher = await this.lock(manager, id);
+    if (voucher.sourceType && !fromSource) {
+      throw new BadRequestException(`هذا السند ناتج عن ${voucher.sourceNumber ? `فاتورة ${voucher.sourceNumber}` : 'مستند آخر'} — يُعكس بعكس المستند نفسه`);
+    }
+    if (!isWithinBranchScope(voucher.branchId, branchScope)) {
+      throw new NotFoundException('لم يتم العثور على السند');
+    }
+    if (voucher.status === VoucherStatus.REVERSED) {
+      throw new ConflictException('السند معكوس بالفعل');
+    }
+    if (voucher.status !== VoucherStatus.POSTED) {
+      throw new BadRequestException('لا يمكن عكس سند غير مُرحّل');
+    }
 
-      const original = voucher.journalEntryId
-        ? await this.journalService.findWithLines(voucher.journalEntryId)
-        : null;
-      if (!original) throw new BadRequestException('تعذّر إيجاد القيد الأصلي للسند');
+    const period = await this.getOpenPeriod(dto.accountingPeriodId, manager);
+    this.assertDateWithin(dto.reversalDate, period.startDate, period.endDate,
+      'تاريخ العكس خارج نطاق الفترة المحاسبية المختارة');
 
-      const cash = await this.resolveCashLeg(voucher, manager);
-      const branchId = voucher.branchId ?? cash.branchId;
+    const original = voucher.journalEntryId
+      ? await this.journalService.findWithLines(voucher.journalEntryId)
+      : null;
+    if (!original) throw new BadRequestException('تعذّر إيجاد القيد الأصلي للسند');
 
-      const reversalLines: JournalLineInput[] = original.lines.map((l) => ({
-        accountId: l.accountId,
-        debit: l.credit,
-        credit: l.debit,
-        description: l.description ? `عكس: ${l.description}`.slice(0, 500) : 'عكس سند',
-      }));
-      const reversalEntry = await this.journalService.createSystemJournalEntry(
+    const cash = await this.resolveCashLeg(voucher, manager);
+    const branchId = voucher.branchId ?? cash.branchId;
+
+    const reversalLines: JournalLineInput[] = original.lines.map((l) => ({
+      accountId: l.accountId,
+      debit: l.credit,
+      credit: l.debit,
+      description: l.description ? `عكس: ${l.description}`.slice(0, 500) : 'عكس سند',
+    }));
+    const reversalEntry = await this.journalService.createSystemJournalEntry(
+      {
+        sourceType:
+          voucher.type === VoucherType.RECEIPT
+            ? JournalSourceType.RECEIPT_VOUCHER
+            : JournalSourceType.PAYMENT_VOUCHER,
+        sourceId: voucher.id,
+        sourceNumber: voucher.voucherNumber,
+        entryDate: dto.reversalDate,
+        fiscalYearId: period.fiscalYearId,
+        accountingPeriodId: period.id,
+        branchId,
+        description: `عكس ${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucher.voucherNumber ?? ''} — ${dto.reason}`,
+        reversalOfJournalEntryId: original.id,
+        lines: reversalLines,
+        actorId,
+      },
+      manager,
+    );
+    await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
+
+    const notes = voucher.notes?.trim().replace(/\s+/g, ' ');
+    const desc = `عكس ${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucher.voucherNumber ?? ''}${notes ? ` — ${notes}` : ''}`.slice(0, 500);
+    // Reverse the party subledger (none for an ACCOUNT voucher).
+    if (voucher.partyType === VoucherPartyType.CUSTOMER) {
+      await this.customerLedger.record(
         {
-          sourceType:
-            voucher.type === VoucherType.RECEIPT
-              ? JournalSourceType.RECEIPT_VOUCHER
-              : JournalSourceType.PAYMENT_VOUCHER,
+          customerId: voucher.partyId!,
+          transactionDate: dto.reversalDate,
+          type: CustomerTransactionType.REVERSAL,
+          sourceType: JournalSourceType.RECEIPT_VOUCHER,
           sourceId: voucher.id,
           sourceNumber: voucher.voucherNumber,
-          entryDate: dto.reversalDate,
-          fiscalYearId: period.fiscalYearId,
-          accountingPeriodId: period.id,
-          branchId,
-          description: `عكس ${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucher.voucherNumber ?? ''} — ${dto.reason}`,
-          reversalOfJournalEntryId: original.id,
-          lines: reversalLines,
+          debit: voucher.amount,
+          credit: 0,
+          description: desc,
           actorId,
         },
         manager,
       );
-      await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
+    } else if (voucher.partyType === VoucherPartyType.SUPPLIER) {
+      await this.supplierLedger.record(
+        {
+          supplierId: voucher.partyId!,
+          transactionDate: dto.reversalDate,
+          type: SupplierTransactionType.REVERSAL,
+          sourceType: JournalSourceType.PAYMENT_VOUCHER,
+          sourceId: voucher.id,
+          sourceNumber: voucher.voucherNumber,
+          debit: 0,
+          credit: voucher.amount,
+          description: desc,
+          actorId,
+        },
+        manager,
+      );
+    }
 
-      const notes = voucher.notes?.trim().replace(/\s+/g, ' ');
-      const desc = `عكس ${voucher.type === VoucherType.RECEIPT ? 'سند قبض' : 'سند صرف'} ${voucher.voucherNumber ?? ''}${notes ? ` — ${notes}` : ''}`.slice(0, 500);
-      // Reverse the party subledger (none for an ACCOUNT voucher).
-      if (voucher.partyType === VoucherPartyType.CUSTOMER) {
-        await this.customerLedger.record(
-          {
-            customerId: voucher.partyId!,
-            transactionDate: dto.reversalDate,
-            type: CustomerTransactionType.REVERSAL,
-            sourceType: JournalSourceType.RECEIPT_VOUCHER,
-            sourceId: voucher.id,
-            sourceNumber: voucher.voucherNumber,
-            debit: voucher.amount,
-            credit: 0,
-            description: desc,
-            actorId,
-          },
-          manager,
-        );
-      } else if (voucher.partyType === VoucherPartyType.SUPPLIER) {
-        await this.supplierLedger.record(
-          {
-            supplierId: voucher.partyId!,
-            transactionDate: dto.reversalDate,
-            type: SupplierTransactionType.REVERSAL,
-            sourceType: JournalSourceType.PAYMENT_VOUCHER,
-            sourceId: voucher.id,
-            sourceNumber: voucher.voucherNumber,
-            debit: 0,
-            credit: voucher.amount,
-            description: desc,
-            actorId,
-          },
-          manager,
-        );
-      }
+    // Reverse the treasury/bank subledger (opposite of the original leg).
+    const wasReceipt = voucher.type === VoucherType.RECEIPT;
+    await this.recordCashLeg(voucher, {
+      debit: wasReceipt ? 0 : voucher.amount,
+      credit: wasReceipt ? voucher.amount : 0,
+      typeReceipt: wasReceipt,
+      reversal: true,
+      sourceType: wasReceipt ? JournalSourceType.RECEIPT_VOUCHER : JournalSourceType.PAYMENT_VOUCHER,
+      sourceNumber: voucher.voucherNumber,
+      journalEntryId: reversalEntry.id,
+      description: desc,
+      actorId,
+      transactionDate: dto.reversalDate,
+    }, manager);
 
-      // Reverse the treasury/bank subledger (opposite of the original leg).
-      const wasReceipt = voucher.type === VoucherType.RECEIPT;
-      await this.recordCashLeg(voucher, {
-        debit: wasReceipt ? 0 : voucher.amount,
-        credit: wasReceipt ? voucher.amount : 0,
-        typeReceipt: wasReceipt,
-        reversal: true,
-        sourceType: wasReceipt ? JournalSourceType.RECEIPT_VOUCHER : JournalSourceType.PAYMENT_VOUCHER,
-        sourceNumber: voucher.voucherNumber,
-        journalEntryId: reversalEntry.id,
-        description: desc,
-        actorId,
-        transactionDate: dto.reversalDate,
-      }, manager);
+    voucher.status = VoucherStatus.REVERSED;
+    voucher.reversedAt = new Date();
+    voucher.reversedBy = actorId ?? null;
+    voucher.reversalReason = dto.reason;
+    voucher.reversalJournalEntryId = reversalEntry.id;
+    voucher.updatedBy = actorId ?? null;
 
-      voucher.status = VoucherStatus.REVERSED;
-      voucher.reversedAt = new Date();
-      voucher.reversedBy = actorId ?? null;
-      voucher.reversalReason = dto.reason;
-      voucher.reversalJournalEntryId = reversalEntry.id;
-      voucher.updatedBy = actorId ?? null;
-
-      await manager.getRepository(Voucher).save(voucher);
-      return this.reload(manager, id);
-    });
+    await manager.getRepository(Voucher).save(voucher);
+    return this.reload(manager, id);
   }
 
   // =========================================================

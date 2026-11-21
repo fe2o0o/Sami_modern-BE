@@ -38,6 +38,10 @@ import { ManufacturingOrder } from '../manufacturing/entities/manufacturing-orde
 import { MANUFACTURING_ORDER_STATUS_LABELS, ManufacturingOrderStatus } from '../manufacturing/enums/manufacturing.enum';
 import { DIRECT_MATERIAL_OPEN_STATUSES, DIRECT_MATERIAL_TYPES } from '../manufacturing/direct-material.util';
 import { ManufacturingProductionService } from '../manufacturing/manufacturing-production.service';
+import { Voucher } from '../voucher/entities/voucher.entity';
+import { VoucherPartyType, VoucherPaymentMethod, VoucherStatus, VoucherType } from '../voucher/enums/voucher.enum';
+import { VoucherPostingService } from '../voucher/voucher-posting.service';
+import { LandedAllocation, PurchaseLandedExpense, allocateLandedCosts, landedTotal } from './landed-cost.util';
 
 /** Where a line bought straight onto a manufacturing order is debited: the order's product cost account. */
 interface DirectTarget { accountId: string; order: ManufacturingOrder }
@@ -60,6 +64,7 @@ export class PurchaseInvoicePostingService {
     private readonly journalService: JournalEntryService,
     private readonly dataSource: DataSource,
     private readonly manufacturing: ManufacturingProductionService,
+    private readonly voucherPosting: VoucherPostingService,
   ) {}
 
   // =========================================================
@@ -96,6 +101,12 @@ export class PurchaseInvoicePostingService {
       }
 
       const products = await this.loadProducts(items.map((i) => i.productId), manager);
+
+      // Landed expenses (freight …) re-spread onto the lines: each line is received at
+      // (net + its share) ÷ qty. Paid below by one payment voucher per expense.
+      const expenses = invoice.landedExpenses ?? [];
+      const shares = allocateLandedCosts(items, expenses);
+      items.forEach((item) => (item.landedCost = shares.get(item.lineNumber) ?? 0));
 
       // All account mappings must resolve BEFORE we touch stock.
       this.validateAccounts(invoice, items, products, settings);
@@ -189,6 +200,12 @@ export class PurchaseInvoicePostingService {
         );
         invoice.paidAmount = invoice.totalAmount;
         invoice.remainingAmount = 0;
+      }
+
+      // One payment voucher per landed expense: DR clearing / CR the treasury or bank
+      // (+ its cashbook). Posted in this same transaction and linked to the invoice.
+      if (expenses.length) {
+        invoice.landedExpenses = await this.payLandedExpenses(invoice, invoiceNumber, supplierName, settings, actorId, manager);
       }
 
       invoice.invoiceNumber = invoiceNumber;
@@ -292,6 +309,18 @@ export class PurchaseInvoicePostingService {
       );
       await this.journalService.markEntryReversed(original.id, reversalEntry.id, dto.reason, actorId, manager);
 
+      // The landed-expense vouchers go back with the invoice (cash back into each cashbook).
+      for (const voucherId of new Set((invoice.landedExpenses ?? []).map((e) => e.voucherId).filter((v): v is string => !!v))) {
+        await this.voucherPosting.reverseWithin(
+          manager,
+          voucherId,
+          { reason: `عكس فاتورة مشتريات ${invoice.invoiceNumber ?? ''} — ${dto.reason}`, reversalDate: dto.reversalDate, accountingPeriodId: period.id },
+          actorId,
+          null,
+          true,
+        );
+      }
+
       // Reverse the supplier payable.
       if (invoice.paymentType === PurchasePaymentType.CREDIT) {
         await this.supplierLedger.record(
@@ -362,7 +391,7 @@ export class PurchaseInvoicePostingService {
     const ids = [...new Set(productIds.filter(Boolean))];
     for (const productId of ids) {
       const rows = (await manager.query(
-        `SELECT i.net_before_tax AS net, i.quantity AS qty
+        `SELECT i.net_before_tax + i.landed_cost AS net, i.quantity AS qty
            FROM purchase_invoice_items i
            JOIN purchase_invoices pi ON pi.id = i.purchase_invoice_id
           WHERE i.product_id = ? AND pi.status = ? AND pi.deleted_at IS NULL AND i.deleted_at IS NULL AND i.quantity > 0
@@ -376,10 +405,81 @@ export class PurchaseInvoicePostingService {
     }
   }
 
-  /** Net (after-discount, pre-VAT) unit cost a line is capitalized into stock at. */
+  /**
+   * Pay the landed expenses with ONE posted payment voucher per cashbox (normally one
+   * for the whole invoice), linked to the invoice. Its statement names the invoice, the
+   * supplier and every expense with its amount and how it is spread. Returns the
+   * expenses carrying their voucher id + number.
+   */
+  private async payLandedExpenses(
+    invoice: PurchaseInvoice,
+    invoiceNumber: string,
+    supplierName: string,
+    settings: AccountingSetting,
+    actorId: string | undefined,
+    manager: EntityManager,
+  ): Promise<PurchaseLandedExpense[]> {
+    const expenses = invoice.landedExpenses ?? [];
+    const lineName = new Map((invoice.items ?? []).map((i): [number, string] => [i.lineNumber, i.productName ?? '']));
+    const spread = (e: PurchaseLandedExpense) =>
+      e.allocation === LandedAllocation.LINE
+        ? `على ${lineName.get(Number(e.targetLineNumber)) || `السطر ${e.targetLineNumber}`}`
+        : e.allocation === LandedAllocation.QUANTITY ? 'موزّع بالكمية' : 'موزّع بالقيمة';
+    // Group by cashbox: one voucher per treasury / bank.
+    const groups = new Map<string, PurchaseLandedExpense[]>();
+    for (const e of expenses) {
+      const key = e.treasuryId ? `t:${e.treasuryId}` : `b:${e.bankAccountId}`;
+      groups.set(key, [...(groups.get(key) ?? []), e]);
+    }
+    const repo = manager.getRepository(Voucher);
+    const voucherOf = new Map<string, { id: string; number: string | null }>();
+    for (const [key, group] of groups) {
+      const first = group[0];
+      const amount = round2(group.reduce((s, e) => s + Number(e.amount), 0));
+      const header = [
+        `مصاريف محمّلة على فاتورة مشتريات ${invoiceNumber}`,
+        supplierName ? `المورد: ${supplierName}` : null,
+        invoice.supplierInvoiceNumber ? `فاتورة المورد: ${invoice.supplierInvoiceNumber}` : null,
+      ].filter(Boolean).join(' — ');
+      const details = group.map((e) => `${e.description} ${round2(Number(e.amount)).toFixed(2)} (${spread(e)})`).join(' + ');
+      const draft = await repo.save(
+        repo.create({
+          type: VoucherType.PAYMENT,
+          voucherDate: invoice.invoiceDate,
+          partyType: VoucherPartyType.ACCOUNT,
+          partyId: null,
+          accountId: settings.purchaseExpensesClearingAccountId,
+          partyName: `مصاريف فاتورة مشتريات ${invoiceNumber}`.slice(0, 255),
+          paymentMethod: first.treasuryId ? VoucherPaymentMethod.TREASURY : VoucherPaymentMethod.BANK,
+          treasuryId: first.treasuryId ?? null,
+          bankAccountId: first.treasuryId ? null : first.bankAccountId ?? null,
+          amount,
+          fiscalYearId: invoice.fiscalYearId,
+          accountingPeriodId: invoice.accountingPeriodId,
+          branchId: invoice.branchId,
+          reference: invoiceNumber,
+          notes: `${header}: ${details}`,
+          status: VoucherStatus.DRAFT,
+          sourceType: JournalSourceType.PURCHASE_INVOICE,
+          sourceId: invoice.id,
+          sourceNumber: invoiceNumber,
+          createdBy: actorId ?? null,
+        }),
+      );
+      const posted = await this.voucherPosting.postWithin(manager, draft.id, actorId, null, true);
+      voucherOf.set(key, { id: posted.id, number: posted.voucherNumber });
+    }
+    return expenses.map((e) => {
+      const v = voucherOf.get(e.treasuryId ? `t:${e.treasuryId}` : `b:${e.bankAccountId}`)!;
+      return { ...e, voucherId: v.id, voucherNumber: v.number };
+    });
+  }
+
+  /** Unit cost a line is capitalized into stock at: net (after discount, before VAT)
+   *  plus its share of the landed expenses. */
   private netUnitCost(item: PurchaseInvoiceItem): number {
     const qty = item.quantity || 0;
-    return qty > 0 ? round2(item.netBeforeTax / qty) : 0;
+    return qty > 0 ? round2((Number(item.netBeforeTax) + (Number(item.landedCost) || 0)) / qty) : 0;
   }
 
   /** Aggregate the invoice into balanced, narrated journal lines by account. */
@@ -401,12 +501,16 @@ export class PurchaseInvoicePostingService {
       const target = direct.get(item.id);
       if (target) {
         const what = `${item.productName ?? ''}${item.directDescription ? ' — ' + item.directDescription : ''}`;
-        b.add(target.accountId, item.netBeforeTax, 0, `خامة مباشرة «${what}» على أمر تصنيع ${target.order.orderNumber ?? ''} (${target.order.productName ?? ''}) — ${ref}`, { productId: target.order.productId });
+        b.add(target.accountId, round2(item.netBeforeTax + (Number(item.landedCost) || 0)), 0, `خامة مباشرة «${what}» على أمر تصنيع ${target.order.orderNumber ?? ''} (${target.order.productName ?? ''}) — ${ref}`, { productId: target.order.productId });
         continue;
       }
       const product = products.get(item.productId)!;
       const inventoryAccount = this.resolveInventoryAccount(product, settings)!;
-      b.add(inventoryAccount, item.netBeforeTax, 0, `استلام بضاعة في المخزن — ${ref}`, { warehouseId: invoice.warehouseId });
+      b.add(inventoryAccount, round2(item.netBeforeTax + (Number(item.landedCost) || 0)), 0, `استلام بضاعة في المخزن — ${ref}`, { warehouseId: invoice.warehouseId });
+    }
+    // Landed expenses (paid by their vouchers) move from the clearing account into the goods.
+    for (const e of invoice.landedExpenses ?? []) {
+      if (Number(e.amount) > 0) b.add(settings.purchaseExpensesClearingAccountId!, 0, round2(Number(e.amount)), `مصاريف محمّلة «${e.description}» على البضاعة — ${ref}`);
     }
     // Debit recoverable input VAT.
     if (invoice.vatAmount > 0) {
@@ -433,6 +537,9 @@ export class PurchaseInvoicePostingService {
     const block = (msg: string): never => {
       throw new BadRequestException(`لا يمكن ترحيل فاتورة المشتريات لأن ${msg}`);
     };
+    if (landedTotal(invoice.landedExpenses) > 0 && !settings.purchaseExpensesClearingAccountId) {
+      block('حساب «مصاريف مشتريات تحت التسوية» غير محدد في إعدادات المحاسبة (مطلوب لتحميل المصاريف على الأصناف).');
+    }
 
     if (invoice.paymentType === PurchasePaymentType.CREDIT) {
       if (!settings.supplierControlAccountId) block('حساب مراقبة الموردين غير محدد في إعدادات المحاسبة.');

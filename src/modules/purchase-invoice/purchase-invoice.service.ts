@@ -8,6 +8,9 @@ import { BranchScope, applyBranchScope, isWithinBranchScope, resolveWriteBranch 
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import { PurchaseInvoice } from './entities/purchase-invoice.entity';
 import { PurchaseInvoiceItem } from './entities/purchase-invoice-item.entity';
+import { LandedAllocation, PurchaseLandedExpense, allocateLandedCosts } from './landed-cost.util';
+import { Treasury } from '../treasury/entities/treasury.entity';
+import { BankAccount } from '../bank-account/entities/bank-account.entity';
 import {
   PurchaseInvoiceStatus,
   PurchasePaymentType,
@@ -123,6 +126,7 @@ export class PurchaseInvoiceService {
     await this.assertHeaderRefs(dto);
     const items = await this.buildItems(dto.items, dto.warehouseId, branchScope);
     const { totals } = computeInvoice(this.toLineInputs(dto.items));
+    const landedExpenses = await this.applyLandedExpenses(dto.landedExpenses ?? [], items);
 
     const invoice = this.invoiceRepository.create({
       invoiceNumber: null,
@@ -145,6 +149,7 @@ export class PurchaseInvoiceService {
       totalAmount: totals.totalAmount,
       paidAmount: 0,
       remainingAmount: totals.totalAmount,
+      landedExpenses,
       createdBy: actorId ?? null,
       items,
     });
@@ -192,6 +197,11 @@ export class PurchaseInvoiceService {
         invoice.totalAmount = totals.totalAmount;
         invoice.remainingAmount = totals.totalAmount - invoice.paidAmount;
         invoice.items = items;
+      }
+      // Expenses are re-spread whenever the lines or the expenses change.
+      if (dto.items || dto.landedExpenses !== undefined) {
+        const expenses = dto.landedExpenses ?? invoice.landedExpenses ?? [];
+        invoice.landedExpenses = await this.applyLandedExpenses(expenses, invoice.items ?? []);
       }
       invoice.updatedBy = actorId ?? null;
       return manager.getRepository(PurchaseInvoice).save(invoice);
@@ -356,9 +366,24 @@ export class PurchaseInvoiceService {
         releasedWarehouseName: i.releasedWarehouseId ? whName.get(i.releasedWarehouseId) ?? null : null,
       };
     });
+    // Landed expenses with the treasury / bank they are paid from (by name).
+    const expenses = invoice.landedExpenses ?? [];
+    const tIds = expenses.map((e) => e.treasuryId).filter((v): v is string => !!v);
+    const bIds = expenses.map((e) => e.bankAccountId).filter((v): v is string => !!v);
+    const [ts, bs] = await Promise.all([
+      tIds.length ? this.dataSource.getRepository(Treasury).find({ where: { id: In(tIds) }, withDeleted: true }) : [],
+      bIds.length ? this.dataSource.getRepository(BankAccount).find({ where: { id: In(bIds) }, withDeleted: true }) : [],
+    ]);
+    const fromName = new Map<string, string>([
+      ...ts.map((x): [string, string] => [x.id, x.name]),
+      ...bs.map((b): [string, string] => [b.id, b.accountName ? `${b.bankName} — ${b.accountName}` : b.bankName]),
+    ]);
     return {
       ...invoice,
       items,
+      landedExpenses: expenses.length
+        ? expenses.map((e) => ({ ...e, paidFromName: fromName.get(e.treasuryId ?? e.bankAccountId ?? '') ?? null }))
+        : null,
       supplierName: supplier?.name ?? null,
       warehouseName: warehouse?.name ?? null,
       branchName: branch?.name ?? null,
@@ -499,6 +524,7 @@ export class PurchaseInvoiceService {
       item.vatAmount = line.vatAmount;
       item.lineTotal = line.lineTotal;
       item.unitCostAtPost = 0;
+      item.landedCost = 0;
       item.manufacturingOrderId = null;
       item.directDescription = null;
       item.releasedWarehouseId = null;
@@ -519,6 +545,52 @@ export class PurchaseInvoiceService {
       }
       return item;
     });
+  }
+
+  /**
+   * Check the landed expenses (amount, target line, a treasury OR a bank) and write
+   * each line's share into `item.landedCost`. Returns what is stored on the invoice
+   * (null when there are none).
+   */
+  private async applyLandedExpenses(
+    expenses: PurchaseLandedExpense[],
+    items: PurchaseInvoiceItem[],
+  ): Promise<PurchaseLandedExpense[] | null> {
+    const lineNumbers = new Set(items.map((i) => i.lineNumber));
+    const clean: PurchaseLandedExpense[] = [];
+    for (const e of expenses) {
+      const description = (e.description ?? '').trim();
+      const amount = Math.round((Number(e.amount) || 0) * 100) / 100;
+      if (!description) throw new BadRequestException('بيان المصروف مطلوب');
+      if (amount <= 0) throw new BadRequestException(`مبلغ المصروف «${description}» يجب أن يكون أكبر من صفر`);
+      if (!!e.treasuryId === !!e.bankAccountId) {
+        throw new BadRequestException(`اختر خزنة أو حساباً بنكياً يُصرف منه المصروف «${description}»`);
+      }
+      if (e.treasuryId) {
+        const t = await this.dataSource.getRepository(Treasury).findOne({ where: { id: e.treasuryId } });
+        if (!t || !t.isActive) throw new BadRequestException(`الخزنة المختارة للمصروف «${description}» غير موجودة أو غير نشطة`);
+      } else {
+        const b = await this.dataSource.getRepository(BankAccount).findOne({ where: { id: e.bankAccountId! } });
+        if (!b || !b.isActive) throw new BadRequestException(`الحساب البنكي المختار للمصروف «${description}» غير موجود أو غير نشط`);
+      }
+      const onLine = e.allocation === LandedAllocation.LINE;
+      if (onLine && !lineNumbers.has(Number(e.targetLineNumber))) {
+        throw new BadRequestException(`الصنف المختار لتحميل المصروف «${description}» غير موجود في الفاتورة`);
+      }
+      clean.push({
+        description,
+        amount,
+        allocation: e.allocation,
+        targetLineNumber: onLine ? Number(e.targetLineNumber) : null,
+        treasuryId: e.treasuryId ?? null,
+        bankAccountId: e.treasuryId ? null : e.bankAccountId ?? null,
+        voucherId: null,
+        voucherNumber: null,
+      });
+    }
+    const shares = allocateLandedCosts(items, clean);
+    for (const item of items) item.landedCost = shares.get(item.lineNumber) ?? 0;
+    return clean.length ? clean : null;
   }
 
   private async getEditableDraft(id: string, branchScope: BranchScope = null): Promise<PurchaseInvoice> {

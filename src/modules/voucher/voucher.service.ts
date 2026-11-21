@@ -304,6 +304,9 @@ export class VoucherService {
     if (voucher.status !== VoucherStatus.DRAFT) {
       throw new BadRequestException('لا يمكن تعديل أو حذف سند مُرحّل — استخدم العكس');
     }
+    if (voucher.sourceType) {
+      throw new BadRequestException('هذا السند ناتج عن مستند آخر — يُعدَّل من المستند نفسه');
+    }
     return voucher;
   }
 

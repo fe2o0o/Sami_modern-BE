@@ -38,6 +38,12 @@ export class AccountingSetting extends BaseEntity {
   @Column({ type: 'varchar', length: 36, nullable: true })
   goodsSoldNotDeliveredAccountId!: string | null;
 
+  /** «مصاريف مشتريات تحت التسوية»: a purchase invoice's landed expenses (freight …)
+   *  pass through it — the payment voucher debits it, the invoice credits it into
+   *  the goods' cost. Nets to zero per invoice. Required only for such expenses. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  purchaseExpensesClearingAccountId!: string | null;
+
   /** Credit account for the manufacturing fee on in-house production (labour /
    *  overhead / applied-manufacturing). For a factory order the fee credits the
    *  supplier control account instead. */

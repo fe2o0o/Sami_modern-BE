@@ -33,7 +33,7 @@ export interface DirectMaterialLine {
   description: string | null;
   quantity: number;
   returnedQuantity: number;
-  /** Net cost still on the order = line net − net of its posted returns. */
+  /** Cost still on the order = (line net + its landed expenses) − the same for its posted returns. */
   netCost: number;
   unitCost: number;
   releasedWarehouseId: string | null;
@@ -55,7 +55,7 @@ export async function directMaterialLinesOf(manager: EntityManager, orderId: str
     `SELECT i.id, i.purchase_invoice_id AS invoiceId, pi.invoice_number AS invoiceNumber,
             DATE_FORMAT(pi.invoice_date, '%Y-%m-%d') AS invoiceDate, pi.supplier_id AS supplierId, s.name AS supplierName,
             pi.warehouse_id AS invoiceWarehouseId, i.product_id AS productId, i.product_name AS productName,
-            i.unit_name AS unitName, i.direct_description AS description, i.quantity, i.net_before_tax AS net,
+            i.unit_name AS unitName, i.direct_description AS description, i.quantity, i.net_before_tax AS net, i.landed_cost AS landed,
             i.unit_cost_at_post AS unitCost, i.released_warehouse_id AS releasedWarehouseId, w.name AS releasedWarehouseName,
             i.released_at AS releasedAt, ${returned('quantity')} AS rq, ${returned('net_before_tax')} AS rnet
        FROM purchase_invoice_items i
@@ -82,7 +82,11 @@ export async function directMaterialLinesOf(manager: EntityManager, orderId: str
       description: r.description ?? null,
       quantity: qty,
       returnedQuantity: r3(Number(r.rq) || 0),
-      netCost: r2((Number(r.net) || 0) - (Number(r.rnet) || 0)),
+      // Landed expenses (freight …) ride on the material; a return takes its share back by quantity.
+      netCost: r2(
+        (Number(r.net) || 0) + (Number(r.landed) || 0)
+          - (Number(r.rnet) || 0) - (qty > 0 ? r2(((Number(r.landed) || 0) * (Number(r.rq) || 0)) / qty) : 0),
+      ),
       unitCost: Number(r.unitCost) || (qty > 0 ? r2((Number(r.net) || 0) / qty) : 0),
       releasedWarehouseId: r.releasedWarehouseId ?? null,
       releasedWarehouseName: r.releasedWarehouseName ?? null,
@@ -91,7 +95,7 @@ export async function directMaterialLinesOf(manager: EntityManager, orderId: str
   });
 }
 
-/** The order's direct material cost: posted purchases − their posted returns, at net cost. */
+/** The order's direct material cost: posted purchases − their posted returns (net + landed expenses). */
 export async function directMaterialCostOf(manager: EntityManager, orderId: string): Promise<number> {
   const lines = await directMaterialLinesOf(manager, orderId);
   return r2(lines.reduce((s, l) => s + l.netCost, 0));

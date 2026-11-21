@@ -12,6 +12,7 @@ import {
 } from 'class-validator';
 import { PurchasePaymentType } from '../enums/purchase-invoice.enum';
 import { PurchaseInvoiceItemDto } from './purchase-invoice-item.dto';
+import { PurchaseLandedExpenseDto } from './purchase-landed-expense.dto';
 
 /** Create a purchase invoice (always starts DRAFT — no stock/accounting effect). */
 export class CreatePurchaseInvoiceDto {
@@ -66,4 +67,13 @@ export class CreatePurchaseInvoiceDto {
   @ValidateNested({ each: true })
   @Type(() => PurchaseInvoiceItemDto)
   items!: PurchaseInvoiceItemDto[];
+
+  /** Landed expenses (freight …) added onto the goods' cost; paid from a treasury / bank
+   *  by a payment voucher created when the invoice is posted. */
+  @ApiPropertyOptional({ type: [PurchaseLandedExpenseDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PurchaseLandedExpenseDto)
+  landedExpenses?: PurchaseLandedExpenseDto[];
 }

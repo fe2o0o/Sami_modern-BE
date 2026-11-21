@@ -42,6 +42,10 @@ export class UpdateAccountingSettingDto {
   @AccountId()
   goodsSoldNotDeliveredAccountId?: string | null;
 
+  /** «مصاريف مشتريات تحت التسوية» — landed expenses on purchase invoices. */
+  @AccountId()
+  purchaseExpensesClearingAccountId?: string | null;
+
   @AccountId()
   manufacturingFeeAccountId?: string | null;
 

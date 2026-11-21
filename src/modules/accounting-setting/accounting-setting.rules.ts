@@ -76,6 +76,14 @@ export const SETTING_ACCOUNT_RULES: SettingAccountRule[] = [
     subTypes: [],
   },
   {
+    // Clearing (zero per invoice): the expense voucher debits it, the purchase
+    // invoice credits it into the goods' cost. Any asset account.
+    key: 'purchaseExpensesClearingAccountId',
+    label: 'حساب مصاريف مشتريات تحت التسوية',
+    accountType: AccountType.ASSET,
+    subTypes: [],
+  },
+  {
     key: 'inventoryAdjustmentAccountId',
     label: 'حساب تسويات المخزون',
     accountType: AccountType.EXPENSE,

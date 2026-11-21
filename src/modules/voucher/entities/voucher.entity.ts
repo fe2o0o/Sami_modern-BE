@@ -100,6 +100,17 @@ export class Voucher extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   reversalJournalEntryId!: string | null;
 
+  /** Created BY another document (e.g. a purchase invoice's landed expense): it is
+   *  posted and reversed only with that document, never edited on its own. */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  sourceType!: string | null;
+
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  sourceId!: string | null;
+
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  sourceNumber!: string | null;
+
   // ── Audit ──
   @Column({ type: 'uuid', nullable: true })
   createdBy!: string | null;

@@ -73,7 +73,12 @@ export class PurchaseInvoiceItem extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   lineTotal!: number;
 
-  /** Net unit cost captured at posting (for returns / reversal at original cost). */
+  /** This line's share of the invoice's landed expenses (freight …) — added to its
+   *  cost: the goods are received at (netBeforeTax + landedCost) ÷ quantity. */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  landedCost!: number;
+
+  /** Unit cost captured at posting, landed expenses included (for returns / reversal at original cost). */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   unitCostAtPost!: number;
 

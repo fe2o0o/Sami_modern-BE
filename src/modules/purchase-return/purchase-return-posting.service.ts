@@ -78,7 +78,10 @@ export class PurchaseReturnPostingService {
       const settings = await manager.getRepository(AccountingSetting).findOne({ where: {} });
       if (!settings) throw new BadRequestException('يجب ضبط إعدادات المحاسبة أولاً');
       const products = await this.loadProducts(ret.items.map((i) => i.productId), manager);
-      this.validateAccounts(ret, products, settings);
+      // The returned quantity's share of the invoice's landed expenses (freight …):
+      // the supplier refunds the price only, so that share is a loss.
+      const landed = await this.returnedLandedCost(ret, manager);
+      this.validateAccounts(ret, products, settings, landed);
 
       const number = await this.sequenceService.nextDocumentNumber('PR', fiscalYear, manager);
 
@@ -115,7 +118,7 @@ export class PurchaseReturnPostingService {
 
       const supplier = await manager.getRepository(Supplier).findOne({ where: { id: ret.supplierId }, select: { id: true, name: true } });
       const supplierName = supplier?.name ?? '';
-      const lines = this.buildJournalLines(ret, products, settings, number, supplierName, direct);
+      const lines = this.buildJournalLines(ret, products, settings, number, supplierName, direct, landed);
       const journalEntry = await this.journalService.createSystemJournalEntry(
         {
           sourceType: JournalSourceType.PURCHASE_RETURN,
@@ -314,6 +317,7 @@ export class PurchaseReturnPostingService {
     number: string,
     supplierName: string,
     direct: Map<string, DirectTarget> = new Map(),
+    landed: Map<string, number> = new Map(),
   ): JournalLineInput[] {
     const b = new JournalLineBuilder();
     const ref = `مردود مشتريات ${number}`;
@@ -325,14 +329,18 @@ export class PurchaseReturnPostingService {
       b.add(ret.cashAccountId!, ret.totalAmount, 0, `استرداد نقدي من المورد ${supplierName} — ${ref}`);
     }
 
-    // Credit inventory (goods leave) at the returned net cost.
+    // Credit inventory (goods leave) at the cost they came in at: net + their share of the
+    // landed expenses. That share is not refunded by the supplier → inventory adjustments.
     for (const item of ret.items) {
+      const share = landed.get(item.id) ?? 0;
+      if (share > 0) b.add(settings.inventoryAdjustmentAccountId!, share, 0, `مصاريف محمّلة غير مستردة على «${item.productName ?? ''}» — ${ref}`, { productId: item.productId });
+      const cost = round2(item.netBeforeTax + share);
       const target = direct.get(item.id);
       if (target) {
-        b.add(target.accountId, 0, item.netBeforeTax, `مرتجع خامة مباشرة «${item.productName ?? ''}» من أمر تصنيع ${target.order.orderNumber ?? ''} (${target.order.productName ?? ''}) — ${ref}`, { productId: target.order.productId });
+        b.add(target.accountId, 0, cost, `مرتجع خامة مباشرة «${item.productName ?? ''}» من أمر تصنيع ${target.order.orderNumber ?? ''} (${target.order.productName ?? ''}) — ${ref}`, { productId: target.order.productId });
         continue;
       }
-      b.add(this.resolveInventoryAccount(products.get(item.productId)!, settings)!, 0, item.netBeforeTax, `إخراج بضاعة مرتجعة من المخزن — ${ref}`, { warehouseId: item.warehouseId ?? ret.warehouseId });
+      b.add(this.resolveInventoryAccount(products.get(item.productId)!, settings)!, 0, cost, `إخراج بضاعة مرتجعة من المخزن — ${ref}`, { warehouseId: item.warehouseId ?? ret.warehouseId });
     }
     // Credit recoverable input VAT (reduce it).
     if (ret.vatAmount > 0) b.add(settings.inputVatAccountId!, 0, ret.vatAmount, `عكس ضريبة القيمة المضافة (مدخلات) — ${ref}`);
@@ -340,10 +348,13 @@ export class PurchaseReturnPostingService {
     return b.build();
   }
 
-  private validateAccounts(ret: PurchaseReturn, products: Map<string, Product>, settings: AccountingSetting): void {
+  private validateAccounts(ret: PurchaseReturn, products: Map<string, Product>, settings: AccountingSetting, landed: Map<string, number> = new Map()): void {
     const block = (msg: string): never => {
       throw new BadRequestException(`لا يمكن ترحيل مردود المشتريات لأن ${msg}`);
     };
+    if ([...landed.values()].some((v) => v > 0) && !settings.inventoryAdjustmentAccountId) {
+      block('حساب «تسويات المخزون» غير محدد في إعدادات المحاسبة (مطلوب لنصيب المرتجع من المصاريف المحمّلة).');
+    }
     if (ret.paymentType === PurchasePaymentType.CREDIT) {
       if (!settings.supplierControlAccountId) block('حساب مراقبة الموردين غير محدد في إعدادات المحاسبة.');
     } else if (!ret.cashAccountId) {
@@ -371,6 +382,22 @@ export class PurchaseReturnPostingService {
   // =========================================================
   // HELPERS
   // =========================================================
+  /** Per return line: its share of the source invoice line's landed expenses (by quantity). */
+  private async returnedLandedCost(ret: PurchaseReturn, manager: EntityManager): Promise<Map<string, number>> {
+    const ids = ret.items.map((i) => i.purchaseInvoiceItemId).filter((v): v is string => !!v);
+    if (!ids.length) return new Map();
+    const sources = await manager.getRepository(PurchaseInvoiceItem).find({ where: { id: In(ids) } });
+    const byId = new Map(sources.map((s): [string, PurchaseInvoiceItem] => [s.id, s]));
+    const out = new Map<string, number>();
+    for (const item of ret.items) {
+      const src = item.purchaseInvoiceItemId ? byId.get(item.purchaseInvoiceItemId) : undefined;
+      const srcQty = Number(src?.quantity) || 0;
+      const srcLanded = Number(src?.landedCost) || 0;
+      if (srcQty > 0 && srcLanded > 0) out.set(item.id, round2((srcLanded * (Number(item.quantity) || 0)) / srcQty));
+    }
+    return out;
+  }
+
   /** Net unit cost the line was bought at: the purchase line's snapshot, else (older
    *  invoices posted before the snapshot existed) the line's net ÷ quantity. */
   private purchaseUnitCost(item: PurchaseReturnItem): number {

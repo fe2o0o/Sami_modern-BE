@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { VoucherModule } from '../voucher/voucher.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PurchaseInvoice } from './entities/purchase-invoice.entity';
 import { PurchaseInvoiceItem } from './entities/purchase-invoice-item.entity';
@@ -50,6 +51,7 @@ import { ManufacturingModule } from '../manufacturing/manufacturing.module';
     JournalEntryModule,
     CashSubledgerModule,
     ManufacturingModule,
+    VoucherModule,
   ],
   controllers: [PurchaseInvoiceController],
   providers: [PurchaseInvoiceService, PurchaseInvoicePostingService],

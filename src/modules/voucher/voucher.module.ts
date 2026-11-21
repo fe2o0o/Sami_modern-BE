@@ -50,6 +50,6 @@ import { BankAccountModule } from '../bank-account/bank-account.module';
   ],
   controllers: [VoucherController],
   providers: [VoucherService, VoucherPostingService],
-  exports: [VoucherService],
+  exports: [VoucherService, VoucherPostingService],
 })
 export class VoucherModule {}

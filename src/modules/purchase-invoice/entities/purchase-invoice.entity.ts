@@ -6,6 +6,7 @@ import {
   PurchasePaymentType,
 } from '../enums/purchase-invoice.enum';
 import { PurchaseInvoiceItem } from './purchase-invoice-item.entity';
+import type { PurchaseLandedExpense } from '../landed-cost.util';
 
 /**
  * A purchase invoice — a business document that, once POSTED, receives inventory,
@@ -103,6 +104,12 @@ export class PurchaseInvoice extends BaseEntity {
 
   @Column({ type: 'uuid', nullable: true })
   reversalJournalEntryId!: string | null;
+
+  /** Landed expenses (مصاريف محمّلة: freight, loading …) paid from a treasury / bank
+   *  through a payment voucher at posting and spread onto the lines' cost. They are
+   *  NOT part of `totalAmount` (the supplier is owed the goods only). */
+  @Column({ type: 'json', nullable: true })
+  landedExpenses!: PurchaseLandedExpense[] | null;
 
   @OneToMany(() => PurchaseInvoiceItem, (item) => item.purchaseInvoice, {
     cascade: true,
