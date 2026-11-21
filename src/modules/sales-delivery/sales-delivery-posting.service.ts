@@ -262,6 +262,7 @@ export class SalesDeliveryPostingService {
       // A manufacturing line is deliverable only once its production order is
       // produced (the finished goods are then in the warehouse assigned to it).
       let orderUnitCost: number | undefined;
+      let producedOrder: ManufacturingOrder | null = null;
       if (item.lineType === SalesLineType.MANUFACTURING) {
         const mo = item.manufacturingOrderId
           ? await manager.getRepository(ManufacturingOrder).findOne({ where: { id: item.manufacturingOrderId } })
@@ -286,6 +287,7 @@ export class SalesDeliveryPostingService {
         }
         // Delivered at ITS order's cost (components + fee), never the warehouse average.
         if (produced && mo!.quantity > 0 && Number(mo!.totalCost) > 0) orderUnitCost = round2(Number(mo!.totalCost) / Number(mo!.quantity));
+        if (produced) producedOrder = mo;
       }
       if (!item.warehouseId) throw new BadRequestException('لم يُحدَّد مخزن لهذا السطر');
       const remaining = round3((item.orderedQuantity ?? 0) - (item.deliveredQuantity ?? 0) - (item.cancelledQuantity ?? 0));
@@ -305,25 +307,39 @@ export class SalesDeliveryPostingService {
       if (!invAcc) throw new BadRequestException(missingAccountMessage('inventory', product.name));
 
       const number = delivery.deliveryNumber ?? (await this.sequenceService.nextDocumentNumber('DN', fiscalYear, manager));
-      const stockLine: StockLineInput[] = [
-        { warehouseId: item.warehouseId!, productId: item.productId, productName: item.productName ?? undefined, quantity: qty, exactUnitCost: orderUnitCost },
-      ];
-      const issued = await this.stockService.issue(stockLine, manager, {
+      const stockRef = {
         movementType: StockMovementType.SALE,
         sourceType: JournalSourceType.SALES_DELIVERY,
         sourceId: delivery.id,
         sourceNumber: number,
         movementDate: actualDate,
         actorId,
+      };
+      // Made to this customer's order: leaves the «مصنّع لعملاء» balance at its
+      // order cost (never the regular averaged stock). Older orders produced
+      // before that balance existed still sit in regular stock (exact cost).
+      const fromMto = producedOrder ? round3(Math.min(qty, Number(producedOrder.toOrderQuantity) || 0)) : 0;
+      const fromStock = round3(qty - fromMto);
+      const base = { warehouseId: item.warehouseId!, productId: item.productId, productName: item.productName ?? undefined, exactUnitCost: orderUnitCost };
+      const stockLine: StockLineInput[] = [{ ...base, quantity: fromStock }];
+      const issued = [
+        ...(fromMto > 0 ? await this.stockService.issueMadeToOrder([{ ...base, quantity: fromMto }], manager, stockRef) : []),
         // Physical availability is required (the line consumes its OWN reservation,
         // so reservations aren't deducted). Delivering from an empty shelf used to
         // drive stock negative at zero cost; now only a warehouse configured
         // «يسمح بالرصيد السالب» allows it.
-      });
-      const unitCost = issued[0].unitCost;
-      const lineCost = round2(qty * unitCost);
+        ...(fromStock > 0 ? await this.stockService.issue(stockLine, manager, stockRef) : []),
+      ];
+      const lineCost = round2(issued.reduce((s, l) => s + l.totalCost, 0));
+      const unitCost = qty > 0 ? round2(lineCost / qty) : 0;
+      if (fromMto > 0) {
+        producedOrder!.toOrderQuantity = round3((Number(producedOrder!.toOrderQuantity) || 0) - fromMto);
+        await manager.getRepository(ManufacturingOrder).update(producedOrder!.id, { toOrderQuantity: producedOrder!.toOrderQuantity });
+        item.mtoDeliveredQuantity = round3((Number(item.mtoDeliveredQuantity) || 0) + fromMto);
+      }
 
-      if (delivery.salesInvoiceId && item.salesInvoiceItemId) {
+      // Only regular stock was reserved for the invoice line (made-to-order units never are).
+      if (delivery.salesInvoiceId && item.salesInvoiceItemId && fromStock > 0) {
         await this.stockService.releaseReservation(stockLine, manager);
       }
 
@@ -420,23 +436,44 @@ export class SalesDeliveryPostingService {
       const cost = round2(item.lineCost ?? 0);
       const { fiscalYear, period } = await this.resolvePostingContext(reversalDate, manager);
 
-      await this.stockService.receive(
-        [{ warehouseId: item.warehouseId!, productId: item.productId, quantity: qty, unitCost: item.unitCostAtPost }],
-        manager,
-        {
-          movementType: StockMovementType.SALE_REVERSAL,
-          sourceType: JournalSourceType.SALES_DELIVERY,
-          sourceId: delivery.id,
-          sourceNumber: delivery.deliveryNumber,
-          movementDate: reversalDate,
-          actorId,
-        },
-      );
-      if (delivery.salesInvoiceId && item.salesInvoiceItemId) {
-        await this.stockService.reserve(
-          [{ warehouseId: item.warehouseId!, productId: item.productId, quantity: qty }],
+      const backRef = {
+        movementType: StockMovementType.SALE_REVERSAL,
+        sourceType: JournalSourceType.SALES_DELIVERY,
+        sourceId: delivery.id,
+        sourceNumber: delivery.deliveryNumber,
+        movementDate: reversalDate,
+        actorId,
+      };
+      // What came out of «مصنّع لعملاء» goes back there (held for the customer again).
+      const backToMto = round3(Math.min(qty, Number(item.mtoDeliveredQuantity) || 0));
+      const backToStock = round3(qty - backToMto);
+      if (backToMto > 0) {
+        await this.stockService.receiveMadeToOrder(
+          [{ warehouseId: item.warehouseId!, productId: item.productId, quantity: backToMto, unitCost: item.unitCostAtPost }],
           manager,
+          backRef,
         );
+        if (item.manufacturingOrderId) {
+          const mo = await manager.getRepository(ManufacturingOrder).findOne({ where: { id: item.manufacturingOrderId } });
+          if (mo) await manager.getRepository(ManufacturingOrder).update(mo.id, { toOrderQuantity: round3((Number(mo.toOrderQuantity) || 0) + backToMto) });
+        }
+        item.mtoDeliveredQuantity = round3((Number(item.mtoDeliveredQuantity) || 0) - backToMto);
+      }
+      if (backToStock > 0) {
+        await this.stockService.receive(
+          [{ warehouseId: item.warehouseId!, productId: item.productId, quantity: backToStock, unitCost: item.unitCostAtPost }],
+          manager,
+          backRef,
+        );
+      }
+      if (delivery.salesInvoiceId && item.salesInvoiceItemId) {
+        // Only regular stock is reserved for the invoice line again.
+        if (backToStock > 0) {
+          await this.stockService.reserve(
+            [{ warehouseId: item.warehouseId!, productId: item.productId, quantity: backToStock }],
+            manager,
+          );
+        }
         await this.applyInvoiceLineDelivery(manager, delivery.salesInvoiceId, item.salesInvoiceItemId, -qty);
       }
       // Restore the invoice accrual this line had cleared (the goods are owed again).

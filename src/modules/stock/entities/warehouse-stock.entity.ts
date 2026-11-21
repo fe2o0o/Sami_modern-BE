@@ -39,4 +39,16 @@ export class WarehouseStock extends BaseEntity {
 
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   avgCost!: number;
+
+  /**
+   * «مصنّع لعملاء»: finished products made to a customer's order, held here until
+   * delivered. NOT part of `quantity` / `avgCost` (never available for sale, never
+   * averaged) — each unit leaves at its own manufacturing-order cost.
+   */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  mtoQuantity!: number;
+
+  /** Cost of the made-to-order units held (Σ of their orders' unit costs). */
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
+  mtoValue!: number;
 }

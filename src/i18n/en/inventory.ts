@@ -97,4 +97,6 @@ export const inventory: Record<string, string> = {
   'لا توجد سنة مالية': 'There is no fiscal year',
   "تسوية رسوم التصنيع متاحة فقط لأمر قيد التنفيذ رُحّلت رسومه عند البدء": "A manufacturing fee adjustment is only available for an in-progress order whose fee was posted at start",
   "لا يمكن تصفير رسوم أمر تصنيع لدى مصنع خارجي — ألغِ الأمر بدلاً من ذلك": "An external factory order's fee cannot be set to zero — cancel the order instead",
+  "الكمية المصنّعة للعميل من {name} في المخزن {held} فقط، ولا يمكن صرف {qty}": "Only {held} made-to-order units of {name} are in the warehouse; {qty} can't be issued",
+  "المنتج المصنّع «{name}» (أمر {no}) لم يعد متاحاً في المخزن — تم صرفه بعد المرتجع، فلا يمكن عكس المرتجع": "The manufactured product «{name}» (order {no}) is no longer in the warehouse — it was issued after the return, so the return can't be reversed",
 };

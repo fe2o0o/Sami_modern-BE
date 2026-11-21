@@ -107,6 +107,11 @@ export class ManufacturingOrder extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   totalCost!: number;
 
+  /** Produced units still held for the customer in the warehouse's «مصنّع لعملاء»
+   *  balance (not for sale, not averaged); goes down as they are delivered / released. */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  toOrderQuantity!: number;
+
   @Column({ type: 'uuid', nullable: true })
   journalEntryId!: string | null;
 

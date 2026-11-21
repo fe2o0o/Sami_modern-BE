@@ -625,7 +625,10 @@ export class SalesReturnPostingService {
         await itemRepo.save(line);
         left = round3(left - take);
         touched.add(line.salesDeliveryId);
-        if (line.manufacturingOrderId) await this.followOrder(line.manufacturingOrderId, item, sign, take, ret, date, actorId, manager);
+        if (line.manufacturingOrderId) {
+          await this.followOrder(line.manufacturingOrderId, item, sign, take, ret, date, actorId, manager);
+          await this.followMadeToOrderStock(line.manufacturingOrderId, sign, take, ret, date, actorId, manager);
+        }
       }
     }
     for (const deliveryId of touched) await this.refreshDelivery(deliveryId, actorId, manager);
@@ -694,6 +697,54 @@ export class SalesReturnPostingService {
     fresh.notes = [fresh.notes, `${reason}: الكمية ${oldQty} ← ${newQty}`].filter(Boolean).join(' — ');
     fresh.updatedBy = actorId ?? null;
     await repo.save(fresh);
+  }
+
+  /**
+   * An already-PRODUCED order's units held for the customer («مصنّع لعملاء»):
+   * closing that quantity (the customer cancelled it) turns them into regular
+   * stock at their order cost (sold to others later, averaged in); reversing the
+   * return holds them for the customer again — refused if they were sold since.
+   */
+  private async followMadeToOrderStock(
+    orderId: string,
+    sign: 1 | -1,
+    qty: number,
+    ret: SalesReturn,
+    date: string,
+    actorId: string | undefined,
+    manager: EntityManager,
+  ): Promise<void> {
+    const repo = manager.getRepository(ManufacturingOrder);
+    const mo = await repo.findOne({ where: { id: orderId } });
+    if (!mo || !mo.warehouseId || (mo.status !== ManufacturingOrderStatus.PRODUCED && mo.status !== ManufacturingOrderStatus.DONE)) return;
+    const unitCost = mo.quantity > 0 ? round2((Number(mo.totalCost) || 0) / Number(mo.quantity)) : 0;
+    const ref = {
+      movementType: StockMovementType.MANUFACTURING,
+      sourceType: JournalSourceType.SALES_RETURN,
+      sourceId: ret.id,
+      sourceNumber: ret.returnNumber,
+      movementDate: date,
+      actorId,
+    };
+    const line = { warehouseId: mo.warehouseId, productId: mo.productId, productName: mo.productName ?? undefined, exactUnitCost: unitCost };
+    if (sign === 1) {
+      const release = round3(Math.min(qty, Number(mo.toOrderQuantity) || 0));
+      if (release <= 0) return;
+      await this.stockService.releaseMadeToOrder({ ...line, quantity: release }, manager, ref);
+      await repo.update(mo.id, { toOrderQuantity: round3((Number(mo.toOrderQuantity) || 0) - release) });
+      return;
+    }
+    // Re-opened: hold again what was released — never more than produced minus held minus delivered.
+    const lines = await manager.getRepository(SalesDeliveryItem).find({ where: { manufacturingOrderId: mo.id } });
+    const delivered = round3(lines.reduce((s, l) => s + (Number(l.deliveredQuantity) || 0), 0));
+    const hold = round3(Math.min(qty, Math.max(0, Number(mo.quantity) - (Number(mo.toOrderQuantity) || 0) - delivered)));
+    if (hold <= 0) return;
+    try {
+      await this.stockService.holdMadeToOrder({ ...line, quantity: hold }, manager, ref);
+    } catch {
+      throw new BadRequestException(`المنتج المصنّع «${mo.productName ?? ''}» (أمر ${mo.orderNumber ?? ''}) لم يعد متاحاً في المخزن — تم صرفه بعد المرتجع، فلا يمكن عكس المرتجع`);
+    }
+    await repo.update(mo.id, { toOrderQuantity: round3((Number(mo.toOrderQuantity) || 0) + hold) });
   }
 
   /** Delivery order progress (+ its produced orders' DONE state) after closing / re-opening quantities. */

@@ -58,6 +58,10 @@ export class SalesDeliveryItem extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
   cancelledQuantity!: number;
 
+  /** Of `deliveredQuantity`: what left the «مصنّع لعملاء» balance (made to this order). */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  mtoDeliveredQuantity!: number;
+
   /** Invoice cost accrual this line cleared on delivery (restored on line reversal). */
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   cogsAccrualSettled!: number;
