@@ -32,6 +32,12 @@ export class ManufacturingOrderQueryDto extends PaginationQueryDto {
   @IsEnum(ManufacturingOrderStatus)
   status?: ManufacturingOrderStatus;
 
+  /** Orders whose product is at this production stage now. */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  currentStageId?: string;
+
   /** Only orders past their delivery date and not yet produced/done. */
   @ApiPropertyOptional({ type: Boolean })
   @IsOptional()

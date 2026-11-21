@@ -5,13 +5,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
+import { DataSource, In, Repository, SelectQueryBuilder } from 'typeorm';
 import { promises as fs } from 'fs';
 import { join, extname } from 'path';
 import { randomUUID } from 'crypto';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { ProductComponent } from './entities/product-component.entity';
+import { ProductStage } from './entities/product-stage.entity';
+import { ManufacturingStage } from '../manufacturing/entities/manufacturing-stage.entity';
 import { ProductCategory } from '../product-category/entities/product-category.entity';
 import { CodeSettingService } from '../code-setting/code-setting.service';
 import { Brand } from '../brand/entities/brand.entity';
@@ -78,6 +80,10 @@ export class ProductService {
     private readonly imageRepository: Repository<ProductImage>,
     @InjectRepository(ProductComponent)
     private readonly componentRepository: Repository<ProductComponent>,
+    @InjectRepository(ProductStage)
+    private readonly stageRepository: Repository<ProductStage>,
+    @InjectRepository(ManufacturingStage)
+    private readonly masterStageRepository: Repository<ManufacturingStage>,
     private readonly excel: ExcelService,
     private readonly codeSettings: CodeSettingService,
     private readonly dataSource: DataSource,
@@ -188,10 +194,11 @@ export class ProductService {
     }
     const code = await this.codeSettings.resolveCode('product', dto.code);
     await this.ensureUnique('code', code, undefined, 'كود المنتج مستخدم بالفعل');
-    const { components, ...rest } = dto;
+    const { components, stages, ...rest } = dto;
     this.assertStockCost({ ...rest, ...this.inventoryFlag(rest) });
     const saved = await this.productRepository.save(this.productRepository.create({ ...rest, ...this.inventoryFlag(rest), code }));
     if (components?.length) await this.replaceComponents(saved.id, components);
+    if (stages?.length) await this.replaceStages(saved.id, stages);
     return this.findOne(saved.id);
   }
 
@@ -225,6 +232,23 @@ export class ProductService {
           componentProductId: c.componentProductId,
           quantity: c.quantity,
         }),
+      ),
+    );
+  }
+
+  /** Replace a product's production route (stages in the given order). */
+  private async replaceStages(productId: string, stages: { stageId: string; expectedDays?: number | null }[]): Promise<void> {
+    const ids = [...new Set(stages.map((s) => s.stageId))];
+    if (ids.length !== stages.length) throw new BadRequestException('المرحلة مكررة في مسار التصنيع');
+    if (ids.length) {
+      const found = await this.masterStageRepository.find({ where: { id: In(ids) } });
+      if (found.length !== ids.length) throw new BadRequestException('إحدى مراحل التصنيع غير موجودة');
+    }
+    await this.stageRepository.delete({ productId });
+    if (!stages.length) return;
+    await this.stageRepository.save(
+      stages.map((s, i) =>
+        this.stageRepository.create({ productId, stageId: s.stageId, sequence: i + 1, expectedDays: s.expectedDays ?? null }),
       ),
     );
   }
@@ -324,11 +348,17 @@ export class ProductService {
   async findOne(id: string): Promise<Product> {
     const product = await this.productRepository.findOne({
       where: { id },
-      relations: { category: true, brand: true, unit: true, images: true, components: true },
-      order: { images: { displayOrder: 'ASC' } },
+      relations: { category: true, brand: true, unit: true, images: true, components: true, stages: true },
+      order: { images: { displayOrder: 'ASC' }, stages: { sequence: 'ASC' } },
     });
     if (!product) {
       throw new NotFoundException('لم يتم العثور على المنتج');
+    }
+    // Route stages carry their name for the editor.
+    if (product.stages?.length) {
+      const masters = await this.masterStageRepository.find({ where: { id: In(product.stages.map((s) => s.stageId)) }, withDeleted: true });
+      const name = new Map(masters.map((s): [string, string] => [s.id, s.name]));
+      (product.stages as Array<ProductStage & { stageName?: string | null }>).forEach((s) => (s.stageName = name.get(s.stageId) ?? null));
     }
     return product;
   }
@@ -344,12 +374,13 @@ export class ProductService {
     if (dto.barcode && dto.barcode !== product.barcode) {
       await this.ensureUnique('barcode', dto.barcode, id, 'الباركود مستخدم بالفعل');
     }
-    const { components, ...rest } = dto;
+    const { components, stages, ...rest } = dto;
     Object.assign(product, rest, this.inventoryFlag({ ...product, ...rest }));
     this.assertStockCost(product);
     await this.productRepository.save(product);
-    // Replace the BOM only when the caller sent a components array.
+    // Replace the BOM / the stage route only when the caller sent them.
     if (components !== undefined) await this.replaceComponents(id, components);
+    if (stages !== undefined) await this.replaceStages(id, stages);
     return this.findOne(id);
   }
 

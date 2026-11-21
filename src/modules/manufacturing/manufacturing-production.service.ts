@@ -1,3 +1,4 @@
+import { ManufacturingStageService } from './manufacturing-stage.service';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource, EntityManager, In } from 'typeorm';
 import { isWithinBranchScope } from '../../common/utils/branch-scope.util';
@@ -62,6 +63,7 @@ export class ManufacturingProductionService {
     private readonly journalService: JournalEntryService,
     private readonly supplierLedger: SupplierLedgerService,
     private readonly dataSource: DataSource,
+    private readonly stages: ManufacturingStageService,
   ) {}
 
   /** Subledger/journal narration: order · product · customer · invoice. */
@@ -455,11 +457,16 @@ export class ManufacturingProductionService {
 
       // 1) Finished product out, at exactly the cost it was produced at.
       const unitCost = order.quantity > 0 ? round2(Number(order.totalCost) / Number(order.quantity)) : 0;
-      await this.stockService.issue(
-        [{ warehouseId: order.warehouseId, productId: order.productId, productName: order.productName ?? undefined, quantity: order.quantity, exactUnitCost: unitCost }],
-        manager,
-        { ...ref, movementType: StockMovementType.MANUFACTURING, respectReservations: true },
-      );
+      // Units still held for the customer leave the «مصنّع لعملاء» balance; any
+      // produced for stock leave regular stock (at the same order cost).
+      const held = round3(Math.min(Number(order.toOrderQuantity) || 0, order.quantity));
+      const fromStock = round3(order.quantity - held);
+      const out = { warehouseId: order.warehouseId, productId: order.productId, productName: order.productName ?? undefined, exactUnitCost: unitCost };
+      if (held > 0) await this.stockService.issueMadeToOrder([{ ...out, quantity: held }], manager, { ...ref, movementType: StockMovementType.MANUFACTURING });
+      if (fromStock > 0) {
+        await this.stockService.issue([{ ...out, quantity: fromStock }], manager, { ...ref, movementType: StockMovementType.MANUFACTURING, respectReservations: true });
+      }
+      order.toOrderQuantity = 0;
 
       // 2) Components back to their warehouses at their consumed cost.
       const back = (order.components ?? []).filter((c) => (Number(c.quantity) || 0) > 0);
@@ -582,6 +589,8 @@ export class ManufacturingProductionService {
         throw new BadRequestException('ابدأ التنفيذ أولاً — تنفيذ الإنتاج متاح للأوامر قيد التنفيذ فقط');
       }
       if (order.quantity <= 0) throw new BadRequestException('كمية الإنتاج غير صالحة');
+      // Internal production stages: the product goes to the warehouse only once all are done.
+      await this.stages.assertAllDone(order.id, manager);
 
       // Components: an optional override at production time, else the stored BOM.
       const components = dto.components?.length
@@ -700,18 +709,28 @@ export class ManufacturingProductionService {
       const unitCost = round2(totalCost / order.quantity);
 
       // 2) Produce the finished product into the warehouse at the computed cost.
-      await this.stockService.receive(
-        [{ warehouseId, productId: order.productId, productName: order.productName ?? undefined, quantity: order.quantity, unitCost }],
-        manager,
-        {
-          movementType: StockMovementType.MANUFACTURING,
-          sourceType: JournalSourceType.MANUFACTURING,
-          sourceId: order.id,
-          sourceNumber: order.orderNumber,
-          movementDate: date,
-          actorId,
-        },
-      );
+      //    Made for a customer (still owed on its delivery order) → the separate
+      //    «مصنّع لعملاء» balance: not for sale, not averaged, leaves at this cost.
+      //    Anything not owed (made for stock, or the customer cancelled part) →
+      //    regular stock, averaged in like any receipt.
+      const owedLines = order.salesInvoiceItemId
+        ? await manager.getRepository(SalesDeliveryItem).find({ where: { salesInvoiceItemId: order.salesInvoiceItemId, lineType: SalesLineType.MANUFACTURING } })
+        : [];
+      const owedNow = round3(owedLines.reduce((s, l) => s + Math.max(0, (Number(l.orderedQuantity) || 0) - (Number(l.deliveredQuantity) || 0) - (Number(l.cancelledQuantity) || 0)), 0));
+      const toOrder = round3(Math.min(order.quantity, owedNow));
+      const forStock = round3(order.quantity - toOrder);
+      const stockRef = {
+        movementType: StockMovementType.MANUFACTURING,
+        sourceType: JournalSourceType.MANUFACTURING,
+        sourceId: order.id,
+        sourceNumber: order.orderNumber,
+        movementDate: date,
+        actorId,
+      };
+      const line = { warehouseId, productId: order.productId, productName: order.productName ?? undefined, unitCost };
+      if (toOrder > 0) await this.stockService.receiveMadeToOrder([{ ...line, quantity: toOrder }], manager, stockRef);
+      if (forStock > 0) await this.stockService.receive([{ ...line, quantity: forStock }], manager, stockRef);
+      order.toOrderQuantity = toOrder;
 
       // 3) Production journal — DR finished goods (total); CR raw materials
       //    (components); CR the fee (clearing account when booked at start).

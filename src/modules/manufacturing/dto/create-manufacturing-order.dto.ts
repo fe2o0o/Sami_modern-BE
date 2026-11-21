@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsNumber,
   IsOptional,
@@ -11,6 +12,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { ManufacturingComponentDto } from './manufacturing-component.dto';
+import { StageRouteLineDto } from './manufacturing-stage.dto';
 
 /**
  * Create a manufacturing (production) request. No components/costs — it captures
@@ -94,4 +96,18 @@ export class CreateManufacturingOrderDto {
   @ValidateNested({ each: true })
   @Type(() => ManufacturingComponentDto)
   components?: ManufacturingComponentDto[];
+
+  /** Production stages (internal orders). Omitted on create → copied from the
+   *  product's route; on update → replaces the list (started stages keep progress). */
+  @ApiPropertyOptional({ type: [StageRouteLineDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => StageRouteLineDto)
+  stages?: StageRouteLineDto[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean({ message: 'قيمة ترتيب المراحل يجب أن تكون منطقية' })
+  stagesStrictOrder?: boolean;
 }

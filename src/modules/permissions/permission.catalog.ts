@@ -62,6 +62,8 @@ export const PERMISSION_CATALOG: PermissionGroupDef[] = [
       { module: 'purchase_returns', labelAr: 'مردودات المشتريات', actions: DOC },
       { module: 'vouchers', labelAr: 'سندات القبض والصرف', actions: DOC },
       { module: 'manufacturing', labelAr: 'أوامر التصنيع', actions: DOC },
+      { module: 'manufacturing_stages', labelAr: 'مراحل التصنيع (القائمة)', actions: [A.VIEW, A.MANAGE] },
+      { module: 'production_progress', labelAr: 'متابعة مراحل الإنتاج (مسؤول التشغيل)', actions: [A.MANAGE] },
     ],
   },
   {

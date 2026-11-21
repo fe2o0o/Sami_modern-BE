@@ -1,3 +1,4 @@
+import { ManufacturingStage } from '../manufacturing/entities/manufacturing-stage.entity';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -212,6 +213,15 @@ export class LookupsService {
       order: { name: 'ASC' },
     });
     return rows.map((r) => ({ id: r.id, name: r.name , nameEn: r.nameEn ?? null }));
+  }
+
+  /** Active production stages, in their default order (product route / order editors). */
+  async manufacturingStages(): Promise<Array<LookupItem & { nameEn: string | null; defaultDays: number | null }>> {
+    const rows = await this.unitRepository.manager.getRepository(ManufacturingStage).find({
+      where: { isActive: true },
+      order: { sortOrder: 'ASC', name: 'ASC' },
+    });
+    return rows.map((r) => ({ id: r.id, name: r.name, nameEn: r.nameEn ?? null, defaultDays: r.defaultDays ?? null }));
   }
 
   async units(): Promise<LookupItem[]> {

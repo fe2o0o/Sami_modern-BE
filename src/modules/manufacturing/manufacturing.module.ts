@@ -5,6 +5,11 @@ import { ManufacturingOrderComponent } from './entities/manufacturing-order-comp
 import { ManufacturingService } from './manufacturing.service';
 import { ManufacturingProductionService } from './manufacturing-production.service';
 import { ManufacturingController } from './manufacturing.controller';
+import { ManufacturingStageController } from './manufacturing-stage.controller';
+import { ManufacturingStageService } from './manufacturing-stage.service';
+import { ManufacturingStage } from './entities/manufacturing-stage.entity';
+import { ManufacturingOrderStage } from './entities/manufacturing-order-stage.entity';
+import { ProductStage } from '../product/entities/product-stage.entity';
 import { Product } from '../product/entities/product.entity';
 import { ProductComponent } from '../product/entities/product-component.entity';
 import { Customer } from '../customer/entities/customer.entity';
@@ -27,6 +32,9 @@ import { SupplierModule } from '../supplier/supplier.module';
     TypeOrmModule.forFeature([
       ManufacturingOrder,
       ManufacturingOrderComponent,
+      ManufacturingStage,
+      ManufacturingOrderStage,
+      ProductStage,
       Product,
       ProductComponent,
       Customer,
@@ -39,8 +47,8 @@ import { SupplierModule } from '../supplier/supplier.module';
     JournalEntryModule,
     SupplierModule,
   ],
-  controllers: [ManufacturingController],
-  providers: [ManufacturingService, ManufacturingProductionService],
-  exports: [ManufacturingService, ManufacturingProductionService],
+  controllers: [ManufacturingController, ManufacturingStageController],
+  providers: [ManufacturingService, ManufacturingProductionService, ManufacturingStageService],
+  exports: [ManufacturingService, ManufacturingProductionService, ManufacturingStageService],
 })
 export class ManufacturingModule {}

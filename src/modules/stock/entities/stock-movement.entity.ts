@@ -56,4 +56,8 @@ export class StockMovement extends BaseEntity {
 
   @Column({ type: 'uuid', nullable: true })
   createdBy!: string | null;
+
+  /** Moves the «مصنّع لعملاء» (made-to-order) balance, not the regular averaged stock. */
+  @Column({ type: 'boolean', default: false })
+  madeToOrder!: boolean;
 }

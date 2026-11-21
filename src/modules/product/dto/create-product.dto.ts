@@ -14,6 +14,7 @@ import {
 } from 'class-validator';
 import { ProductType } from '../enums/product-type.enum';
 import { ProductComponentDto } from './product-component.dto';
+import { StageRouteLineDto } from '../../manufacturing/dto/manufacturing-stage.dto';
 
 export class CreateProductDto {
   // ── Basic ──
@@ -139,4 +140,18 @@ export class CreateProductDto {
   @ValidateNested({ each: true })
   @Type(() => ProductComponentDto)
   components?: ProductComponentDto[];
+
+  /** Production route for internal manufacturing: the stages, in order. */
+  @ApiPropertyOptional({ type: [StageRouteLineDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => StageRouteLineDto)
+  stages?: StageRouteLineDto[];
+
+  /** Stages must be done in order. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean({ message: 'قيمة ترتيب المراحل يجب أن تكون منطقية' })
+  stagesStrictOrder?: boolean;
 }

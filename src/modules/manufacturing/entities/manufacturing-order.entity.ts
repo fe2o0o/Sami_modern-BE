@@ -107,6 +107,11 @@ export class ManufacturingOrder extends BaseEntity {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0, transformer: numericTransformer })
   totalCost!: number;
 
+  /** Produced units still held for the customer in the warehouse's «مصنّع لعملاء»
+   *  balance (not for sale, not averaged); goes down as they are delivered / released. */
+  @Column({ type: 'decimal', precision: 18, scale: 3, default: 0, transformer: numericTransformer })
+  toOrderQuantity!: number;
+
   @Column({ type: 'uuid', nullable: true })
   journalEntryId!: string | null;
 
@@ -137,6 +142,28 @@ export class ManufacturingOrder extends BaseEntity {
 
   @Column({ type: 'datetime', nullable: true })
   doneAt!: Date | null;
+
+  // ── Production stages (internal orders): the PRODUCT's progress, apart from the
+  //    order status. Rows in manufacturing_order_stages; summary kept here for lists. ──
+  @Column({ type: 'boolean', default: true })
+  stagesStrictOrder!: boolean;
+
+  /** The stage being worked on, else the next one waiting (null = none / all done). */
+  @Column({ type: 'uuid', nullable: true })
+  currentStageId!: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  currentStageName!: string | null;
+
+  /** `in_progress` / `pending` for the current stage; `done` once every stage is done. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  currentStageStatus!: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  stagesDone!: number;
+
+  @Column({ type: 'int', default: 0 })
+  stagesTotal!: number;
 
   // ── Audit ──
   @Column({ type: 'uuid', nullable: true })

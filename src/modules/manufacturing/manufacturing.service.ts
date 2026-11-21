@@ -1,3 +1,4 @@
+import { ManufacturingStageService } from './manufacturing-stage.service';
 import { ManufacturingProductionService } from './manufacturing-production.service';
 import {
   BadRequestException,
@@ -51,6 +52,12 @@ export interface ManufacturingOrderListItem {
   isLate: boolean;
   /** Quantity delivered to the customer so far (from the linked delivery lines). */
   deliveredQuantity: number;
+  /** Internal production stage the PRODUCT is at (not the order status). */
+  currentStageId: string | null;
+  currentStageName: string | null;
+  currentStageStatus: string | null;
+  stagesDone: number;
+  stagesTotal: number;
 }
 
 /** Per-supplier manufacturing statement: what is with the factory, what's late, fees. */
@@ -110,6 +117,7 @@ export interface ManufacturingFromInvoiceInput {
 export class ManufacturingService {
   constructor(
     private readonly production: ManufacturingProductionService,
+    private readonly stages: ManufacturingStageService,
     @InjectRepository(ManufacturingOrder)
     private readonly orderRepository: Repository<ManufacturingOrder>,
     @InjectRepository(Product)
@@ -148,7 +156,7 @@ export class ManufacturingService {
       const repo = manager.getRepository(ManufacturingOrder);
       // Components: explicit lines if given, otherwise the product's default BOM.
       const components = await this.buildOrderComponents(dto.productId, dto.quantity, dto.components, manager);
-      return repo.save(
+      const saved = await repo.save(
         repo.create({
           orderNumber,
           orderDate: dto.orderDate,
@@ -174,6 +182,11 @@ export class ManufacturingService {
           createdBy: actorId ?? null,
         }),
       );
+      // Internal production stages: the product's route, or the list sent by the editor.
+      await this.stages.copyFromProduct(saved, manager);
+      if (dto.stages && !saved.factorySupplierId) await this.stages.replaceOrderStages(saved, dto.stages, manager);
+      if (dto.stagesStrictOrder !== undefined) await repo.update(saved.id, { stagesStrictOrder: dto.stagesStrictOrder });
+      return saved;
     });
   }
 
@@ -236,7 +249,22 @@ export class ManufacturingService {
     if (dto.notes !== undefined) order.notes = dto.notes ?? null;
     order.updatedBy = actorId ?? null;
 
+    const factoryChanged = dto.factorySupplierId !== undefined && (dto.factorySupplierId ?? null) !== current.factorySupplierId;
+    const productChanged = !!dto.productId && dto.productId !== current.productId;
+    if (dto.stagesStrictOrder !== undefined) order.stagesStrictOrder = dto.stagesStrictOrder;
     const saved = await this.orderRepository.save(order);
+    // Internal production stages follow the order: factory ↔ in-house, a new product
+    // (its route, while nothing started), or the list edited on the order.
+    await this.dataSource.transaction(async (manager) => {
+      if (factoryChanged) await this.stages.onFactoryChanged(saved, manager);
+      if (productChanged && !dto.stages && !saved.factorySupplierId) {
+        if (saved.stagesDone || saved.currentStageStatus === 'in_progress') {
+          throw new BadRequestException('بدأت مراحل التصنيع — لا يمكن تغيير المنتج');
+        }
+        await this.stages.copyFromProduct(saved, manager);
+      }
+      if (dto.stages) await this.stages.replaceOrderStages(saved, dto.stages, manager);
+    });
     // Replace the component list when provided (editable per order).
     if (dto.components) {
       await this.replaceComponents(order.id, order.productId, order.quantity, dto.components);
@@ -349,6 +377,8 @@ export class ManufacturingService {
     if (query.factorySupplierId) qb.andWhere('mo.factorySupplierId = :fs', { fs: query.factorySupplierId });
     if (query.branchId) qb.andWhere('mo.branchId = :br', { br: query.branchId });
     if (query.status) qb.andWhere('mo.status = :st', { st: query.status });
+    // The stage the product is at now (e.g. every order in «تنجيد»).
+    if (query.currentStageId) qb.andWhere('mo.currentStageId = :cs', { cs: query.currentStageId });
     if (query.late) {
       qb.andWhere('mo.deliveryDate < :today', { today: todayIso() }).andWhere('mo.status IN (:...open)', { open: OPEN_STATUSES });
     }
@@ -480,6 +510,11 @@ export class ManufacturingService {
       producedAt: i.producedAt,
       isLate: !!i.deliveryDate && i.deliveryDate < today && OPEN_STATUSES.includes(i.status),
       deliveredQuantity: delivered.get(i.id) ?? 0,
+      currentStageId: i.currentStageId,
+      currentStageName: i.currentStageName,
+      currentStageStatus: i.currentStageStatus,
+      stagesDone: i.stagesDone,
+      stagesTotal: i.stagesTotal,
     }));
   }
 
@@ -517,6 +552,7 @@ export class ManufacturingService {
       createdByName: users.get(order.createdBy ?? '') ?? null,
       components,
       directMaterials,
+      stages: await this.stages.listForOrder(id),
       // Selling side (from the sales invoice) for the profit view.
       sellingUnitPrice: invoiceLine?.unitPrice ?? null,
       sellingNet: invoiceLine?.netBeforeTax ?? null,
@@ -582,7 +618,7 @@ export class ManufacturingService {
         : undefined,
       manager,
     );
-    return repo.save(
+    const saved = await repo.save(
       repo.create({
         orderNumber,
         orderDate: input.orderDate,
@@ -611,6 +647,8 @@ export class ManufacturingService {
         createdBy: input.actorId ?? null,
       }),
     );
+    await this.stages.copyFromProduct(saved, manager);
+    return saved;
   }
 
   /**

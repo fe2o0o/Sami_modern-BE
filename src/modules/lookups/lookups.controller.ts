@@ -52,6 +52,12 @@ export class LookupsController {
     return this.lookupsService.subledgerAccounts();
   }
 
+  @Get('manufacturing-stages')
+  @ApiOperation({ summary: 'مراحل التصنيع النشطة' })
+  manufacturingStages() {
+    return this.lookupsService.manufacturingStages();
+  }
+
   @Get('units')
   @ApiOperation({ summary: 'قائمة وحدات القياس' })
   units() {

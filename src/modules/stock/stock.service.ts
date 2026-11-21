@@ -379,6 +379,103 @@ export class StockService {
     return issued;
   }
 
+  // =========================================================
+  // «مصنّع لعملاء» — made-to-order balance (not for sale, not averaged)
+  // =========================================================
+  /**
+   * Put manufactured units made for a customer into the warehouse's separate
+   * made-to-order balance at their order cost (`unitCost`). The regular
+   * `quantity` / `avgCost` are untouched.
+   */
+  async receiveMadeToOrder(items: StockLineInput[], manager: EntityManager, opts: ReceiveOptions): Promise<void> {
+    const movementRepo = manager.getRepository(StockMovement);
+    const stockRepo = manager.getRepository(WarehouseStock);
+    for (const item of items) {
+      const quantity = round3(item.quantity || 0);
+      if (quantity <= 0) continue;
+      const unitCost = round2(item.unitCost ?? 0);
+      await movementRepo.save(
+        movementRepo.create({
+          warehouseId: item.warehouseId,
+          productId: item.productId,
+          direction: StockDirection.IN,
+          movementType: opts.movementType,
+          quantity,
+          unitCost,
+          movementDate: opts.movementDate,
+          sourceType: opts.sourceType,
+          sourceId: opts.sourceId,
+          sourceNumber: opts.sourceNumber ?? null,
+          createdBy: opts.actorId ?? null,
+          madeToOrder: true,
+        }),
+      );
+      const existing = await stockRepo.findOne({ where: { warehouseId: item.warehouseId, productId: item.productId }, lock: { mode: 'pessimistic_write' } });
+      if (!existing) {
+        await stockRepo.save(stockRepo.create({ warehouseId: item.warehouseId, productId: item.productId, quantity: 0, avgCost: 0, mtoQuantity: quantity, mtoValue: round2(quantity * unitCost) }));
+        continue;
+      }
+      existing.mtoQuantity = round3((Number(existing.mtoQuantity) || 0) + quantity);
+      existing.mtoValue = round2((Number(existing.mtoValue) || 0) + quantity * unitCost);
+      await stockRepo.save(existing);
+    }
+  }
+
+  /**
+   * Take made-to-order units out of the separate balance at THEIR order cost
+   * (`exactUnitCost`) — delivery to the customer, reversal of production, or a
+   * release to regular stock. Refuses more than is held.
+   */
+  async issueMadeToOrder(items: StockLineInput[], manager: EntityManager, opts: IssueOptions): Promise<IssuedLine[]> {
+    const movementRepo = manager.getRepository(StockMovement);
+    const stockRepo = manager.getRepository(WarehouseStock);
+    const issued: IssuedLine[] = [];
+    for (const item of items) {
+      const quantity = round3(item.quantity || 0);
+      if (quantity <= 0) continue;
+      const existing = await stockRepo.findOne({ where: { warehouseId: item.warehouseId, productId: item.productId }, lock: { mode: 'pessimistic_write' } });
+      const held = Number(existing?.mtoQuantity) || 0;
+      if (!existing || held + 1e-6 < quantity) {
+        throw new BadRequestException(`الكمية المصنّعة للعميل من ${item.productName ?? 'المنتج'} في المخزن ${round3(held)} فقط، ولا يمكن صرف ${quantity}`);
+      }
+      const unitCost = round2(item.exactUnitCost ?? (held > 0 ? (Number(existing.mtoValue) || 0) / held : 0));
+      await movementRepo.save(
+        movementRepo.create({
+          warehouseId: item.warehouseId,
+          productId: item.productId,
+          direction: StockDirection.OUT,
+          movementType: opts.movementType,
+          quantity,
+          unitCost,
+          movementDate: opts.movementDate,
+          sourceType: opts.sourceType,
+          sourceId: opts.sourceId,
+          sourceNumber: opts.sourceNumber ?? null,
+          createdBy: opts.actorId ?? null,
+          madeToOrder: true,
+        }),
+      );
+      existing.mtoQuantity = round3(held - quantity);
+      // Nothing left → no value left (absorbs rounding).
+      existing.mtoValue = existing.mtoQuantity > 0 ? Math.max(0, round2((Number(existing.mtoValue) || 0) - quantity * unitCost)) : 0;
+      await stockRepo.save(existing);
+      issued.push({ warehouseId: item.warehouseId, productId: item.productId, quantity, unitCost, totalCost: round2(quantity * unitCost) });
+    }
+    return issued;
+  }
+
+  /** Made-to-order units no longer owed to anyone → regular stock at their own cost (averaged in). */
+  async releaseMadeToOrder(item: StockLineInput & { exactUnitCost: number }, manager: EntityManager, opts: IssueOptions): Promise<void> {
+    await this.issueMadeToOrder([item], manager, opts);
+    await this.receive([{ ...item, unitCost: item.exactUnitCost }], manager, opts);
+  }
+
+  /** Regular stock back into the made-to-order balance (a closed quantity is owed again). */
+  async holdMadeToOrder(item: StockLineInput & { exactUnitCost: number }, manager: EntityManager, opts: IssueOptions): Promise<void> {
+    await this.issue([item], manager, { ...opts, respectReservations: true });
+    await this.receiveMadeToOrder([{ ...item, unitCost: item.exactUnitCost }], manager, opts);
+  }
+
   /** Warehouse policy flag «يسمح بالرصيد السالب». */
   private async warehouseAllowsNegative(warehouseId: string, manager: EntityManager): Promise<boolean> {
     const wh = await manager.getRepository(Warehouse).findOne({
@@ -572,6 +669,8 @@ export class StockService {
       .addSelect('COALESCE(SUM(stock.quantity), 0)', 'qty')
       .addSelect('COALESCE(SUM(stock.reservedQuantity), 0)', 'reserved')
       .addSelect('COALESCE(SUM(stock.quantity * stock.avgCost), 0)', 'value')
+      .addSelect('COALESCE(SUM(stock.mtoQuantity), 0)', 'mtoQty')
+      .addSelect('COALESCE(SUM(stock.mtoValue), 0)', 'mtoValue')
       .addSelect(
         `SUM(CASE WHEN product.reorderPoint > 0 AND stock.quantity > 0 AND stock.quantity <= product.reorderPoint THEN 1 ELSE 0 END)`,
         'belowReorder',
@@ -585,7 +684,10 @@ export class StockService {
       productsCount: n('products'),
       totalQuantity: round3(n('qty')),
       reservedQuantity: round3(n('reserved')),
-      stockValue: round2(n('value')),
+      // Regular stock + «مصنّع لعملاء» (held at their own order cost) = the inventory ledger.
+      stockValue: round2(n('value') + n('mtoValue')),
+      madeToOrderQuantity: round3(n('mtoQty')),
+      madeToOrderValue: round2(n('mtoValue')),
       belowReorderCount: n('belowReorder'),
       nonPositiveCount: n('nonPositive'),
       negativeCount: n('negative'),
